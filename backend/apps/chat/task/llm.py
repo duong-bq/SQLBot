@@ -264,19 +264,19 @@ class LLMService:
         self.sql_message.append(SystemPromptMessage(content=_system_templates['system']))
         self.sql_message.append(HumanPromptMessage(content=_system_templates['rules']))
         self.sql_message.append(
-            AIPromptMessage(content='我已掌握所有规则，包括表结构、SQL规范、安全限制和输出格式，我会严格遵守这些规则。'))
+            AIPromptMessage(content='Tôi đã nắm rõ tất cả quy tắc, bao gồm cấu trúc bảng, chuẩn SQL, giới hạn bảo mật và định dạng đầu ra, tôi sẽ tuân thủ nghiêm ngặt các quy tắc này.'))
         self.sql_message.append(HumanPromptMessage(content=_system_templates['schema']))
         self.sql_message.append(
-            AIPromptMessage(content='我已确认您提供的数据库信息与表结构schema，我生成的SQL不会超出您提供的范围。'))
+            AIPromptMessage(content='Tôi đã xác nhận thông tin cơ sở dữ liệu và schema cấu trúc bảng mà bạn cung cấp, SQL tôi sinh ra sẽ không vượt ra ngoài phạm vi bạn cung cấp.'))
         if _system_templates.get('custom_prompt'):
             self.sql_message.append(HumanPromptMessage(content=_system_templates['custom_prompt']))
-            self.sql_message.append(AIPromptMessage(content='我已确认您提供的额外信息，我会进行参考。'))
+            self.sql_message.append(AIPromptMessage(content='Tôi đã xác nhận thông tin bổ sung bạn cung cấp, tôi sẽ tham khảo.'))
         if _system_templates.get('terminologies'):
             self.sql_message.append(HumanPromptMessage(content=_system_templates['terminologies']))
-            self.sql_message.append(AIPromptMessage(content='我已确认您提供的术语信息，我会进行参考。'))
+            self.sql_message.append(AIPromptMessage(content='Tôi đã xác nhận thông tin thuật ngữ bạn cung cấp, tôi sẽ tham khảo.'))
         if _system_templates.get('data_training'):
             self.sql_message.append(HumanPromptMessage(content=_system_templates['data_training']))
-            self.sql_message.append(AIPromptMessage(content='我已确认您提供的SQL示例，我会进行参考。'))
+            self.sql_message.append(AIPromptMessage(content='Tôi đã xác nhận các ví dụ SQL bạn cung cấp, tôi sẽ tham khảo.'))
 
         if last_sql_messages is not None and len(last_sql_messages) > 0:
             last_rounds = get_last_conversation_rounds(last_sql_messages, rounds=count_limit)
@@ -308,7 +308,7 @@ class LLMService:
         _chart_system_templates = self.chat_question.chart_sys_question()
         self.chart_message.append(SystemPromptMessage(content=_chart_system_templates['system']))
         self.chart_message.append(HumanPromptMessage(content=_chart_system_templates['rules']))
-        self.chart_message.append(AIPromptMessage(content='我已掌握所有规则，我会严格遵守这些规则来生成符合要求的JSON。'))
+        self.chart_message.append(AIPromptMessage(content='Tôi đã nắm rõ tất cả quy tắc, tôi sẽ tuân thủ nghiêm ngặt các quy tắc này để sinh ra JSON đúng yêu cầu.'))
         if last_chart_messages is not None and len(last_chart_messages) > 0:
             last_rounds = get_last_conversation_rounds(last_chart_messages, rounds=count_chart_limit)
 
@@ -1827,8 +1827,10 @@ def process_stream(res: Iterator[BaseMessageChunk],
     current_thinking = ''  # 当前收集的思考过程内容
     pending_start_tag = ''  # 用于缓存可能被截断的开始标签部分
 
+    full_reasoning_log = ''  # 累积完整的思考内容，用于最终日志输出
+    full_content_log = ''  # 累积完整的输出内容，用于最终日志输出
+
     for chunk in res:
-        SQLBotLogUtil.info(chunk)
         reasoning_content_chunk = ''
         content = chunk.content
         output_content = ''  # 实际要输出的内容
@@ -1846,6 +1848,8 @@ def process_stream(res: Iterator[BaseMessageChunk],
         # 只有当current_thinking不是空字符串时才跳过标签解析
         if not in_thinking_block and current_thinking.strip() != '':
             output_content = content  # 正常输出content
+            full_content_log += output_content
+            full_reasoning_log += reasoning_content_chunk
             yield {
                 'content': output_content,
                 'reasoning_content': reasoning_content_chunk
@@ -1906,24 +1910,32 @@ def process_stream(res: Iterator[BaseMessageChunk],
             # 不在思考块中或标签解析未启用，正常输出
             output_content += content
 
+        full_content_log += output_content
+        full_reasoning_log += reasoning_content_chunk
         yield {
             'content': output_content,
             'reasoning_content': reasoning_content_chunk
         }
         get_token_usage(chunk, token_usage)
 
+    # 流式结束后，统一输出两条日志：思考内容与正式内容
+    SQLBotLogUtil.info(f"reasoning_content: {full_reasoning_log}")
+    SQLBotLogUtil.info(f"content: {full_content_log}")
+
 
 def get_lang_name(lang: str):
     if not lang:
-        return '简体中文'
+        return 'Tiếng Trung giản thể'
     normalized = lang.lower()
+    if normalized.startswith('vi'):
+        return 'Tiếng Việt'
     if normalized.startswith('zh-tw'):
-        return '繁体中文'
+        return 'Tiếng Trung phồn thể'
     if normalized.startswith('en'):
-        return '英文'
+        return 'Tiếng Anh'
     if normalized.startswith('ko'):
-        return '韩语'
-    return '简体中文'
+        return 'Tiếng Hàn'
+    return 'Tiếng Trung giản thể'
 
 
 def get_last_conversation_rounds(messages, rounds=settings.GENERATE_SQL_QUERY_HISTORY_ROUND_COUNT):

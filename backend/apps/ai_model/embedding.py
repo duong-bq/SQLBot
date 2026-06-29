@@ -31,6 +31,13 @@ class EmbeddingModelCache:
 
     @staticmethod
     def _new_instance(config: EmbeddingModelInfo = local_embedding_model):
+        if settings.EMBEDDING_PROVIDER == 'api':
+            from langchain_openai import OpenAIEmbeddings
+            return OpenAIEmbeddings(
+                model=settings.EMBEDDING_API_MODEL,
+                openai_api_base=settings.EMBEDDING_API_BASE_URL,
+                openai_api_key=settings.EMBEDDING_API_KEY,
+            )
         return HuggingFaceEmbeddings(model_name=config.name, cache_folder=config.folder,
                                      model_kwargs={'device': config.device},
                                      encode_kwargs={'normalize_embeddings': True}
