@@ -1,69 +1,69 @@
 template:
   quot_rule: |
     <rule>
-      必须对数据库名、表名、字段名、别名外层加方括号（[]）。
+      Bắt buộc thêm dấu ngoặc vuông ([]) bao quanh tên cơ sở dữ liệu, tên bảng, tên trường, bí danh.
       <note>
-        1. 点号（.）不能包含在方括号内，必须写成 [schema].[table]
-        2. 当标识符为关键字、含特殊字符或需保留大小写时必须加方括号
-        3. SQL Server 标识符默认不区分大小写
+        1. Dấu chấm (.) không được nằm trong dấu ngoặc vuông, phải viết thành [schema].[table]
+        2. Khi định danh là từ khóa, chứa ký tự đặc biệt hoặc cần giữ hoa/thường thì bắt buộc thêm dấu ngoặc vuông
+        3. Định danh SQL Server mặc định không phân biệt hoa/thường
       </note>
     </rule>
 
   limit_rule: |
     <rule>
-      当需要限制行数时，必须使用 Microsoft SQL Server 的SQL语法：
+      Khi cần giới hạn số dòng, phải dùng cú pháp SQL của Microsoft SQL Server:
       <note>
-        1. 标准写法：TOP [count]
-        2. 分页写法：OFFSET [start] ROWS FETCH NEXT [count] ROWS ONLY
-        3. 禁止使用 MySQL 的 LIMIT 语法
+        1. Cách viết chuẩn: TOP [count]
+        2. Cách viết phân trang: OFFSET [start] ROWS FETCH NEXT [count] ROWS ONLY
+        3. Cấm dùng cú pháp LIMIT của MySQL
       </note>
     </rule>
 
   other_rule: |
-    <rule>必须为每个表生成别名（不加AS）</rule>
+    <rule>Phải sinh bí danh cho mỗi bảng (không thêm AS)</rule>
     {multi_table_condition}
-    <rule>禁止使用星号(*)，必须明确字段名</rule>
-    <rule>中文/特殊字符字段需保留原名并添加英文别名</rule>
-    <rule>函数字段必须加别名</rule>
-    <rule>百分比显示为：CONVERT(VARCHAR, ROUND(x*100,2)) + '%'</rule>
-    <rule>避免与SQL Server关键字冲突（如[user]/[order]/[desc]）</rule>
+    <rule>Cấm dùng dấu sao (*), phải nêu rõ tên trường</rule>
+    <rule>Trường tiếng Việt/ký tự đặc biệt cần giữ nguyên tên gốc và thêm bí danh tiếng Anh</rule>
+    <rule>Trường hàm phải thêm bí danh</rule>
+    <rule>Phần trăm hiển thị dạng: CONVERT(VARCHAR, ROUND(x*100,2)) + '%'</rule>
+    <rule>Tránh xung đột với từ khóa SQL Server (như [user]/[order]/[desc])</rule>
 
   basic_example: |
     <basic-examples>
       <intro>
-        📌 以下示例严格遵循<Rules>中的 Microsoft SQL Server 规范，展示符合要求的 SQL 写法与典型错误案例。
-        ⚠️ 注意：示例中的表名、字段名均为演示虚构，实际使用时需替换为用户提供的真实标识符。
-        🔍 重点观察：
-          1. 双引号包裹所有数据库对象的规范用法
-          2. 中英别名/百分比/函数等特殊字段的处理
-          3. 关键字冲突的规避方式
+        📌 Các ví dụ sau tuân thủ nghiêm ngặt chuẩn Microsoft SQL Server trong <Rules>, minh họa cách viết SQL đúng yêu cầu và các trường hợp lỗi điển hình.
+        ⚠️ Lưu ý: tên bảng, tên trường trong ví dụ đều là hư cấu để minh họa, khi dùng thực tế cần thay bằng định danh thật do người dùng cung cấp.
+        🔍 Điểm cần quan sát kỹ:
+          1. Cách dùng chuẩn dấu ngoặc vuông bao quanh mọi đối tượng cơ sở dữ liệu
+          2. Cách xử lý các trường đặc biệt như bí danh Việt-Anh/phần trăm/hàm
+          3. Cách tránh xung đột từ khóa
       </intro>
       <example>
-        <input>查询 Sales.Orders 表的前100条订单（含中文字段和百分比）</input>
+        <input>Truy vấn 100 đơn hàng đầu của bảng Sales.Orders (có trường tiếng Việt và phần trăm)</input>
         <output-bad>
-          SELECT * FROM Sales.Orders  -- 错误：使用星号
-          SELECT [订单ID], [金额] FROM [Sales].[Orders] [o]  -- 错误：缺少英文别名
-          SELECT COUNT([订单ID]) FROM [Sales].[Orders] [o]  -- 错误：函数未加别名
+          SELECT * FROM Sales.Orders  -- Lỗi: dùng dấu sao
+          SELECT [Mã đơn hàng], [Số tiền] FROM [Sales].[Orders] [o]  -- Lỗi: thiếu bí danh tiếng Anh
+          SELECT COUNT([Mã đơn hàng]) FROM [Sales].[Orders] [o]  -- Lỗi: hàm chưa thêm bí danh
         </output-bad>
         <output-good>
           SELECT TOP 100
-            [o].[订单ID] AS [order_id],
-            [o].[金额] AS [amount],
-            COUNT([o].[订单ID]) AS [total_orders],
-            CONVERT(VARCHAR, ROUND([o].[折扣率] * 100, 2)) + '%' AS [discount_percent]
+            [o].[Mã đơn hàng] AS [order_id],
+            [o].[Số tiền] AS [amount],
+            COUNT([o].[Mã đơn hàng]) AS [total_orders],
+            CONVERT(VARCHAR, ROUND([o].[Tỷ lệ chiết khấu] * 100, 2)) + '%' AS [discount_percent]
           FROM [Sales].[Orders] [o]
-          GROUP BY [o].[订单ID], [o].[金额], [o].[折扣率]
+          GROUP BY [o].[Mã đơn hàng], [o].[Số tiền], [o].[Tỷ lệ chiết khấu]
         </output-good>
       </example>
 
       <example>
-        <input>统计用户表 dbo.Users（含关键字字段user）的活跃占比</input>
+        <input>Thống kê tỷ lệ hoạt động của bảng người dùng dbo.Users (có trường từ khóa user)</input>
         <output-bad>
-          SELECT user, status FROM dbo.Users  -- 错误：未处理关键字
-          SELECT [user], ROUND(active_ratio*100) FROM [dbo].[Users]  -- 错误：百分比格式错误
+          SELECT user, status FROM dbo.Users  -- Lỗi: chưa xử lý từ khóa
+          SELECT [user], ROUND(active_ratio*100) FROM [dbo].[Users]  -- Lỗi: định dạng phần trăm sai
         </output-bad>
         <output-good>
-          SELECT 
+          SELECT
             [u].[user] AS [user_name],
             CONVERT(VARCHAR, ROUND([u].[active_ratio] * 100, 2)) + '%' AS [active_percent]
           FROM [dbo].[Users] [u]
@@ -84,6 +84,6 @@ template:
   example_answer_2_with_limit: |
     {"success":true,"sql":"SELECT TOP 1000 [country] AS [country_name], [gdp] AS [gdp_usd] FROM [Sample_Database].[sample_country_gdp] WHERE [year] = '2024' ORDER BY [gdp] DESC","tables":["sample_country_gdp"],"chart-type":"pie"}
   example_answer_3: |
-    {"success":true,"sql":"SELECT [country] AS [country_name], [gdp] AS [gdp_usd] FROM [Sample_Database].[sample_country_gdp] WHERE [year] = '2025' AND [country] = N'中国'","tables":["sample_country_gdp"],"chart-type":"table"}
+    {"success":true,"sql":"SELECT [country] AS [country_name], [gdp] AS [gdp_usd] FROM [Sample_Database].[sample_country_gdp] WHERE [year] = '2025' AND [country] = N'Việt Nam'","tables":["sample_country_gdp"],"chart-type":"table"}
   example_answer_3_with_limit: |
-    {"success":true,"sql":"SELECT TOP 1000 [country] AS [country_name], [gdp] AS [gdp_usd] FROM [Sample_Database].[sample_country_gdp] WHERE [year] = '2025' AND [country] = N'中国'","tables":["sample_country_gdp"],"chart-type":"table"}
+    {"success":true,"sql":"SELECT TOP 1000 [country] AS [country_name], [gdp] AS [gdp_usd] FROM [Sample_Database].[sample_country_gdp] WHERE [year] = '2025' AND [country] = N'Việt Nam'","tables":["sample_country_gdp"],"chart-type":"table"}

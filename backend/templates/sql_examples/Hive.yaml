@@ -1,67 +1,67 @@
 template:
   quot_rule: |
     <rule>
-      必须对数据库名、表名、字段名、别名外层加反引号（`）。
+      Bắt buộc thêm dấu ngoặc ngược (`) bao quanh tên cơ sở dữ liệu, tên bảng, tên trường, bí danh.
       <note>
-        1. 点号（.）不能包含在引号内，必须写成 `database`.`table`
-        2. 即使标识符不含特殊字符或非关键字，也需强制加反引号
-        3. 在多表关联（JOIN）/ 多子查询的 SQL 中，只要多个表 / 子查询存在 同名字段，所有引用该字段的位置，必须显式指定 表别名
+        1. Dấu chấm (.) không được nằm trong dấu nháy, phải viết thành `database`.`table`
+        2. Ngay cả khi định danh không chứa ký tự đặc biệt hoặc không phải từ khóa, vẫn bắt buộc thêm dấu ngoặc ngược
+        3. Trong SQL liên kết nhiều bảng (JOIN)/nhiều truy vấn con, chỉ cần nhiều bảng/truy vấn con có trường trùng tên, thì mọi vị trí tham chiếu trường đó đều phải chỉ rõ bí danh bảng
       </note>
     </rule>
 
   limit_rule: |
     <rule>
-      当需要限制行数时，必须使用标准的LIMIT语法
+      Khi cần giới hạn số dòng, phải dùng cú pháp LIMIT chuẩn
     </rule>
 
   other_rule: |
-    <rule>必须为每个表生成别名（不加AS）</rule>
+    <rule>Phải sinh bí danh cho mỗi bảng (không thêm AS)</rule>
     {multi_table_condition}
-    <rule>禁止使用星号(*)，必须明确字段名</rule>
-    <rule>中文/特殊字符字段需保留原名并添加英文别名</rule>
-    <rule>不能用 + 拼接字符串，字符串必须使用单引号</rule>
-    <rule>分组非常严格：SELECT 里的字段必须出现在 GROUP BY 里，或者是聚合函数</rule>
-    <rule>函数字段必须加别名</rule>
-    <rule>百分比字段保留两位小数并以%结尾</rule>
-    <rule>WHERE 条件中不能使用 >、<、>=、<= 等比较运算符，必须使用 =</rule>
-    <rule>HIVE 中没有 NOT IN 操作符，必须使用 LEFT JOIN 或 EXISTS 替代</rule>
-    <rule>判空使用 NVL()函数</rule>
-    <rule>避免与数据库关键字冲突</rule>
+    <rule>Cấm dùng dấu sao (*), phải nêu rõ tên trường</rule>
+    <rule>Trường tiếng Việt/ký tự đặc biệt cần giữ nguyên tên gốc và thêm bí danh tiếng Anh</rule>
+    <rule>Không được dùng + để nối chuỗi, chuỗi phải dùng dấu nháy đơn</rule>
+    <rule>Nhóm rất nghiêm ngặt: trường trong SELECT phải xuất hiện trong GROUP BY, hoặc là hàm tổng hợp</rule>
+    <rule>Trường hàm phải thêm bí danh</rule>
+    <rule>Trường phần trăm giữ hai chữ số thập phân và kết thúc bằng %</rule>
+    <rule>Trong điều kiện WHERE không được dùng các toán tử so sánh như >, <, >=, <=, phải dùng =</rule>
+    <rule>HIVE không có toán tử NOT IN, phải dùng LEFT JOIN hoặc EXISTS để thay thế</rule>
+    <rule>Kiểm tra rỗng dùng hàm NVL()</rule>
+    <rule>Tránh xung đột với từ khóa cơ sở dữ liệu</rule>
 
   basic_example: |
     <basic-examples>
       <intro>
-        📌 以下示例严格遵循<Rules>中的 Hive 规范，展示符合要求的 SQL 写法与典型错误案例。
-        ⚠️ 注意：示例中的表名、字段名均为演示虚构，实际使用时需替换为用户提供的真实标识符。
-        🔍 重点观察：
-          1. 反引号包裹所有数据库对象的规范用法
-          2. 中英别名/百分比/函数等特殊字段的处理
-          3. 关键字冲突的规避方式
+        📌 Các ví dụ sau tuân thủ nghiêm ngặt chuẩn Hive trong <Rules>, minh họa cách viết SQL đúng yêu cầu và các trường hợp lỗi điển hình.
+        ⚠️ Lưu ý: tên bảng, tên trường trong ví dụ đều là hư cấu để minh họa, khi dùng thực tế cần thay bằng định danh thật do người dùng cung cấp.
+        🔍 Điểm cần quan sát kỹ:
+          1. Cách dùng chuẩn dấu ngoặc ngược bao quanh mọi đối tượng cơ sở dữ liệu
+          2. Cách xử lý các trường đặc biệt như bí danh Việt-Anh/phần trăm/hàm
+          3. Cách tránh xung đột từ khóa
       </intro>
       <example>
-        <input>查询 ods.orders 表的前100条订单（含中文字段和百分比）</input>
+        <input>Truy vấn 100 đơn hàng đầu của bảng ods.orders (có trường tiếng Việt và phần trăm)</input>
         <output-bad>
-          SELECT * FROM ods.orders LIMIT 100  -- 错误：未加引号、使用星号
-          SELECT `订单ID`, `金额` FROM `ods`.`orders` `t1` LIMIT 100  -- 错误：缺少英文别名
-          SELECT COUNT(`订单ID`) FROM `ods`.`orders` `t1`  -- 错误：函数未加别名
+          SELECT * FROM ods.orders LIMIT 100  -- Lỗi: chưa thêm dấu nháy, dùng dấu sao
+          SELECT `Mã đơn hàng`, `Số tiền` FROM `ods`.`orders` `t1` LIMIT 100  -- Lỗi: thiếu bí danh tiếng Anh
+          SELECT COUNT(`Mã đơn hàng`) FROM `ods`.`orders` `t1`  -- Lỗi: hàm chưa thêm bí danh
         </output-bad>
         <output-good>
           SELECT
-            `t1`.`订单ID` AS `order_id`,
-            `t1`.`金额` AS `amount`,
-            COUNT(`t1`.`订单ID`) AS `total_orders`,
-            CONCAT(CAST(ROUND(`t1`.`折扣率` * 100, 2) AS STRING), '%') AS `discount_percent`
+            `t1`.`Mã đơn hàng` AS `order_id`,
+            `t1`.`Số tiền` AS `amount`,
+            COUNT(`t1`.`Mã đơn hàng`) AS `total_orders`,
+            CONCAT(CAST(ROUND(`t1`.`Tỷ lệ chiết khấu` * 100, 2) AS STRING), '%') AS `discount_percent`
           FROM `ods`.`orders` `t1`
-          GROUP BY `t1`.`订单ID`, `t1`.`金额`, `t1`.`折扣率`
+          GROUP BY `t1`.`Mã đơn hàng`, `t1`.`Số tiền`, `t1`.`Tỷ lệ chiết khấu`
           LIMIT 100
         </output-good>
       </example>
 
       <example>
-        <input>统计 dim.users（含关键字字段user）的活跃占比</input>
+        <input>Thống kê tỷ lệ hoạt động của dim.users (có trường từ khóa user)</input>
         <output-bad>
-          SELECT user, status FROM dim.users  -- 错误：未处理关键字和引号
-          SELECT `user`, ROUND(active_ratio) FROM `dim`.`users`  -- 错误：百分比格式错误
+          SELECT user, status FROM dim.users  -- Lỗi: chưa xử lý từ khóa và dấu nháy
+          SELECT `user`, ROUND(active_ratio) FROM `dim`.`users`  -- Lỗi: định dạng phần trăm sai
         </output-bad>
         <output-good>
           SELECT
@@ -83,6 +83,6 @@ template:
   example_answer_2_with_limit: |
     {"success":true,"sql":"SELECT `country` AS `country_name`, `gdp` AS `gdp` FROM `Sample_Database`.`sample_country_gdp` WHERE `year` = '2024' ORDER BY `gdp` DESC LIMIT 1000","tables":["sample_country_gdp"],"chart-type":"pie"}
   example_answer_3: |
-    {"success":true,"sql":"SELECT `country` AS `country_name`, `gdp` AS `gdp` FROM `Sample_Database`.`sample_country_gdp` WHERE `year` = '2025' AND `country` = '中国'","tables":["sample_country_gdp"],"chart-type":"table"}
+    {"success":true,"sql":"SELECT `country` AS `country_name`, `gdp` AS `gdp` FROM `Sample_Database`.`sample_country_gdp` WHERE `year` = '2025' AND `country` = 'Việt Nam'","tables":["sample_country_gdp"],"chart-type":"table"}
   example_answer_3_with_limit: |
-    {"success":true,"sql":"SELECT `country` AS `country_name`, `gdp` AS `gdp` FROM `Sample_Database`.`sample_country_gdp` WHERE `year` = '2025' AND `country` = '中国' LIMIT 1000","tables":["sample_country_gdp"],"chart-type":"table"}
+    {"success":true,"sql":"SELECT `country` AS `country_name`, `gdp` AS `gdp` FROM `Sample_Database`.`sample_country_gdp` WHERE `year` = '2025' AND `country` = 'Việt Nam' LIMIT 1000","tables":["sample_country_gdp"],"chart-type":"table"}

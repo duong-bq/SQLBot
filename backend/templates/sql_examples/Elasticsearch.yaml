@@ -1,65 +1,65 @@
 template:
   quot_rule: |
     <rule>
-      必须对索引名（表名）、字段名、别名外层加双引号（"）。
+      Bắt buộc thêm dấu nháy kép (") bao quanh tên chỉ mục (tên bảng), tên trường, bí danh.
       <note>
-        1. 通配符索引需整体加引号：`"logs-*"`
-        2. 嵌套字段用点号连接：`"user.name"`
-        3. 时间字段必须显式转换：`CAST("@timestamp" AS TIMESTAMP)`
+        1. Chỉ mục có ký tự đại diện cần thêm dấu nháy toàn bộ: `"logs-*"`
+        2. Trường lồng nhau dùng dấu chấm để nối: `"user.name"`
+        3. Trường thời gian phải chuyển đổi tường minh: `CAST("@timestamp" AS TIMESTAMP)`
       </note>
     </rule>
 
   limit_rule: |
     <rule>
-      当需要限制行数时，必须使用标准的LIMIT语法
+      Khi cần giới hạn số dòng, phải dùng cú pháp LIMIT chuẩn
       <note>
-        1. 首选：`LIMIT [count]`
-        2. 分页：`LIMIT [count] OFFSET [start]`
-        3. 禁止使用Elasticsearch原生`size/from`参数
+        1. Ưu tiên: `LIMIT [count]`
+        2. Phân trang: `LIMIT [count] OFFSET [start]`
+        3. Cấm dùng tham số gốc `size/from` của Elasticsearch
       </note>
     </rule>
 
   other_rule: |
-    <rule>必须为每个索引生成别名（不加AS）</rule>
+    <rule>Phải sinh bí danh cho mỗi chỉ mục (không thêm AS)</rule>
     <rule>
-      <title>Elasticsearch SQL多表查询字段限定规则</title>
+      <title>Quy tắc giới hạn trường khi truy vấn nhiều bảng trong Elasticsearch SQL</title>
       <requirements>
-        <requirement>当使用JOIN涉及多个索引时，所有字段引用必须明确限定索引别名</requirement>
-        <requirement>适用于SELECT、WHERE、GROUP BY、HAVING、ORDER BY、ON等子句中的所有字段引用</requirement>
-        <requirement>单索引查询不需要表名前缀</requirement>
+        <requirement>Khi dùng JOIN liên quan nhiều chỉ mục, mọi tham chiếu trường phải chỉ rõ bí danh chỉ mục</requirement>
+        <requirement>Áp dụng cho mọi tham chiếu trường trong các mệnh đề SELECT, WHERE, GROUP BY, HAVING, ORDER BY, ON, v.v.</requirement>
+        <requirement>Truy vấn một chỉ mục không cần tiền tố tên bảng</requirement>
       </requirements>
       <notes>
-        <note>Elasticsearch的JOIN性能有限，仅适合小数据量关联</note>
-        <note>标识符引用使用双引号（"）</note>
-        <note>大多数Elasticsearch查询是单索引查询，不需要字段限定</note>
-        <note>嵌套字段通过点号访问，如 "customer.name"，不需要表名前缀</note>
+        <note>Hiệu năng JOIN của Elasticsearch có hạn, chỉ phù hợp liên kết lượng dữ liệu nhỏ</note>
+        <note>Tham chiếu định danh dùng dấu nháy kép (")</note>
+        <note>Phần lớn truy vấn Elasticsearch là truy vấn một chỉ mục, không cần giới hạn trường</note>
+        <note>Trường lồng nhau truy cập qua dấu chấm, như "customer.name", không cần tiền tố tên bảng</note>
       </notes>
     </rule>
-    <rule>禁止使用星号(*)，必须明确字段名</rule>
-    <rule>中文/特殊字符字段需保留原名并添加英文别名</rule>
-    <rule>函数字段必须加别名</rule>
-    <rule>百分比显示为：`ROUND(x*100,2) || '%'`</rule>
-    <rule>避免与Elasticsearch关键字冲突（如`score`/`type`）</rule>
+    <rule>Cấm dùng dấu sao (*), phải nêu rõ tên trường</rule>
+    <rule>Trường tiếng Việt/ký tự đặc biệt cần giữ nguyên tên gốc và thêm bí danh tiếng Anh</rule>
+    <rule>Trường hàm phải thêm bí danh</rule>
+    <rule>Phần trăm hiển thị dạng: `ROUND(x*100,2) || '%'`</rule>
+    <rule>Tránh xung đột với từ khóa Elasticsearch (như `score`/`type`)</rule>
 
   basic_example: |
     <basic-examples>
       <intro>
-        📌 以下示例严格遵循<Rules>中的 Elasticsearch 规范，展示符合要求的 SQL 写法与典型错误案例。
-        ⚠️ 注意：示例中的表名、字段名均为演示虚构，实际使用时需替换为用户提供的真实标识符。
-        🔍 重点观察：
-          1. 双引号包裹所有数据库对象的规范用法
-          2. 中英别名/百分比/函数等特殊字段的处理
-          3. 关键字冲突的规避方式
+        📌 Các ví dụ sau tuân thủ nghiêm ngặt chuẩn Elasticsearch trong <Rules>, minh họa cách viết SQL đúng yêu cầu và các trường hợp lỗi điển hình.
+        ⚠️ Lưu ý: tên bảng, tên trường trong ví dụ đều là hư cấu để minh họa, khi dùng thực tế cần thay bằng định danh thật do người dùng cung cấp.
+        🔍 Điểm cần quan sát kỹ:
+          1. Cách dùng chuẩn dấu nháy kép bao quanh mọi đối tượng cơ sở dữ liệu
+          2. Cách xử lý các trường đặc biệt như bí danh Việt-Anh/phần trăm/hàm
+          3. Cách tránh xung đột từ khóa
       </intro>
       <example>
-        <input>查询 logs-* 索引的前100条错误日志（含时间过滤）</input>
+        <input>Truy vấn 100 log lỗi đầu của chỉ mục logs-* (có lọc thời gian)</input>
         <output-bad>
-          SELECT * FROM logs-* WHERE level = 'error' LIMIT 100  -- 错误1：使用星号
-          SELECT message FROM "logs-*" WHERE @timestamp > NOW() - 1d  -- 错误2：未转换时间
-          SELECT "message", "@timestamp" FROM "logs-*" LIMIT 100  -- 错误3：未处理时间字段
+          SELECT * FROM logs-* WHERE level = 'error' LIMIT 100  -- Lỗi 1: dùng dấu sao
+          SELECT message FROM "logs-*" WHERE @timestamp > NOW() - 1d  -- Lỗi 2: chưa chuyển đổi thời gian
+          SELECT "message", "@timestamp" FROM "logs-*" LIMIT 100  -- Lỗi 3: chưa xử lý trường thời gian
         </output-bad>
         <output-good>
-          SELECT 
+          SELECT
             "l"."message" AS "log_content",
             "l"."host.ip" AS "client_ip",
             CAST("l"."@timestamp" AS TIMESTAMP) AS "log_time"
@@ -71,13 +71,13 @@ template:
       </example>
 
       <example>
-        <input>统计各地区的错误日志占比（Top 5）</input>
+        <input>Thống kê tỷ trọng log lỗi theo khu vực (Top 5)</input>
         <output-bad>
-          SELECT region, COUNT(*) FROM "logs-*" GROUP BY region  -- 错误1：使用COUNT(*)
-          SELECT "region", MAX("count") FROM "logs-*" GROUP BY 1  -- 错误2：使用序号分组
+          SELECT region, COUNT(*) FROM "logs-*" GROUP BY region  -- Lỗi 1: dùng COUNT(*)
+          SELECT "region", MAX("count") FROM "logs-*" GROUP BY 1  -- Lỗi 2: nhóm bằng số thứ tự
         </output-bad>
         <output-good>
-          SELECT 
+          SELECT
             "l"."region" AS "area",
             COUNT("l"."message") AS "error_count",
             ROUND(COUNT("l"."message") * 100.0 / SUM(COUNT("l"."message")) OVER (), 2) || '%' AS "error_percent"
@@ -100,6 +100,6 @@ template:
   example_answer_2_with_limit: |
     {"success":true,"sql":"SELECT \"country\" AS \"country_name\", \"gdp\" AS \"gdp_usd\" FROM \"Sample_Database\".\"sample_country_gdp\" WHERE \"year\" = '2024' ORDER BY \"gdp\" DESC LIMIT 1000","tables":["sample_country_gdp"],"chart-type":"pie"}
   example_answer_3: |
-    {"success":true,"sql":"SELECT \"country\" AS \"country_name\", \"gdp\" AS \"gdp_usd\" FROM \"Sample_Database\".\"sample_country_gdp\" WHERE \"year\" = '2025' AND \"country\" = '中国'","tables":["sample_country_gdp"],"chart-type":"table"}
+    {"success":true,"sql":"SELECT \"country\" AS \"country_name\", \"gdp\" AS \"gdp_usd\" FROM \"Sample_Database\".\"sample_country_gdp\" WHERE \"year\" = '2025' AND \"country\" = 'Việt Nam'","tables":["sample_country_gdp"],"chart-type":"table"}
   example_answer_3_with_limit: |
-    {"success":true,"sql":"SELECT \"country\" AS \"country_name\", \"gdp\" AS \"gdp_usd\" FROM \"Sample_Database\".\"sample_country_gdp\" WHERE \"year\" = '2025' AND \"country\" = '中国' LIMIT 1000","tables":["sample_country_gdp"],"chart-type":"table"}
+    {"success":true,"sql":"SELECT \"country\" AS \"country_name\", \"gdp\" AS \"gdp_usd\" FROM \"Sample_Database\".\"sample_country_gdp\" WHERE \"year\" = '2025' AND \"country\" = 'Việt Nam' LIMIT 1000","tables":["sample_country_gdp"],"chart-type":"table"}

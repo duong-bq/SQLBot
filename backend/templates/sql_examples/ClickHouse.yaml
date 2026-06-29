@@ -1,52 +1,52 @@
 template:
   quot_rule: |
     <rule>
-      必须对数据库名、表名、字段名、别名外层加双引号（"）。
+      Bắt buộc thêm dấu nháy kép (") bao quanh tên cơ sở dữ liệu, tên bảng, tên trường, bí danh.
       <note>
-        1. 点号（.）不能包含在引号内，必须写成 "database"."table"
-        2. ClickHouse 严格区分大小写，必须通过引号保留原始大小写
-        3. 嵌套字段使用点号连接：`"json_column.field"`
+        1. Dấu chấm (.) không được nằm trong dấu nháy, phải viết thành "database"."table"
+        2. ClickHouse phân biệt hoa/thường nghiêm ngặt, phải dùng dấu nháy để giữ nguyên hoa/thường gốc
+        3. Trường lồng nhau dùng dấu chấm để nối: `"json_column.field"`
       </note>
     </rule>
 
   limit_rule: |
     <rule>
-      当需要限制行数时，必须使用标准的LIMIT语法
+      Khi cần giới hạn số dòng, phải dùng cú pháp LIMIT chuẩn
       <note>
-        1. 标准写法：LIMIT [count]
-        2. 分页写法：LIMIT [count] OFFSET [start]
-        3. 禁止使用原生 `topk()` 等函数替代
+        1. Cách viết chuẩn: LIMIT [count]
+        2. Cách viết phân trang: LIMIT [count] OFFSET [start]
+        3. Cấm dùng các hàm gốc như `topk()` để thay thế
       </note>
     </rule>
 
   other_rule: |
-    <rule>必须为每个表生成简短别名（如t1/t2）</rule>
+    <rule>Phải sinh bí danh ngắn gọn cho mỗi bảng (như t1/t2)</rule>
     {multi_table_condition}
-    <rule>禁止使用星号(*)，必须明确字段名</rule>
-    <rule>JSON字段需用点号语法访问：`"column.field"`</rule>
-    <rule>函数字段必须加别名</rule>
-    <rule>百分比显示为：`ROUND(x*100,2) || '%'`</rule>
-    <rule>避免与ClickHouse关键字冲突（如`timestamp`/`default`）</rule>
+    <rule>Cấm dùng dấu sao (*), phải nêu rõ tên trường</rule>
+    <rule>Trường JSON cần truy cập bằng cú pháp dấu chấm: `"column.field"`</rule>
+    <rule>Trường hàm phải thêm bí danh</rule>
+    <rule>Phần trăm hiển thị dạng: `ROUND(x*100,2) || '%'`</rule>
+    <rule>Tránh xung đột với từ khóa ClickHouse (như `timestamp`/`default`)</rule>
 
   basic_example: |
     <basic-examples>
       <intro>
-        📌 以下示例严格遵循<Rules>中的 ClickHouse 规范，展示符合要求的 SQL 写法与典型错误案例。
-        ⚠️ 注意：示例中的表名、字段名均为演示虚构，实际使用时需替换为用户提供的真实标识符。
-        🔍 重点观察：
-          1. 双引号包裹所有数据库对象的规范用法
-          2. 中英别名/百分比/函数等特殊字段的处理
-          3. 关键字冲突的规避方式
+        📌 Các ví dụ sau tuân thủ nghiêm ngặt chuẩn ClickHouse trong <Rules>, minh họa cách viết SQL đúng yêu cầu và các trường hợp lỗi điển hình.
+        ⚠️ Lưu ý: tên bảng, tên trường trong ví dụ đều là hư cấu để minh họa, khi dùng thực tế cần thay bằng định danh thật do người dùng cung cấp.
+        🔍 Điểm cần quan sát kỹ:
+          1. Cách dùng chuẩn dấu nháy kép bao quanh mọi đối tượng cơ sở dữ liệu
+          2. Cách xử lý các trường đặc biệt như bí danh Việt-Anh/phần trăm/hàm
+          3. Cách tránh xung đột từ khóa
       </intro>
       <example>
-        <input>查询 events 表的前100条错误日志（含JSON字段）</input>
+        <input>Truy vấn 100 log lỗi đầu của bảng events (có trường JSON)</input>
         <output-bad>
-          SELECT * FROM default.events LIMIT 100  -- 错误1：使用星号
-          SELECT message FROM "default"."events" WHERE level = 'error'  -- 错误2：未处理JSON字段
-          SELECT "message", "extra.error_code" FROM events LIMIT 100  -- 错误3：表名未加引号
+          SELECT * FROM default.events LIMIT 100  -- Lỗi 1: dùng dấu sao
+          SELECT message FROM "default"."events" WHERE level = 'error'  -- Lỗi 2: chưa xử lý trường JSON
+          SELECT "message", "extra.error_code" FROM events LIMIT 100  -- Lỗi 3: tên bảng chưa thêm dấu nháy
         </output-bad>
         <output-good>
-          SELECT 
+          SELECT
             "e"."message" AS "log_content",
             "e"."extra"."error_code" AS "error_id",
             toDateTime("e"."timestamp") AS "log_time"
@@ -57,13 +57,13 @@ template:
       </example>
 
       <example>
-        <input>统计各地区的错误率Top 5（含百分比）</input>
+        <input>Thống kê Top 5 tỷ lệ lỗi theo khu vực (có phần trăm)</input>
         <output-bad>
-          SELECT region, COUNT(*) FROM events GROUP BY region  -- 错误1：使用COUNT(*)
-          SELECT "region", MAX("count") FROM "events" GROUP BY 1  -- 错误2：使用序号分组
+          SELECT region, COUNT(*) FROM events GROUP BY region  -- Lỗi 1: dùng COUNT(*)
+          SELECT "region", MAX("count") FROM "events" GROUP BY 1  -- Lỗi 2: nhóm bằng số thứ tự
         </output-bad>
         <output-good>
-          SELECT 
+          SELECT
             "e"."region" AS "area",
             COUNT(*) AS "total",
             COUNTIf("e"."level" = 'error') AS "error_count",
@@ -86,6 +86,6 @@ template:
   example_answer_2_with_limit: |
     {"success":true,"sql":"SELECT \"country\" AS \"country_name\", \"gdp\" AS \"gdp_usd\" FROM \"Sample_Database\".\"sample_country_gdp\" WHERE \"year\" = '2024' ORDER BY \"gdp\" DESC LIMIT 1000","tables":["sample_country_gdp"],"chart-type":"pie"}
   example_answer_3: |
-    {"success":true,"sql":"SELECT \"country\" AS \"country_name\", \"gdp\" AS \"gdp_usd\" FROM \"Sample_Database\".\"sample_country_gdp\" WHERE \"year\" = '2025' AND \"country\" = '中国'","tables":["sample_country_gdp"],"chart-type":"table"}
+    {"success":true,"sql":"SELECT \"country\" AS \"country_name\", \"gdp\" AS \"gdp_usd\" FROM \"Sample_Database\".\"sample_country_gdp\" WHERE \"year\" = '2025' AND \"country\" = 'Việt Nam'","tables":["sample_country_gdp"],"chart-type":"table"}
   example_answer_3_with_limit: |
-    {"success":true,"sql":"SELECT \"country\" AS \"country_name\", \"gdp\" AS \"gdp_usd\" FROM \"Sample_Database\".\"sample_country_gdp\" WHERE \"year\" = '2025' AND \"country\" = '中国' LIMIT 1000","tables":["sample_country_gdp"],"chart-type":"table"}
+    {"success":true,"sql":"SELECT \"country\" AS \"country_name\", \"gdp\" AS \"gdp_usd\" FROM \"Sample_Database\".\"sample_country_gdp\" WHERE \"year\" = '2025' AND \"country\" = 'Việt Nam' LIMIT 1000","tables":["sample_country_gdp"],"chart-type":"table"}
