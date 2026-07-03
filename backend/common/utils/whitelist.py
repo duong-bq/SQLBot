@@ -6,6 +6,7 @@ from common.utils.utils import SQLBotLogUtil
 wlist = [
     "/",
     "/docs",
+    "/openapi.json",
     "/login/*",
     "*.ico",
     "*.html",
