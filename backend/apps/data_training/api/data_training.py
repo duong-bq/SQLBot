@@ -30,6 +30,12 @@ router = APIRouter(tags=["SQL Examples"], prefix="/system/data-training")
 @require_permissions(permission=SqlbotPermission(role=['ws_admin']))
 async def pager(session: SessionDep, current_user: CurrentUser, current_page: int, page_size: int,
                 question: Optional[str] = Query(None, description="搜索问题(可选)")):
+    """
+    Danh sách mẫu dữ liệu huấn luyện (SQL examples: câu hỏi ↔ SQL mẫu) có phân trang (quyền ws_admin).
+
+    Phân trang theo ``current_page``/``page_size``, lọc theo ``question`` (từ khóa). Chỉ trong workspace
+    hiện tại. Các cặp câu hỏi–SQL mẫu này được RAG dùng làm few-shot ví dụ khi sinh SQL.
+    """
     current_page, page_size, total_count, total_pages, _list = page_data_training(session, current_page, page_size,
                                                                                   question,
                                                                                   current_user.oid)
@@ -47,6 +53,12 @@ async def pager(session: SessionDep, current_user: CurrentUser, current_page: in
 @require_permissions(permission=SqlbotPermission(role=['ws_admin'], type='ds', keyExpression="info.datasource"))
 @system_log(LogConfig(operation_type=OperationType.CREATE_OR_UPDATE, module=OperationModules.DATA_TRAINING,resource_id_expr='info.id', result_id_expr="result_self"))
 async def create_or_update(session: SessionDep, current_user: CurrentUser, trans: Trans, info: DataTrainingInfo):
+    """
+    Tạo mới hoặc cập nhật một mẫu dữ liệu huấn luyện (quyền ws_admin, kèm kiểm tra quyền trên nguồn dữ liệu).
+
+    Body ``DataTrainingInfo`` gồm câu hỏi, SQL/mô tả mẫu và nguồn dữ liệu áp dụng. Nếu ``info.id`` có giá
+    trị thì cập nhật, ngược lại tạo mới. Trả về id bản ghi. Có ghi log thao tác.
+    """
     oid = current_user.oid
     if info.id:
         return update_training(session, info, oid, trans)
@@ -58,6 +70,9 @@ async def create_or_update(session: SessionDep, current_user: CurrentUser, trans
 @system_log(LogConfig(operation_type=OperationType.DELETE, module=OperationModules.DATA_TRAINING,resource_id_expr='id_list'))
 @require_permissions(permission=SqlbotPermission(role=['ws_admin']))
 async def delete(session: SessionDep, id_list: list[int]):
+    """
+    Xóa một hoặc nhiều mẫu dữ liệu huấn luyện theo danh sách ``id_list`` (quyền ws_admin). Có ghi log.
+    """
     delete_training(session, id_list)
 
 
@@ -65,6 +80,11 @@ async def delete(session: SessionDep, id_list: list[int]):
 @system_log(LogConfig(operation_type=OperationType.UPDATE, module=OperationModules.DATA_TRAINING,resource_id_expr='id'))
 @require_permissions(permission=SqlbotPermission(role=['ws_admin']))
 async def enable(session: SessionDep, id: int, enabled: bool, trans: Trans):
+    """
+    Bật/tắt một mẫu dữ liệu huấn luyện theo ``id`` (``enabled`` = true/false) — quyền ws_admin.
+
+    Mẫu bị tắt sẽ không được dùng làm ví dụ few-shot khi sinh SQL. Có ghi log thao tác.
+    """
     enable_training(session, id, enabled, trans)
 
 
@@ -72,6 +92,11 @@ async def enable(session: SessionDep, id: int, enabled: bool, trans: Trans):
 @system_log(LogConfig(operation_type=OperationType.EXPORT, module=OperationModules.DATA_TRAINING))
 async def export_excel(session: SessionDep, trans: Trans, current_user: CurrentUser,
                        question: Optional[str] = Query(None, description="搜索术语(可选)")):
+    """
+    Xuất toàn bộ mẫu dữ liệu huấn luyện ra file Excel (có thể lọc theo ``question``).
+
+    Trả về file .xlsx dạng stream, tiêu đề cột theo ngôn ngữ hiện tại. Có ghi log thao tác export.
+    """
     def inner():
         _list = get_all_data_training(session, question, oid=current_user.oid)
 
@@ -112,6 +137,11 @@ async def export_excel(session: SessionDep, trans: Trans, current_user: CurrentU
 
 @router.get("/template", summary=f"{PLACEHOLDER_PREFIX}excel_template_dt")
 async def excel_template(trans: Trans, current_user: CurrentUser):
+    """
+    Tải file Excel mẫu để import dữ liệu huấn luyện.
+
+    File mẫu chứa các cột (câu hỏi, SQL mẫu, nguồn dữ liệu...) kèm dòng ví dụ, dùng làm khuôn cho upload.
+    """
     def inner():
         data_list = []
         _data1 = {
@@ -162,6 +192,12 @@ session_maker = scoped_session(sessionmaker(bind=engine, class_=Session))
 @system_log(LogConfig(operation_type=OperationType.IMPORT, module=OperationModules.DATA_TRAINING))
 @require_permissions(permission=SqlbotPermission(role=['ws_admin']))
 async def upload_excel(trans: Trans, current_user: CurrentUser, file: UploadFile = File(...)):
+    """
+    Import hàng loạt mẫu dữ liệu huấn luyện từ file Excel (quyền ws_admin).
+
+    Chỉ nhận .xlsx/.xls (sai định dạng trả 400). Đọc mọi sheet, tạo theo lô. Trả về số bản ghi thành
+    công/thất bại/trùng lặp; dòng lỗi sinh file ``*_error.xlsx`` để tải lại. Có ghi log thao tác import.
+    """
     ALLOWED_EXTENSIONS = {"xlsx", "xls"}
     if not file.filename.lower().endswith(tuple(ALLOWED_EXTENSIONS)):
         raise HTTPException(400, "Only support .xlsx/.xls")

@@ -30,6 +30,12 @@ from common.audit.schemas.logger_decorator import LogConfig, system_log
 
 @router.get("/info/{id}", include_in_schema=False)
 async def info(request: Request, response: Response, session: SessionDep, trans: Trans, id: int) -> AssistantModel:
+    """
+    Lấy thông tin cấu hình của một trợ lý nhúng theo ``id`` (dùng cho trang/iframe nhúng, ẩn khỏi Swagger).
+
+    Xác thực nguồn nhúng: đọc ``origin`` từ header/referer và kiểm tra khớp với ``domain`` đã cấu hình
+    của assistant; nếu không khớp sẽ báo lỗi origin không hợp lệ. Thành công thì set header CORS cho origin đó.
+    """
     if not id:
         raise Exception('miss assistant id')
     db_model = await get_assistant_info(session=session, assistant_id=id)
@@ -50,6 +56,11 @@ async def info(request: Request, response: Response, session: SessionDep, trans:
 
 @router.get("/app/{appId}", include_in_schema=False)
 async def getApp(request: Request, response: Response, session: SessionDep, trans: Trans, appId: str) -> AssistantModel:
+    """
+    Lấy thông tin trợ lý nhúng theo ``appId`` (mã ứng dụng công khai), ẩn khỏi Swagger.
+
+    Giống ``/info/{id}`` nhưng tra theo ``app_id`` thay vì id nội bộ; cũng kiểm tra origin nhúng khớp domain.
+    """
     if not appId:
         raise Exception('miss assistant appId')
     db_model = session.exec(select(AssistantModel).where(AssistantModel.app_id == appId)).first()
@@ -69,6 +80,13 @@ async def getApp(request: Request, response: Response, session: SessionDep, tran
 
 @router.get("/validator", response_model=AssistantValidator, include_in_schema=False)
 async def validator(session: SessionDep, id: int, virtual: Optional[int] = Query(None)):
+    """
+    Cấp access token cho phiên trợ lý nhúng theo ``id`` (ẩn khỏi Swagger).
+
+    Sinh token cho một "người dùng ảo" (``sqlbot-inner-assistant``) gắn với workspace của assistant và
+    ``virtual`` id, để phía nhúng gọi các API chat mà không cần đăng nhập thật. Trả về ``AssistantValidator``
+    chứa token; nếu assistant không tồn tại trả về validator rỗng.
+    """
     if not id:
         raise Exception('miss assistant id')
 
@@ -92,8 +110,14 @@ async def validator(session: SessionDep, id: int, virtual: Optional[int] = Query
     return AssistantValidator(True, True, True, access_token)
 
 
-@router.get('/picture/{file_id}', summary=f"{PLACEHOLDER_PREFIX}assistant_picture_api", description=f"{PLACEHOLDER_PREFIX}assistant_picture_api")
+@router.get('/picture/{file_id}', summary=f"{PLACEHOLDER_PREFIX}assistant_picture_api")
 async def picture(file_id: str = Path(description="file_id")):
+    """
+    Trả về file ảnh (logo / icon nổi) của trợ lý theo ``file_id``.
+
+    Suy ra media type từ đuôi file (svg → image/svg+xml, còn lại → image/jpeg) và stream nội dung file.
+    Trả 404 nếu file không tồn tại.
+    """
     file_path = SQLBotFileUtils.get_file_path(file_id=file_id)
     if not os.path.exists(file_path):
         raise HTTPException(status_code=404, detail="File not found")
@@ -110,9 +134,16 @@ async def picture(file_id: str = Path(description="file_id")):
     return StreamingResponse(iterfile(), media_type=media_type)
 
 
-@router.patch('/ui', summary=f"{PLACEHOLDER_PREFIX}assistant_ui_api", description=f"{PLACEHOLDER_PREFIX}assistant_ui_api")
+@router.patch('/ui', summary=f"{PLACEHOLDER_PREFIX}assistant_ui_api")
 @system_log(LogConfig(operation_type=OperationType.UPDATE, module=OperationModules.APPLICATION, result_id_expr="id"))
 async def ui(session: SessionDep, data: str = Form(), files: List[UploadFile] = []):
+    """
+    Cập nhật cấu hình giao diện (UI) của một trợ lý, kèm upload logo/icon.
+
+    Nhận ``data`` (JSON ``AssistantUiSchema``) qua form và danh sách ``files``. File có cờ ``logo`` hoặc
+    ``float_icon`` được kiểm tra định dạng (jpg/png ≤ 10MB) và lưu; file cũ tương ứng bị xóa. Các trường
+    cấu hình được gộp vào ``configuration`` (JSON) của assistant. Có xóa cache thông tin nhúng.
+    """
     json_data = json.loads(data)
     uiSchema = AssistantUiSchema(**json_data)
     id = uiSchema.id
@@ -168,6 +199,14 @@ async def clear_ui_cache(id: int):
 
 @router.get("/ds", include_in_schema=False, response_model=list[dict])
 async def ds(session: SessionDep, current_assistant: CurrentAssistant):
+    """
+    Danh sách nguồn dữ liệu khả dụng cho trợ lý nhúng hiện tại (ẩn khỏi Swagger).
+
+    - Trợ lý nội bộ (``type == 0``): lấy datasource theo workspace của assistant; nếu không ở chế độ
+      online thì chỉ trả về các datasource trong ``public_list``.
+    - Trợ lý dùng nguồn ngoài (``type == 1``): lấy danh sách từ ``AssistantOutDs`` tương ứng.
+    Mỗi phần tử gồm id, tên, mô tả, loại DB và số bảng.
+    """
     if current_assistant.type == 0:
         online = current_assistant.online
         configuration = current_assistant.configuration
@@ -217,9 +256,14 @@ def get_db_type(type):
         return None
 
 
-@router.get("", response_model=list[AssistantModel], summary=f"{PLACEHOLDER_PREFIX}assistant_grid_api", description=f"{PLACEHOLDER_PREFIX}assistant_grid_api")
+@router.get("", response_model=list[AssistantModel], summary=f"{PLACEHOLDER_PREFIX}assistant_grid_api")
 @require_permissions(permission=SqlbotPermission(role=['ws_admin']))
 async def query(session: SessionDep, current_user: CurrentUser):
+    """
+    Danh sách trợ lý (assistant) trong workspace hiện tại (quyền ws_admin).
+
+    Loại trừ loại nhúng trang (``type == 4``). Sắp xếp theo tên và thời gian tạo.
+    """
     list_result = session.exec(select(AssistantModel).where(AssistantModel.oid == current_user.oid, AssistantModel.type != 4).order_by(AssistantModel.name,
                                                                                                AssistantModel.create_time)).all()
     for model in list_result:
@@ -230,24 +274,41 @@ async def query(session: SessionDep, current_user: CurrentUser):
 @router.get("/advanced_application", response_model=list[AssistantModel], include_in_schema=False)
 @require_permissions(permission=SqlbotPermission(role=['ws_admin']))
 async def query_advanced_application(session: SessionDep, current_user: CurrentUser):
+    """
+    Danh sách "ứng dụng nâng cao" (assistant dùng nguồn dữ liệu ngoài, ``type == 1``) trong workspace hiện tại.
+
+    Quyền ws_admin; ẩn khỏi Swagger. Sắp xếp theo tên và thời gian tạo.
+    """
     list_result = session.exec(select(AssistantModel).where(AssistantModel.type == 1, AssistantModel.oid == current_user.oid).order_by(AssistantModel.name,
                                                                                                AssistantModel.create_time)).all()
     return list_result
 
 
-@router.post("", summary=f"{PLACEHOLDER_PREFIX}assistant_create_api", description=f"{PLACEHOLDER_PREFIX}assistant_create_api")
+@router.post("", summary=f"{PLACEHOLDER_PREFIX}assistant_create_api")
 @require_permissions(permission=SqlbotPermission(role=['ws_admin']))
 @system_log(LogConfig(operation_type=OperationType.CREATE, module=OperationModules.APPLICATION, result_id_expr="id"))
 async def add(request: Request, session: SessionDep, current_user: CurrentUser, creator: AssistantBase):
+    """
+    Tạo mới một trợ lý/ứng dụng nhúng (quyền ws_admin).
+
+    Gán vào workspace hiện tại, trừ loại nhúng trang (``type == 4``) thì gán workspace mặc định (oid=1).
+    Việc lưu và cập nhật CORS động do hàm ``save`` xử lý.
+    """
     oid = current_user.oid if creator.type != 4 else 1
     return await save(request, session, creator, oid)
 
 
-@router.put("", summary=f"{PLACEHOLDER_PREFIX}assistant_update_api", description=f"{PLACEHOLDER_PREFIX}assistant_update_api")
+@router.put("", summary=f"{PLACEHOLDER_PREFIX}assistant_update_api")
 @require_permissions(permission=SqlbotPermission(role=['ws_admin']))
 @clear_cache(namespace=CacheNamespace.EMBEDDED_INFO, cacheName=CacheName.ASSISTANT_INFO, keyExpression="editor.id")
 @system_log(LogConfig(operation_type=OperationType.UPDATE, module=OperationModules.APPLICATION, resource_id_expr="editor.id"))
 async def update(request: Request, session: SessionDep, editor: AssistantDTO):
+    """
+    Cập nhật một trợ lý/ứng dụng nhúng (quyền ws_admin).
+
+    Body ``AssistantDTO`` gồm ``id`` và các trường cần sửa. Sau khi lưu, cập nhật lại danh sách CORS động
+    (vì domain nhúng có thể thay đổi). Có xóa cache thông tin nhúng.
+    """
     id = editor.id
     db_model = session.get(AssistantModel, id)
     if not db_model:
@@ -259,8 +320,11 @@ async def update(request: Request, session: SessionDep, editor: AssistantDTO):
     dynamic_upgrade_cors(request=request, session=session)
 
 
-@router.get("/{id}", response_model=AssistantModel, summary=f"{PLACEHOLDER_PREFIX}assistant_query_api", description=f"{PLACEHOLDER_PREFIX}assistant_query_api")
+@router.get("/{id}", response_model=AssistantModel, summary=f"{PLACEHOLDER_PREFIX}assistant_query_api")
 async def get_one(session: SessionDep, id: int = Path(description="ID")):
+    """
+    Lấy chi tiết một trợ lý theo ``id`` (dùng cho trang quản trị).
+    """
     db_model = await get_assistant_info(session=session, assistant_id=id)
     if not db_model:
         raise ValueError(f"AssistantModel with id {id} not found")
@@ -268,11 +332,16 @@ async def get_one(session: SessionDep, id: int = Path(description="ID")):
     return db_model
 
 
-@router.delete("/{id}", summary=f"{PLACEHOLDER_PREFIX}assistant_del_api", description=f"{PLACEHOLDER_PREFIX}assistant_del_api")
+@router.delete("/{id}", summary=f"{PLACEHOLDER_PREFIX}assistant_del_api")
 @require_permissions(permission=SqlbotPermission(role=['ws_admin']))
 @clear_cache(namespace=CacheNamespace.EMBEDDED_INFO, cacheName=CacheName.ASSISTANT_INFO, keyExpression="id")
 @system_log(LogConfig(operation_type=OperationType.DELETE, module=OperationModules.APPLICATION, resource_id_expr="id"))
 async def delete(request: Request, session: SessionDep, id: int = Path(description="ID")):
+    """
+    Xóa một trợ lý/ứng dụng nhúng theo ``id`` (quyền ws_admin).
+
+    Sau khi xóa, cập nhật lại danh sách CORS động và xóa cache thông tin nhúng.
+    """
     db_model = session.get(AssistantModel, id)
     if not db_model:
         raise ValueError(f"AssistantModel with id {id} not found")

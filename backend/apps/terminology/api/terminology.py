@@ -30,6 +30,13 @@ router = APIRouter(tags=["Terminology"], prefix="/system/terminology")
 async def pager(session: SessionDep, current_user: CurrentUser, current_page: int, page_size: int,
                 word: Optional[str] = Query(None, description="搜索术语(可选)"),
                 dslist: Optional[list[int]] = Query(None, description="数据集ID集合(可选)")):
+    """
+    Danh sách thuật ngữ (terminology) có phân trang (quyền ws_admin).
+
+    Phân trang theo ``current_page``/``page_size``; có thể lọc theo ``word`` (từ khóa) và ``dslist``
+    (danh sách id nguồn dữ liệu). Chỉ trả về thuật ngữ trong workspace hiện tại (``current_user.oid``).
+    Thuật ngữ dùng để đưa giải thích/đồng nghĩa vào ngữ cảnh RAG khi sinh SQL.
+    """
     current_page, page_size, total_count, total_pages, _list = page_terminology(session, current_page, page_size, word,
                                                                                 current_user.oid, dslist)
 
@@ -46,6 +53,12 @@ async def pager(session: SessionDep, current_user: CurrentUser, current_page: in
 @require_permissions(permission=SqlbotPermission(role=['ws_admin'], type='ds', keyExpression="info.datasource_ids"))
 @system_log(LogConfig(operation_type=OperationType.CREATE_OR_UPDATE, module=OperationModules.TERMINOLOGY,resource_id_expr='info.id', result_id_expr="result_self"))
 async def create_or_update(session: SessionDep, current_user: CurrentUser, trans: Trans, info: TerminologyInfo):
+    """
+    Tạo mới hoặc cập nhật một thuật ngữ (quyền ws_admin, kèm kiểm tra quyền trên các nguồn dữ liệu).
+
+    Body ``TerminologyInfo`` gồm từ chính, từ đồng nghĩa, mô tả và danh sách nguồn dữ liệu áp dụng.
+    Nếu ``info.id`` có giá trị thì cập nhật, ngược lại tạo mới. Có ghi log thao tác.
+    """
     oid = current_user.oid
     if info.id:
         return update_terminology(session, info, oid, trans)
@@ -57,6 +70,9 @@ async def create_or_update(session: SessionDep, current_user: CurrentUser, trans
 @system_log(LogConfig(operation_type=OperationType.DELETE, module=OperationModules.TERMINOLOGY,resource_id_expr='id_list'))
 @require_permissions(permission=SqlbotPermission(role=['ws_admin']))
 async def delete(session: SessionDep, id_list: list[int]):
+    """
+    Xóa một hoặc nhiều thuật ngữ theo danh sách ``id_list`` (quyền ws_admin). Có ghi log thao tác.
+    """
     delete_terminology(session, id_list)
 
 
@@ -64,6 +80,11 @@ async def delete(session: SessionDep, id_list: list[int]):
 @system_log(LogConfig(operation_type=OperationType.UPDATE, module=OperationModules.TERMINOLOGY,resource_id_expr='id'))
 @require_permissions(permission=SqlbotPermission(role=['ws_admin']))
 async def enable(session: SessionDep, id: int, enabled: bool, trans: Trans):
+    """
+    Bật/tắt một thuật ngữ theo ``id`` (``enabled`` = true/false) — quyền ws_admin.
+
+    Thuật ngữ bị tắt sẽ không được đưa vào ngữ cảnh khi sinh SQL. Có ghi log thao tác.
+    """
     enable_terminology(session, id, enabled, trans)
 
 
@@ -71,6 +92,11 @@ async def enable(session: SessionDep, id: int, enabled: bool, trans: Trans):
 @system_log(LogConfig(operation_type=OperationType.EXPORT, module=OperationModules.TERMINOLOGY))
 async def export_excel(session: SessionDep, trans: Trans, current_user: CurrentUser,
                        word: Optional[str] = Query(None, description="搜索术语(可选)")):
+    """
+    Xuất toàn bộ thuật ngữ ra file Excel (có thể lọc theo ``word``).
+
+    Trả về file .xlsx dạng stream, tiêu đề cột theo ngôn ngữ hiện tại. Có ghi log thao tác export.
+    """
     def inner():
         _list = get_all_terminology(session, word, oid=current_user.oid)
 
@@ -113,6 +139,12 @@ async def export_excel(session: SessionDep, trans: Trans, current_user: CurrentU
 
 @router.get("/template", summary=f"{PLACEHOLDER_PREFIX}excel_template_term")
 async def excel_template(trans: Trans):
+    """
+    Tải file Excel mẫu để import thuật ngữ.
+
+    File mẫu chứa các cột (từ chính, từ đồng nghĩa, mô tả, nguồn dữ liệu, áp dụng tất cả nguồn...) kèm
+    hai dòng ví dụ, dùng làm khuôn cho chức năng upload.
+    """
     def inner():
         data_list = []
         _data1 = {
@@ -172,6 +204,13 @@ session_maker = scoped_session(sessionmaker(bind=engine, class_=Session))
 @system_log(LogConfig(operation_type=OperationType.IMPORT, module=OperationModules.TERMINOLOGY))
 @require_permissions(permission=SqlbotPermission(role=['ws_admin']))
 async def upload_excel(trans: Trans, current_user: CurrentUser, file: UploadFile = File(...)):
+    """
+    Import hàng loạt thuật ngữ từ file Excel (quyền ws_admin).
+
+    Chỉ nhận .xlsx/.xls (sai định dạng trả 400). Đọc tất cả sheet, tạo thuật ngữ theo lô. Trả về số bản
+    ghi thành công/thất bại/trùng lặp; nếu có dòng lỗi sẽ sinh file ``*_error.xlsx`` (tải qua
+    /system/download-fail-info). Có ghi log thao tác import.
+    """
     ALLOWED_EXTENSIONS = {"xlsx", "xls"}
     if not file.filename.lower().endswith(tuple(ALLOWED_EXTENSIONS)):
         raise HTTPException(400, "Only support .xlsx/.xls")

@@ -28,6 +28,14 @@ async def local_login(
     trans: Trans,
     form_data: Annotated[OAuth2PasswordRequestForm, Depends()]
 ) -> Token:
+    """
+    Đăng nhập nội bộ, cấp access token (JWT).
+
+    Nhận ``username``/``password`` (đã mã hóa phía client, được ``sqlbot_decrypt`` giải mã) theo chuẩn
+    OAuth2 password flow. Xác thực tài khoản rồi kiểm tra tuần tự: có gắn workspace không, trạng thái
+    kích hoạt, đúng nguồn đăng nhập nội bộ. Thất bại ở bước nào trả về lỗi 400 tương ứng.
+    Thành công trả về ``Token`` chứa access_token có hạn ``ACCESS_TOKEN_EXPIRE_MINUTES``.
+    """
     origin_account = await sqlbot_decrypt(form_data.username)
     origin_pwd = await sqlbot_decrypt(form_data.password)
     user: BaseUserDTO = authenticate(session=session, account=origin_account, password=origin_pwd)
@@ -47,6 +55,12 @@ async def local_login(
 
 @router.post("/logout")    
 async def logout(session: SessionDep, request: Request, dto: LogoutSchema):
+    """
+    Đăng xuất người dùng.
+
+    Với đăng nhập nội bộ (``dto.origin == 0``) không cần xử lý phía server (token JWT stateless) nên
+    trả về ``None``. Với các nguồn đăng nhập khác (SSO/OIDC...) ủy quyền cho module xpack xử lý logout.
+    """
     if dto.origin != 0:
         return await xpack_logout(session, request, dto)
     return None

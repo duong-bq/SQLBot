@@ -50,6 +50,13 @@ router = APIRouter(tags=["mcp"], prefix="/mcp")
 
 
 def get_user(session: SessionDep, token: str):
+    """
+    Hàm nội bộ: giải mã JWT ``token`` và dựng lại thông tin người dùng cho các API MCP.
+
+    Không phải endpoint. Kiểm tra token hợp lệ (sai/hết hạn trả 403), lấy user từ DB, gắn quyền theo
+    workspace và trạng thái hoạt động (user bị khóa trả 400). Các API MCP dùng hàm này thay cho cơ chế
+    xác thực Depends thông thường vì nhận token qua body.
+    """
     try:
         payload = jwt.decode(
             token, settings.SECRET_KEY, algorithms=[security.ALGORITHM]
@@ -83,6 +90,12 @@ def get_user(session: SessionDep, token: str):
 
 @router.post("/mcp_start", operation_id="mcp_start")
 async def mcp_start(session: SessionDep, chat: ChatStart):
+    """
+    Điểm khởi đầu phiên MCP: đăng nhập bằng username/password và tạo một hội thoại mới.
+
+    Body ``ChatStart`` gồm ``username``/``password``. Xác thực sai trả 400; nếu user chưa gắn workspace
+    cũng trả 400. Trả về ``access_token`` (JWT) và ``chat_id`` để các lệnh MCP tiếp theo dùng lại.
+    """
     user: BaseUserDTO = authenticate(session=session, account=chat.username, password=chat.password)
     if not user:
         raise HTTPException(status_code=400, detail="Incorrect account or password")
@@ -100,12 +113,24 @@ async def mcp_start(session: SessionDep, chat: ChatStart):
 
 @router.post("/mcp_ws_list", operation_id="mcp_ws_list")
 async def ws_list(session: SessionDep, trans: Trans, token: str):
+    """
+    Liệt kê các workspace mà người dùng (xác định qua ``token``) có quyền truy cập — API cho MCP.
+
+    Dùng để client MCP chọn workspace trước khi liệt kê nguồn dữ liệu / đặt câu hỏi.
+    """
     session_user = get_user(session, token)
     return await user_ws_options(session, session_user.id, trans)
 
 
 @router.post("/mcp_ds_list", operation_id="mcp_datasource_list")
 async def datasource_list(session: SessionDep, trans: Trans, mcp_ds: McpDs):
+    """
+    Liệt kê nguồn dữ liệu người dùng truy cập được trong một workspace — API cho MCP.
+
+    Body ``McpDs`` gồm ``token`` và ``oid`` (workspace) tùy chọn; nếu ``oid`` không thuộc workspace của
+    user thì trả 400. Kết quả đã loại bỏ các trường nhạy cảm/nặng (embedding, table_relation, cấu hình...)
+    để client MCP chọn nguồn dữ liệu đặt câu hỏi.
+    """
     session_user = get_user(session, mcp_ds.token)
     if mcp_ds.oid:
         w_list = await user_ws_options(session, session_user.id, trans)
@@ -135,6 +160,14 @@ async def datasource_list(session: SessionDep, trans: Trans, mcp_ds: McpDs):
 
 @router.post("/mcp_question", operation_id="mcp_question")
 async def mcp_question(session: SessionDep, trans: Trans, chat: McpQuestion):
+    """
+    Đặt câu hỏi Text-to-SQL qua MCP — cửa ngõ chính để công cụ ngoài (MCP client) hỏi dữ liệu.
+
+    Body ``McpQuestion`` gồm ``token``, ``chat_id``, ``question``, ``datasource_id``, ``oid``, ``lang``,
+    ``stream``, ``return_img``. Xác thực qua token, chọn workspace/ngôn ngữ, chuẩn hóa datasource_id (sai
+    kiểu trả 400) rồi gọi ``question_answer_inner`` chạy toàn bộ pipeline sinh SQL → truy vấn → biểu đồ.
+    Trả kết quả (có thể ở dạng stream hoặc kèm ảnh biểu đồ).
+    """
     session_user = get_user(session, chat.token)
     lang = chat.lang
     if lang in ["zh-CN", "zh-TW", "en", "ko-KR"]:
@@ -170,6 +203,13 @@ async def mcp_question(session: SessionDep, trans: Trans, chat: McpQuestion):
 # Cordys crm
 @router.post("/mcp_assistant", operation_id="mcp_assistant")
 async def mcp_assistant(session: SessionDep, chat: McpAssistant):
+    """
+    Hỏi đáp qua MCP ở chế độ trợ lý ngoài (ví dụ Cordys CRM) — không cần tài khoản người dùng thật.
+
+    Dùng một user ảo cố định (``sqlbot-mcp-assistant``, oid=1). Body ``McpAssistant`` gồm ``url`` endpoint
+    trợ lý, ``authorization``, ``question``, ``stream``. Tạo hội thoại, dựng cấu hình assistant rồi gọi
+    ``question_answer_inner`` với ``finish_step=QUERY_DATA`` (dừng sau khi lấy dữ liệu, không vẽ biểu đồ).
+    """
     session_user = BaseUserDTO(**{
         "id": -1, "account": 'sqlbot-mcp-assistant', "oid": 1, "assistant_id": -1, "password": '', "language": "zh-CN"
     })

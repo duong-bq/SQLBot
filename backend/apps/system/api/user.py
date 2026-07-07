@@ -25,30 +25,56 @@ router = APIRouter(tags=["system_user"], prefix="/user")
 @router.get("/template", include_in_schema=False)
 @require_permissions(permission=SqlbotPermission(role=['admin']))
 async def templateExcel(trans: Trans):
+    """
+    Tải file Excel mẫu để import người dùng hàng loạt (chỉ admin).
+
+    Ẩn khỏi tài liệu Swagger (``include_in_schema=False``). File mẫu có sẵn các cột yêu cầu để điền.
+    """
     return await downTemplate(trans)
 
 @router.post("/batchImport", include_in_schema=False)
 @require_permissions(permission=SqlbotPermission(role=['admin']))
 async def upload_excel(session: SessionDep, trans: Trans, current_user: CurrentUser, file: UploadFile = File(...)):
+    """
+    Import người dùng hàng loạt từ file Excel đã upload (chỉ admin).
+
+    Đọc và tạo người dùng theo từng dòng; dòng lỗi được ghi lại để tải về qua ``/errorRecord/{file_id}``.
+    Ẩn khỏi tài liệu Swagger.
+    """
     return await batchUpload(session, trans, file)
 
 
 @router.get("/errorRecord/{file_id}", include_in_schema=False)
 @require_permissions(permission=SqlbotPermission(role=['admin']))
 async def download_error(file_id: str):
+    """
+    Tải file báo cáo các dòng bị lỗi của một lần import Excel (chỉ admin).
+
+    ``file_id`` là mã sinh ra sau khi ``/batchImport`` chạy xong. Ẩn khỏi tài liệu Swagger.
+    """
     return download_error_file(file_id)
 
-@router.get("/info", summary=f"{PLACEHOLDER_PREFIX}system_user_current_user", description=f"{PLACEHOLDER_PREFIX}system_user_current_user_desc")
+@router.get("/info", summary=f"{PLACEHOLDER_PREFIX}system_user_current_user")
 async def user_info(current_user: CurrentUser) -> UserInfoDTO:
+    """
+    Lấy thông tin người dùng đang đăng nhập (từ token).
+
+    Trả về ``UserInfoDTO`` gồm tài khoản, quyền, workspace hiện tại... Dùng để khởi tạo phiên ở frontend.
+    """
     return current_user
 
  
 @router.get("/defaultPwd", include_in_schema=False)
 @require_permissions(permission=SqlbotPermission(role=['admin']))
 async def default_pwd() -> str:
+    """
+    Lấy mật khẩu mặc định của hệ thống (chỉ admin).
+
+    Dùng để hiển thị cho admin khi tạo/đặt lại mật khẩu người dùng. Ẩn khỏi tài liệu Swagger.
+    """
     return settings.DEFAULT_PWD
 
-@router.get("/pager/{pageNum}/{pageSize}", response_model=PaginatedResponse[UserGrid], summary=f"{PLACEHOLDER_PREFIX}system_user_grid", description=f"{PLACEHOLDER_PREFIX}system_user_grid")
+@router.get("/pager/{pageNum}/{pageSize}", response_model=PaginatedResponse[UserGrid], summary=f"{PLACEHOLDER_PREFIX}system_user_grid")
 @require_permissions(permission=SqlbotPermission(role=['admin']))
 async def pager(
     session: SessionDep,
@@ -59,6 +85,13 @@ async def pager(
     origins: Optional[list[int]] = Query(None, description=f"{PLACEHOLDER_PREFIX}origin"),
     oidlist: Optional[list[int]] = Query(None, description=f"{PLACEHOLDER_PREFIX}oid"),
 ):
+    """
+    Danh sách người dùng có phân trang, kèm bộ lọc (chỉ admin).
+
+    Phân trang theo ``pageNum``/``pageSize``. Lọc theo ``keyword`` (tài khoản/tên/email), ``status``
+    (trạng thái kích hoạt), ``origins`` (nguồn đăng nhập) và ``oidlist`` (workspace). Mỗi bản ghi kết quả
+    được gộp thêm ``oid_list`` — danh sách workspace mà người dùng đó thuộc về.
+    """
     pagination = PaginationParams(page=pageNum, size=pageSize)
     paginator = Paginator(session)
     filters = {}
@@ -132,9 +165,14 @@ def format_user_dict(row) -> dict:
 
 @router.get("/ws", include_in_schema=False)
 async def ws_options(session: SessionDep, current_user: CurrentUser, trans: Trans) -> list[UserWs]:
+    """
+    Lấy danh sách workspace mà người dùng hiện tại thuộc về.
+
+    Dùng cho dropdown chuyển workspace. Ẩn khỏi tài liệu Swagger.
+    """
     return await user_ws_options(session, current_user.id, trans)
 
-@router.put("/ws/{oid}", summary=f"{PLACEHOLDER_PREFIX}switch_oid_api", description=f"{PLACEHOLDER_PREFIX}switch_oid_api")
+@router.put("/ws/{oid}", summary=f"{PLACEHOLDER_PREFIX}switch_oid_api")
 @clear_cache(namespace=CacheNamespace.AUTH_INFO, cacheName=CacheName.USER_INFO, keyExpression="current_user.id")
 @system_log(LogConfig(
     operation_type=OperationType.UPDATE,
@@ -142,6 +180,12 @@ async def ws_options(session: SessionDep, current_user: CurrentUser, trans: Tran
     resource_id_expr="editor.id"
 ))
 async def ws_change(session: SessionDep, current_user: CurrentUser, trans:Trans, oid: int = Path(description=f"{PLACEHOLDER_PREFIX}oid")):
+    """
+    Chuyển workspace đang hoạt động của người dùng hiện tại sang ``oid``.
+
+    Kiểm tra người dùng có thuộc workspace ``oid`` không (nếu không, báo lỗi thiếu quyền/không tồn tại)
+    rồi cập nhật ``oid`` mặc định. Có xóa cache thông tin người dùng để phiên nhận workspace mới.
+    """
     ws_list: list[UserWs] = await user_ws_options(session, current_user.id)
     if not any(x.id == oid for x in ws_list):
         db_ws = session.get(WorkspaceModel, oid)
@@ -152,9 +196,14 @@ async def ws_change(session: SessionDep, current_user: CurrentUser, trans:Trans,
     user_model.oid = oid
     session.add(user_model)
 
-@router.get("/{id}", response_model=UserEditor, summary=f"{PLACEHOLDER_PREFIX}user_detail_api", description=f"{PLACEHOLDER_PREFIX}user_detail_api")
+@router.get("/{id}", response_model=UserEditor, summary=f"{PLACEHOLDER_PREFIX}user_detail_api")
 @require_permissions(permission=SqlbotPermission(role=['admin']))
 async def query(session: SessionDep, trans: Trans, id: int = Path(description=f"{PLACEHOLDER_PREFIX}uid")) -> UserEditor:
+    """
+    Lấy chi tiết một người dùng theo ``id`` để hiển thị form chỉnh sửa (chỉ admin).
+
+    Trả về ``UserEditor`` kèm ``oid_list`` là danh sách workspace mà người dùng thuộc về.
+    """
     db_user: UserModel = get_db_user(session = session, user_id = id)
     u_ws_options = await user_ws_options(session, id, trans)
     result = UserEditor.model_validate(db_user.model_dump())
@@ -163,7 +212,7 @@ async def query(session: SessionDep, trans: Trans, id: int = Path(description=f"
     return result
 
 
-@router.post("", summary=f"{PLACEHOLDER_PREFIX}user_create_api", description=f"{PLACEHOLDER_PREFIX}user_create_api")
+@router.post("", summary=f"{PLACEHOLDER_PREFIX}user_create_api")
 @require_permissions(permission=SqlbotPermission(role=['admin']))
 @system_log(LogConfig(
     operation_type=OperationType.CREATE,
@@ -171,6 +220,12 @@ async def query(session: SessionDep, trans: Trans, id: int = Path(description=f"
     result_id_expr="id"
 ))
 async def user_create(session: SessionDep, creator: UserCreator, trans: Trans):
+    """
+    Tạo người dùng mới (chỉ admin).
+
+    Body ``UserCreator`` gồm tài khoản, email, ``oid_list`` (workspace được gán)... Kiểm tra trùng tài khoản
+    và định dạng email trước khi tạo (xem hàm ``create``). Workspace mặc định lấy phần tử đầu của ``oid_list``.
+    """
     return await create(session=session, creator=creator, trans=trans)
     
 async def create(session: SessionDep, creator: UserCreator, trans: Trans):
@@ -202,7 +257,7 @@ async def create(session: SessionDep, creator: UserCreator, trans: Trans):
     return user_model
 
     
-@router.put("", summary=f"{PLACEHOLDER_PREFIX}user_update_api", description=f"{PLACEHOLDER_PREFIX}user_update_api")
+@router.put("", summary=f"{PLACEHOLDER_PREFIX}user_update_api")
 @require_permissions(permission=SqlbotPermission(role=['admin']))
 @clear_cache(namespace=CacheNamespace.AUTH_INFO, cacheName=CacheName.USER_INFO, keyExpression="editor.id")
 @system_log(LogConfig(
@@ -211,6 +266,12 @@ async def create(session: SessionDep, creator: UserCreator, trans: Trans):
     resource_id_expr="editor.id"
 ))
 async def update(session: SessionDep, editor: UserEditor, trans: Trans):
+    """
+    Cập nhật thông tin người dùng (chỉ admin).
+
+    Không cho đổi ``account``. Đồng bộ lại danh sách workspace: tính phần chênh giữa ``editor.oid_list``
+    và các workspace hiện có để thêm/xóa liên kết ``UserWsModel`` tương ứng. Có xóa cache thông tin người dùng.
+    """
     user_model: UserModel = get_db_user(session = session, user_id = editor.id)
     if not user_model:
         raise Exception(f"User with id [{editor.id}] not found!")
@@ -252,7 +313,7 @@ async def update(session: SessionDep, editor: UserEditor, trans: Trans):
             session.add_all(db_uws_model_list)
     session.add(user_model)
 
-@router.delete("/{id}", summary=f"{PLACEHOLDER_PREFIX}user_del_api", description=f"{PLACEHOLDER_PREFIX}user_del_api")
+@router.delete("/{id}", summary=f"{PLACEHOLDER_PREFIX}user_del_api")
 @require_permissions(permission=SqlbotPermission(role=['admin']))
 @system_log(LogConfig(
     operation_type=OperationType.DELETE,
@@ -260,18 +321,33 @@ async def update(session: SessionDep, editor: UserEditor, trans: Trans):
     resource_id_expr="id"
 ))
 async def delete(session: SessionDep, id: int = Path(description=f"{PLACEHOLDER_PREFIX}uid")):
+    """
+    Xóa một người dùng theo ``id`` (chỉ admin).
+
+    Xóa cả các liên kết workspace của người dùng (xem ``single_delete``).
+    """
     await single_delete(session, id)
 
-@router.delete("", summary=f"{PLACEHOLDER_PREFIX}user_batchdel_api", description=f"{PLACEHOLDER_PREFIX}user_batchdel_api")
+@router.delete("", summary=f"{PLACEHOLDER_PREFIX}user_batchdel_api")
 @require_permissions(permission=SqlbotPermission(role=['admin']))
 @system_log(LogConfig(operation_type=OperationType.DELETE,module=OperationModules.USER,resource_id_expr="id_list"))
 async def batch_del(session: SessionDep, id_list: list[int]):
+    """
+    Xóa nhiều người dùng cùng lúc theo danh sách ``id_list`` (chỉ admin).
+
+    Lặp qua từng id và gọi ``single_delete``.
+    """
     for id in id_list:
         await single_delete(session, id)
     
-@router.put("/language", summary=f"{PLACEHOLDER_PREFIX}language_change", description=f"{PLACEHOLDER_PREFIX}language_change")
+@router.put("/language", summary=f"{PLACEHOLDER_PREFIX}language_change")
 @clear_cache(namespace=CacheNamespace.AUTH_INFO, cacheName=CacheName.USER_INFO, keyExpression="current_user.id")
 async def langChange(session: SessionDep, current_user: CurrentUser, trans: Trans, language: UserLanguage):
+    """
+    Đổi ngôn ngữ giao diện của người dùng hiện tại.
+
+    Chỉ chấp nhận các mã: ``zh-CN``, ``zh-TW``, ``en``, ``ko-KR``. Có xóa cache thông tin người dùng.
+    """
     lang = language.language
     if lang not in ["zh-CN", "zh-TW", "en", "ko-KR"]:
         raise Exception(trans('i18n_user.language_not_support', key = lang))
@@ -280,21 +356,33 @@ async def langChange(session: SessionDep, current_user: CurrentUser, trans: Tran
     session.add(db_user)
 
    
-@router.patch("/pwd/{id}", summary=f"{PLACEHOLDER_PREFIX}reset_pwd", description=f"{PLACEHOLDER_PREFIX}reset_pwd")
+@router.patch("/pwd/{id}", summary=f"{PLACEHOLDER_PREFIX}reset_pwd")
 @require_permissions(permission=SqlbotPermission(role=['admin'])) 
 @clear_cache(namespace=CacheNamespace.AUTH_INFO, cacheName=CacheName.USER_INFO, keyExpression="id")
 @system_log(LogConfig(operation_type=OperationType.RESET_PWD,module=OperationModules.USER,resource_id_expr="id"))
 async def pwdReset(session: SessionDep, current_user: CurrentUser, trans: Trans, id: int = Path(description=f"{PLACEHOLDER_PREFIX}uid")):
+    """
+    Đặt lại mật khẩu của một người dùng về mật khẩu mặc định (chỉ admin).
+
+    Kiểm tra người gọi là admin, rồi gán mật khẩu mặc định (đã băm) cho người dùng ``id``.
+    Có xóa cache thông tin người dùng đó.
+    """
     if not current_user.isAdmin:
         raise Exception(trans('i18n_permission.no_permission', url = " patch[/user/pwd/id],", msg = trans('i18n_permission.only_admin')))
     db_user: UserModel = get_db_user(session=session, user_id=id)
     db_user.password = default_md5_pwd()
     session.add(db_user)
 
-@router.put("/pwd", summary=f"{PLACEHOLDER_PREFIX}update_pwd", description=f"{PLACEHOLDER_PREFIX}update_pwd")
+@router.put("/pwd", summary=f"{PLACEHOLDER_PREFIX}update_pwd")
 @clear_cache(namespace=CacheNamespace.AUTH_INFO, cacheName=CacheName.USER_INFO, keyExpression="current_user.id")
 @system_log(LogConfig(operation_type=OperationType.UPDATE_PWD,module=OperationModules.USER,result_id_expr="id"))
 async def pwdUpdate(session: SessionDep, current_user: CurrentUser, trans: Trans, editor: PwdEditor):
+    """
+    Người dùng hiện tại tự đổi mật khẩu.
+
+    Body ``PwdEditor`` gồm ``pwd`` (mật khẩu cũ) và ``new_pwd``. Kiểm tra định dạng mật khẩu mới và
+    xác minh mật khẩu cũ khớp trước khi cập nhật. Có xóa cache thông tin người dùng.
+    """
     new_pwd = editor.new_pwd
     if not check_pwd_format(new_pwd):
         raise Exception(trans('i18n_format_invalid', key = trans('i18n_user.password')))
@@ -306,11 +394,17 @@ async def pwdUpdate(session: SessionDep, current_user: CurrentUser, trans: Trans
     return db_user
 
     
-@router.patch("/status", summary=f"{PLACEHOLDER_PREFIX}update_status", description=f"{PLACEHOLDER_PREFIX}update_status")
+@router.patch("/status", summary=f"{PLACEHOLDER_PREFIX}update_status")
 @require_permissions(permission=SqlbotPermission(role=['admin']))
 @clear_cache(namespace=CacheNamespace.AUTH_INFO, cacheName=CacheName.USER_INFO, keyExpression="statusDto.id")
 @system_log(LogConfig(operation_type=OperationType.UPDATE_STATUS,module=OperationModules.USER, resource_id_expr="statusDto.id"))
 async def statusChange(session: SessionDep, current_user: CurrentUser, trans: Trans, statusDto: UserStatus):
+    """
+    Bật/tắt trạng thái kích hoạt của một người dùng (chỉ admin).
+
+    Body ``UserStatus`` gồm ``id`` và ``status`` (0 = vô hiệu hóa, 1 = kích hoạt). Có xóa cache
+    thông tin người dùng để việc khóa tài khoản có hiệu lực ngay.
+    """
     if not current_user.isAdmin:
         raise Exception(trans('i18n_permission.no_permission', url = ", ", msg = trans('i18n_permission.only_admin')))
     status = statusDto.status

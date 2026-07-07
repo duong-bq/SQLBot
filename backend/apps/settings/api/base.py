@@ -16,7 +16,11 @@ path = settings.EXCEL_PATH
 @router.post("/download-fail-info", summary=f"{PLACEHOLDER_PREFIX}download-fail-info")
 async def download_excel(req: FileRequest):
     """
-    根据文件路径下载 Excel 文件
+    Tải file Excel báo lỗi theo đường dẫn file.
+
+    Body ``FileRequest`` chứa tên file. Chỉ cho phép tải file có đuôi ``_error.xlsx`` nằm trong thư mục
+    ``EXCEL_PATH`` (nếu không tồn tại trả 404, sai định dạng trả 400). Dùng để tải kết quả lỗi sau khi
+    import Excel.
     """
     filename = req.file
     file_path = os.path.join(path, filename)

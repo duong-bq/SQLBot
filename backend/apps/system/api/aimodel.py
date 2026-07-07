@@ -24,6 +24,13 @@ from common.audit.schemas.logger_decorator import LogConfig, system_log
 @router.post("/status", include_in_schema=False)
 @require_permissions(permission=SqlbotPermission(role=['admin']))
 async def check_llm(info: AiModelCreator, trans: Trans):
+    """
+    Kiểm tra kết nối tới một mô hình LLM trước khi lưu cấu hình (chỉ admin, ẩn khỏi Swagger).
+
+    Dựng ``LLMConfig`` từ thông tin ``AiModelCreator`` (giao thức, tên model, api_key, domain, tham số phụ),
+    tạo instance qua ``LLMFactory`` rồi gửi thử prompt ``"1+1=?"`` và stream lại phản hồi (NDJSON).
+    Nếu lỗi, trả về ``{"error": ...}`` để giao diện báo cấu hình chưa hợp lệ.
+    """
     async def generate():
         try:
             additional_params = {item.key: prepare_model_arg(item.val) for item in info.config_list if
@@ -53,6 +60,12 @@ async def check_llm(info: AiModelCreator, trans: Trans):
 
 @router.get("/default", include_in_schema=False)
 async def check_default(session: SessionDep, trans: Trans):
+    """
+    Kiểm tra hệ thống đã có mô hình LLM mặc định hay chưa (ẩn khỏi Swagger).
+
+    Nếu chưa có model nào được đánh dấu ``default_model`` thì ném lỗi. Dùng để cảnh báo cấu hình
+    thiếu mô hình mặc định trước khi cho phép hỏi đáp.
+    """
     db_model = session.exec(
         select(AiModelDetail).where(AiModelDetail.default_model == True)
     ).first()
@@ -60,11 +73,15 @@ async def check_default(session: SessionDep, trans: Trans):
         raise Exception(trans('i18n_llm.miss_default'))
 
 
-@router.put("/default/{id}", summary=f"{PLACEHOLDER_PREFIX}system_model_default",
-            description=f"{PLACEHOLDER_PREFIX}system_model_default")
+@router.put("/default/{id}", summary=f"{PLACEHOLDER_PREFIX}system_model_default")
 @require_permissions(permission=SqlbotPermission(role=['admin']))
 @system_log(LogConfig(operation_type=OperationType.UPDATE, module=OperationModules.AI_MODEL, resource_id_expr="id"))
 async def set_default(session: SessionDep, id: int = Path(description="ID")):
+    """
+    Đặt một mô hình LLM (theo ``id``) làm mô hình mặc định của hệ thống (chỉ admin).
+
+    Bỏ cờ mặc định của mọi model khác rồi gán ``default_model=True`` cho model này (trong một transaction).
+    """
     db_model = session.get(AiModelDetail, id)
     if not db_model:
         raise ValueError(f"AiModelDetail with id {id} not found")
@@ -83,13 +100,18 @@ async def set_default(session: SessionDep, id: int = Path(description="ID")):
         raise e
 
 
-@router.get("", response_model=list[AiModelGridItem], summary=f"{PLACEHOLDER_PREFIX}system_model_grid",
-            description=f"{PLACEHOLDER_PREFIX}system_model_grid")
+@router.get("", response_model=list[AiModelGridItem], summary=f"{PLACEHOLDER_PREFIX}system_model_grid")
 @require_permissions(permission=SqlbotPermission(role=['admin']))
 async def query(
         session: SessionDep,
         keyword: Union[str, None] = Query(default=None, max_length=255, description=f"{PLACEHOLDER_PREFIX}keyword")
 ):
+    """
+    Danh sách mô hình LLM cho trang quản trị (chỉ admin).
+
+    Lọc theo ``keyword`` (tên model). Mỗi dòng kèm ``ws_mapping_count`` — số workspace mà model được gán.
+    Sắp xếp: model mặc định lên đầu, sau đó theo tên và thời gian tạo.
+    """
     # 子查询：统计每个 model 绑定的 workspace 数量
     count_sub = (
         select(
@@ -119,13 +141,18 @@ async def query(
     return items
 
 
-@router.get("/{id}", response_model=AiModelEditor, summary=f"{PLACEHOLDER_PREFIX}system_model_query",
-            description=f"{PLACEHOLDER_PREFIX}system_model_query")
+@router.get("/{id}", response_model=AiModelEditor, summary=f"{PLACEHOLDER_PREFIX}system_model_query")
 @require_permissions(permission=SqlbotPermission(role=['admin']))
 async def get_model_by_id(
         session: SessionDep,
         id: int = Path(description="ID")
 ):
+    """
+    Lấy chi tiết một mô hình LLM theo ``id`` để hiển thị form chỉnh sửa (chỉ admin).
+
+    ``api_key`` và ``api_domain`` được **giải mã** trước khi trả về. Cấu hình tham số phụ lưu dạng JSON
+    được parse thành ``config_list``.
+    """
     db_model = session.get(AiModelDetail, id)
     if not db_model:
         raise ValueError(f"AiModelDetail with id {id} not found")
@@ -150,14 +177,19 @@ async def get_model_by_id(
     return AiModelEditor(**data)
 
 
-@router.post("", summary=f"{PLACEHOLDER_PREFIX}system_model_create",
-             description=f"{PLACEHOLDER_PREFIX}system_model_create")
+@router.post("", summary=f"{PLACEHOLDER_PREFIX}system_model_create")
 @require_permissions(permission=SqlbotPermission(role=['admin']))
 @system_log(LogConfig(operation_type=OperationType.CREATE, module=OperationModules.AI_MODEL, result_id_expr="id"))
 async def add_model(
         session: SessionDep,
         creator: AiModelCreator
 ):
+    """
+    Tạo mới một cấu hình mô hình LLM (chỉ admin).
+
+    Cấu hình tham số phụ (``config_list``) được serialize thành JSON để lưu. Nếu đây là model đầu tiên
+    của hệ thống thì tự động đặt làm mặc định. (Việc mã hóa api_key/domain do lớp lifecycle xử lý.)
+    """
     data = creator.model_dump(exclude_unset=True)
     data["config"] = json.dumps([item.model_dump(exclude_unset=True) for item in creator.config_list])
     data.pop("config_list", None)
@@ -171,8 +203,7 @@ async def add_model(
     return detail
 
 
-@router.put("", summary=f"{PLACEHOLDER_PREFIX}system_model_update",
-            description=f"{PLACEHOLDER_PREFIX}system_model_update")
+@router.put("", summary=f"{PLACEHOLDER_PREFIX}system_model_update")
 @require_permissions(permission=SqlbotPermission(role=['admin']))
 @system_log(
     LogConfig(operation_type=OperationType.UPDATE, module=OperationModules.AI_MODEL, resource_id_expr="editor.id"))
@@ -180,6 +211,11 @@ async def update_model(
         session: SessionDep,
         editor: AiModelEditor
 ):
+    """
+    Cập nhật cấu hình một mô hình LLM (chỉ admin).
+
+    Body ``AiModelEditor`` gồm ``id`` và các trường cần sửa; ``config_list`` được serialize lại thành JSON.
+    """
     id = int(editor.id)
     data = editor.model_dump(exclude_unset=True)
     data["config"] = json.dumps([item.model_dump(exclude_unset=True) for item in editor.config_list])
@@ -191,8 +227,7 @@ async def update_model(
     session.commit()
 
 
-@router.delete("/{id}", summary=f"{PLACEHOLDER_PREFIX}system_model_del",
-               description=f"{PLACEHOLDER_PREFIX}system_model_del")
+@router.delete("/{id}", summary=f"{PLACEHOLDER_PREFIX}system_model_del")
 @require_permissions(permission=SqlbotPermission(role=['admin']))
 @system_log(LogConfig(operation_type=OperationType.DELETE, module=OperationModules.AI_MODEL, resource_id_expr="id"))
 async def delete_model(
@@ -200,6 +235,11 @@ async def delete_model(
         trans: Trans,
         id: int = Path(description="ID")
 ):
+    """
+    Xóa một mô hình LLM theo ``id`` (chỉ admin).
+
+    Không cho xóa mô hình đang được đặt làm mặc định (phải chuyển mặc định sang model khác trước).
+    """
     item = session.get(AiModelDetail, id)
     if item.default_model:
         raise Exception(trans('i18n_llm.delete_default_error', key=item.name))
@@ -207,13 +247,17 @@ async def delete_model(
     session.commit()
 
 
-@router.get("/{id}/ws_mapping", response_model=List[str], summary=f"{PLACEHOLDER_PREFIX}system_model_ws_mapping",
-            description=f"{PLACEHOLDER_PREFIX}system_model_ws_mapping")
+@router.get("/{id}/ws_mapping", response_model=List[str], summary=f"{PLACEHOLDER_PREFIX}system_model_ws_mapping")
 @require_permissions(permission=SqlbotPermission(role=['admin']))
 async def get_model_ws_mapping_by_id(
         session: SessionDep,
         id: int = Path(description="ID")
 ):
+    """
+    Lấy danh sách id workspace được gán quyền dùng mô hình LLM ``id`` (chỉ admin).
+
+    Trả về danh sách chuỗi id workspace (đã loại trùng).
+    """
     db_model = session.get(AiModelDetail, id)
     if not db_model:
         raise ValueError(f"AiModelDetail with id {id} not found")
@@ -229,14 +273,18 @@ async def get_model_ws_mapping_by_id(
     return [str(ws_id) for ws_id in ws_ids]
 
 
-@router.put("/{id}/ws_mapping", response_model=List[str], summary=f"{PLACEHOLDER_PREFIX}system_model_ws_mapping_update",
-            description=f"{PLACEHOLDER_PREFIX}system_model_ws_mapping_update")
+@router.put("/{id}/ws_mapping", response_model=List[str], summary=f"{PLACEHOLDER_PREFIX}system_model_ws_mapping_update")
 @require_permissions(permission=SqlbotPermission(role=['admin']))
 async def update_model_ws_mapping_by_id(
         session: SessionDep,
         id: int = Path(description="ID"),
         ws_ids: List[str] = Body(description="workspace id list"),
 ):
+    """
+    Thay thế **toàn bộ** danh sách workspace được gán mô hình LLM ``id`` (chỉ admin).
+
+    Xóa hết mapping cũ rồi chèn lại theo ``ws_ids`` (đã loại trùng). Trả về danh sách mapping mới.
+    """
     if ws_ids is None:
         ws_ids = []
     # 提前去重
@@ -265,14 +313,18 @@ async def update_model_ws_mapping_by_id(
 
 
 # 新增映射（在已有基础上追加）
-@router.post("/{id}/ws_mapping", response_model=List[str], summary=f"{PLACEHOLDER_PREFIX}system_model_ws_mapping_add",
-             description=f"{PLACEHOLDER_PREFIX}system_model_ws_mapping_add")
+@router.post("/{id}/ws_mapping", response_model=List[str], summary=f"{PLACEHOLDER_PREFIX}system_model_ws_mapping_add")
 @require_permissions(permission=SqlbotPermission(role=['admin']))
 async def add_model_ws_mapping_by_id(
         session: SessionDep,
         id: int = Path(description="ID"),
         ws_ids: List[str] = Body(description="workspace id list"),
 ):
+    """
+    Thêm (append) workspace vào danh sách được gán mô hình LLM ``id``, giữ nguyên mapping cũ (chỉ admin).
+
+    Chỉ chèn các workspace chưa tồn tại trong mapping. Trả về danh sách mapping đầy đủ sau khi thêm.
+    """
     if ws_ids is None:
         ws_ids = []
     ws_ids = list({int(ws_id) for ws_id in ws_ids})
@@ -313,14 +365,18 @@ async def add_model_ws_mapping_by_id(
 
 # 删除指定映射
 @router.delete("/{id}/ws_mapping", response_model=List[str],
-               summary=f"{PLACEHOLDER_PREFIX}system_model_ws_mapping_delete",
-               description=f"{PLACEHOLDER_PREFIX}system_model_ws_mapping_delete")
+               summary=f"{PLACEHOLDER_PREFIX}system_model_ws_mapping_delete")
 @require_permissions(permission=SqlbotPermission(role=['admin']))
 async def delete_model_ws_mapping_by_id(
         session: SessionDep,
         id: int = Path(description="ID"),
         ws_ids: List[str] = Body(description="workspace id list"),
 ):
+    """
+    Gỡ một số workspace cụ thể khỏi mapping của mô hình LLM ``id`` (chỉ admin).
+
+    Chỉ xóa các mapping có workspace nằm trong ``ws_ids``. Trả về danh sách mapping còn lại.
+    """
     if ws_ids is None:
         ws_ids = []
     ws_ids = list({int(ws_id) for ws_id in ws_ids})
@@ -352,11 +408,16 @@ async def delete_model_ws_mapping_by_id(
     return [str(ws_id) for ws_id in remaining_ws_ids]
 
 
-@router.get("/list/by_ws", response_model=List[AiModelBrief], summary=f"{PLACEHOLDER_PREFIX}system_model_list_by_ws",
-            description=f"{PLACEHOLDER_PREFIX}system_model_list_by_ws")
+@router.get("/list/by_ws", response_model=List[AiModelBrief], summary=f"{PLACEHOLDER_PREFIX}system_model_list_by_ws")
 @require_permissions(permission=SqlbotPermission(role=['ws_admin']))
 async def get_model_by_ws(
         session: SessionDep,
         current_user: CurrentUser
 ):
+    """
+    Lấy danh sách mô hình LLM khả dụng trong workspace hiện tại của người dùng (quyền ws_admin).
+
+    Chỉ trả về các model được gán cho ``current_user.oid``, ở dạng rút gọn (``AiModelBrief``) để chọn
+    khi cấu hình/hỏi đáp trong workspace.
+    """
     return get_ai_model_list_by_workspace(session, current_user.oid, False)

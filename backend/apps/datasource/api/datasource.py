@@ -40,24 +40,44 @@ path = settings.EXCEL_PATH
 @router.get("/ws/{oid}", include_in_schema=False)
 @require_permissions(permission=SqlbotPermission(role=['ws_admin']))
 async def query_by_oid(session: SessionDep, user: CurrentUser, oid: int) -> List[CoreDatasource]:
+    """
+    Lấy danh sách nguồn dữ liệu của một workspace ``oid`` cụ thể (quyền ws_admin, ẩn khỏi Swagger).
+
+    Khác với /list (dùng workspace hiện tại của user), endpoint này chỉ định thẳng ``oid``.
+    """
     return get_datasource_list(session=session, user=user, oid=oid)
 
 
-@router.get("/list", response_model=List[CoreDatasource], summary=f"{PLACEHOLDER_PREFIX}ds_list",
-            description=f"{PLACEHOLDER_PREFIX}ds_list_description")
+@router.get("/list", response_model=List[CoreDatasource], summary=f"{PLACEHOLDER_PREFIX}ds_list")
 async def datasource_list(session: SessionDep, user: CurrentUser):
+    """
+    Lấy danh sách nguồn dữ liệu người dùng hiện tại truy cập được (trong workspace hiện tại).
+
+    Kết quả đã lọc theo quyền của user. Dùng để hiển thị danh sách nguồn dữ liệu và chọn nguồn khi hỏi đáp.
+    """
     return get_datasource_list(session=session, user=user)
 
 
 @router.post("/get/{id}", response_model=CoreDatasource, summary=f"{PLACEHOLDER_PREFIX}ds_get")
 @require_permissions(permission=SqlbotPermission(role=['ws_admin'], keyExpression="id", type='ds'))
 async def get_datasource(session: SessionDep, id: int = Path(..., description=f"{PLACEHOLDER_PREFIX}ds_id")):
+    """
+    Lấy chi tiết một nguồn dữ liệu theo ``id`` (quyền ws_admin trên nguồn đó).
+
+    Trả về đầy đủ thông tin ``CoreDatasource`` (loại DB, cấu hình kết nối...) để hiển thị/chỉnh sửa.
+    """
     return get_ds(session, id)
 
 
 @router.post("/check", response_model=bool, summary=f"{PLACEHOLDER_PREFIX}ds_check")
 @require_permissions(permission=SqlbotPermission(role=['ws_admin']))
 async def check(session: SessionDep, trans: Trans, ds: CoreDatasource):
+    """
+    Kiểm tra kết nối tới một nguồn dữ liệu theo cấu hình gửi lên (chưa cần lưu) — quyền ws_admin.
+
+    Body ``CoreDatasource`` chứa thông tin kết nối. Trả về true/false cho biết có kết nối được không.
+    Dùng khi thêm/sửa nguồn dữ liệu để thử kết nối trước khi lưu.
+    """
     def inner():
         return check_status(session, trans, ds, True)
 
@@ -68,6 +88,11 @@ async def check(session: SessionDep, trans: Trans, ds: CoreDatasource):
 @require_permissions(permission=SqlbotPermission(type='ds', keyExpression="ds_id"))
 async def check_by_id(session: SessionDep, trans: Trans,
                       ds_id: int = Path(..., description=f"{PLACEHOLDER_PREFIX}ds_id")):
+    """
+    Kiểm tra kết nối tới một nguồn dữ liệu đã lưu theo ``ds_id``.
+
+    Trả về true/false. Dùng để hiển thị trạng thái kết nối của nguồn dữ liệu trong danh sách.
+    """
     def inner():
         return check_status_by_id(session, trans, ds_id, True)
 
@@ -78,6 +103,12 @@ async def check_by_id(session: SessionDep, trans: Trans,
 @system_log(LogConfig(operation_type=OperationType.CREATE, module=OperationModules.DATASOURCE, result_id_expr="id"))
 @require_permissions(permission=SqlbotPermission(role=['ws_admin']))
 async def add(session: SessionDep, trans: Trans, user: CurrentUser, ds: CreateDatasource):
+    """
+    Thêm mới một nguồn dữ liệu (quyền ws_admin).
+
+    Body ``CreateDatasource`` gồm loại DB, cấu hình kết nối và danh sách bảng chọn đồng bộ. Sau khi tạo sẽ
+    đồng bộ metadata (bảng/cột) và sinh embedding phục vụ RAG. Trả về ``CoreDatasource`` vừa tạo. Có ghi log.
+    """
     return await create_ds(session, trans, user, ds)
 
 
@@ -85,6 +116,12 @@ async def add(session: SessionDep, trans: Trans, user: CurrentUser, ds: CreateDa
 @require_permissions(permission=SqlbotPermission(role=['ws_admin'], type='ds', keyExpression="id"))
 async def choose_tables(session: SessionDep, trans: Trans, tables: List[CoreTable],
                         id: int = Path(..., description=f"{PLACEHOLDER_PREFIX}ds_id")):
+    """
+    Chọn lại tập bảng được đồng bộ cho nguồn dữ liệu ``id`` (quyền ws_admin trên nguồn đó).
+
+    Body ``tables`` là danh sách bảng cần giữ/đồng bộ. Bảng không có trong danh sách sẽ bị loại khỏi phạm
+    vi dùng cho hỏi đáp. Sau khi chọn sẽ cập nhật metadata và embedding tương ứng.
+    """
     def inner():
         chooseTables(session, trans, id, tables)
 
@@ -96,6 +133,12 @@ async def choose_tables(session: SessionDep, trans: Trans, tables: List[CoreTabl
 @system_log(
     LogConfig(operation_type=OperationType.UPDATE, module=OperationModules.DATASOURCE, resource_id_expr="ds.id"))
 async def update(session: SessionDep, trans: Trans, user: CurrentUser, ds: CoreDatasource):
+    """
+    Cập nhật thông tin/cấu hình một nguồn dữ liệu đã có (quyền ws_admin trên nguồn đó).
+
+    Body ``CoreDatasource`` chứa id và các trường cần sửa (tên, kết nối...). Trả về bản ghi sau cập nhật.
+    Có ghi log thao tác.
+    """
     def inner():
         return update_ds(session, trans, user, ds)
 
@@ -107,18 +150,34 @@ async def update(session: SessionDep, trans: Trans, user: CurrentUser, ds: CoreD
 @system_log(LogConfig(operation_type=OperationType.DELETE, module=OperationModules.DATASOURCE, resource_id_expr="id",
                       ))
 async def delete(session: SessionDep, id: int = Path(..., description=f"{PLACEHOLDER_PREFIX}ds_id"), name: str = None):
+    """
+    Xóa một nguồn dữ liệu theo ``id`` (``name`` chỉ dùng để ghi log) — quyền ws_admin trên nguồn đó.
+
+    Xóa kèm metadata bảng/cột và embedding liên quan. Có ghi log thao tác.
+    """
     return await delete_ds(session, id)
 
 
 @router.post("/getTables/{id}", response_model=List[TableSchemaResponse], summary=f"{PLACEHOLDER_PREFIX}ds_get_tables")
 @require_permissions(permission=SqlbotPermission(type='ds', keyExpression="id"))
 async def get_tables(session: SessionDep, id: int = Path(..., description=f"{PLACEHOLDER_PREFIX}ds_id")):
+    """
+    Lấy danh sách bảng (kèm schema) của nguồn dữ liệu ``id`` bằng cách truy vấn trực tiếp DB nguồn.
+
+    Trả về ``TableSchemaResponse``. Dùng khi chọn bảng để đồng bộ. Yêu cầu quyền trên nguồn dữ liệu.
+    """
     return getTables(session, id)
 
 
 @router.post("/getTablesByConf", response_model=List[TableSchemaResponse], summary=f"{PLACEHOLDER_PREFIX}ds_get_tables")
 @require_permissions(permission=SqlbotPermission(role=['ws_admin']))
 async def get_tables_by_conf(session: SessionDep, trans: Trans, ds: CoreDatasource):
+    """
+    Lấy danh sách bảng theo cấu hình kết nối gửi lên (chưa cần lưu nguồn) — quyền ws_admin.
+
+    Body ``CoreDatasource`` chứa thông tin kết nối. Nếu lấy bảng lỗi mà kết nối vẫn OK thì trả 500 kèm chi
+    tiết. Dùng ở bước thêm nguồn: sau khi nhập kết nối, xem trước các bảng có thể đồng bộ.
+    """
     try:
         def inner():
             return getTablesByDs(session, ds)
@@ -138,6 +197,12 @@ async def get_tables_by_conf(session: SessionDep, trans: Trans, ds: CoreDatasour
 @router.post("/getSchemaByConf", response_model=List[str], summary=f"{PLACEHOLDER_PREFIX}ds_get_schema")
 @require_permissions(permission=SqlbotPermission(role=['ws_admin']))
 async def get_schema_by_conf(session: SessionDep, trans: Trans, ds: CoreDatasource):
+    """
+    Lấy danh sách schema/database theo cấu hình kết nối gửi lên (chưa cần lưu nguồn) — quyền ws_admin.
+
+    Body ``CoreDatasource`` chứa thông tin kết nối. Trả về danh sách tên schema để người dùng chọn trước
+    khi lấy bảng (với các DB hỗ trợ nhiều schema như PostgreSQL). Lỗi mà kết nối vẫn OK thì trả 500.
+    """
     try:
         def inner():
             return get_schema(ds)
@@ -160,6 +225,11 @@ async def get_schema_by_conf(session: SessionDep, trans: Trans, ds: CoreDatasour
 async def get_fields(session: SessionDep,
                      id: int = Path(..., description=f"{PLACEHOLDER_PREFIX}ds_id"),
                      table_name: str = Path(..., description=f"{PLACEHOLDER_PREFIX}ds_table_name")):
+    """
+    Lấy danh sách cột (field) của một bảng ``table_name`` thuộc nguồn dữ liệu ``id`` — quyền ws_admin.
+
+    Truy vấn trực tiếp DB nguồn, trả về ``ColumnSchemaResponse`` (tên cột, kiểu dữ liệu...).
+    """
     return getFields(session, id, table_name)
 
 
@@ -167,6 +237,11 @@ async def get_fields(session: SessionDep,
 @require_permissions(permission=SqlbotPermission(role=['ws_admin']))
 async def sync_fields(session: SessionDep, trans: Trans,
                       id: int = Path(..., description=f"{PLACEHOLDER_PREFIX}ds_table_id")):
+    """
+    Đồng bộ lại danh sách cột của một bảng (``id`` là id bảng, không phải id nguồn) — quyền ws_admin.
+
+    Đọc lại cấu trúc cột từ DB nguồn và cập nhật metadata/embedding. Dùng khi cấu trúc bảng ở DB thay đổi.
+    """
     return sync_single_fields(session, trans, id)
 
 
@@ -197,6 +272,12 @@ async def exec_sql(session: SessionDep, id: int, obj: TestObj):
 @router.post("/tableList/{id}", response_model=List[CoreTable], summary=f"{PLACEHOLDER_PREFIX}ds_table_list")
 @require_permissions(permission=SqlbotPermission(role=['ws_admin'], type='ds', keyExpression="id"))
 async def table_list(session: SessionDep, id: int = Path(..., description=f"{PLACEHOLDER_PREFIX}ds_id")):
+    """
+    Lấy danh sách bảng ĐÃ đồng bộ (lưu trong SQLBot) của nguồn dữ liệu ``id`` — quyền ws_admin.
+
+    Khác với /getTables (đọc trực tiếp DB nguồn): endpoint này trả về ``CoreTable`` đã lưu, kèm chú thích
+    tùy chỉnh. Dùng ở màn hình quản lý bảng/chú thích.
+    """
     return get_tables_by_ds_id(session, id)
 
 
@@ -204,24 +285,45 @@ async def table_list(session: SessionDep, id: int = Path(..., description=f"{PLA
 @require_permissions(permission=SqlbotPermission(role=['ws_admin']))
 async def field_list(session: SessionDep, field: FieldObj,
                      id: int = Path(..., description=f"{PLACEHOLDER_PREFIX}ds_table_id")):
+    """
+    Lấy danh sách cột ĐÃ đồng bộ của một bảng (``id`` là id bảng) — quyền ws_admin.
+
+    Body ``FieldObj`` dùng làm điều kiện lọc. Trả về ``CoreField`` đã lưu (kèm chú thích tùy chỉnh).
+    """
     return get_fields_by_table_id(session, id, field)
 
 
 @router.post("/editLocalComment", include_in_schema=False)
 @require_permissions(permission=SqlbotPermission(role=['ws_admin']))
 async def edit_local(session: SessionDep, data: TableObj):
+    """
+    Cập nhật chú thích tùy chỉnh của một bảng cùng các cột của nó (quyền ws_admin, ẩn khỏi Swagger).
+
+    Body ``TableObj`` gồm thông tin bảng và danh sách cột. Chú thích này bổ sung ngữ nghĩa giúp LLM sinh
+    SQL chính xác hơn.
+    """
     update_table_and_fields(session, data)
 
 
 @router.post("/editTable", response_model=None, summary=f"{PLACEHOLDER_PREFIX}ds_edit_table")
 @require_permissions(permission=SqlbotPermission(role=['ws_admin']))
 async def edit_table(session: SessionDep, table: CoreTable):
+    """
+    Cập nhật thông tin một bảng đã đồng bộ (ví dụ chú thích tùy chỉnh, bật/tắt dùng cho hỏi đáp) — quyền ws_admin.
+
+    Body ``CoreTable``. Thay đổi chú thích sẽ cập nhật lại embedding tương ứng để dùng cho RAG.
+    """
     updateTable(session, table)
 
 
 @router.post("/editField", response_model=None, summary=f"{PLACEHOLDER_PREFIX}ds_edit_field")
 @require_permissions(permission=SqlbotPermission(role=['ws_admin']))
 async def edit_field(session: SessionDep, field: CoreField):
+    """
+    Cập nhật thông tin một cột đã đồng bộ (chú thích tùy chỉnh, bật/tắt...) — quyền ws_admin.
+
+    Body ``CoreField``. Chú thích cột giúp LLM hiểu ý nghĩa cột khi sinh SQL; thay đổi sẽ cập nhật embedding.
+    """
     updateField(session, field)
 
 
@@ -229,6 +331,12 @@ async def edit_field(session: SessionDep, field: CoreField):
 @require_permissions(permission=SqlbotPermission(type='ds', keyExpression="id"))
 async def preview_data(session: SessionDep, trans: Trans, current_user: CurrentUser, data: TableObj,
                        id: int = Path(..., description=f"{PLACEHOLDER_PREFIX}ds_id")):
+    """
+    Xem trước dữ liệu của một bảng thuộc nguồn dữ liệu ``id`` (yêu cầu quyền trên nguồn đó).
+
+    Body ``TableObj`` xác định bảng và điều kiện. Trả về ``PreviewResponse`` (một số dòng dữ liệu mẫu).
+    Nếu truy vấn lỗi mà kết nối vẫn OK thì trả 500. Dùng để người dùng xem nhanh nội dung bảng.
+    """
     def inner():
         try:
             return preview(session, current_user, id, data)
@@ -247,6 +355,11 @@ async def preview_data(session: SessionDep, trans: Trans, current_user: CurrentU
 @router.post("/fieldEnum/{ds_id}/{id}", include_in_schema=False)
 @require_permissions(permission=SqlbotPermission(type='ds', keyExpression="ds_id"))
 async def field_enum(session: SessionDep, ds_id: int, id: int):
+    """
+    Lấy danh sách giá trị phân biệt (enum) của một cột ``id`` thuộc nguồn ``ds_id`` (không dùng, ẩn khỏi Swagger).
+
+    Truy vấn các giá trị khác nhau của cột, phục vụ gợi ý lọc. Hiện được đánh dấu "not used".
+    """
     def inner():
         return fieldEnum(session, id)
 
@@ -321,6 +434,12 @@ async def field_enum(session: SessionDep, ds_id: int, id: int):
 @router.post("/uploadExcel", response_model=None, summary=f"{PLACEHOLDER_PREFIX}ds_upload_excel")
 @require_permissions(permission=SqlbotPermission(role=['ws_admin']))
 async def upload_excel(session: SessionDep, file: UploadFile = File(..., description=f"{PLACEHOLDER_PREFIX}ds_excel")):
+    """
+    (Deprecated) Tải file Excel/CSV lên và nạp trực tiếp thành bảng trong PostgreSQL nội bộ — quyền ws_admin.
+
+    Chỉ nhận .xlsx/.xls/.csv (sai định dạng trả 400). Mỗi sheet thành một bảng. Đã bị thay bằng luồng
+    /parseExcel + /importToDb (xem trước rồi mới import), nên endpoint này không còn khuyến nghị dùng.
+    """
     ALLOWED_EXTENSIONS = {"xlsx", "xls", "csv"}
     if not file.filename.lower().endswith(tuple(ALLOWED_EXTENSIONS)):
         raise HTTPException(400, "Only support .xlsx/.xls/.csv")
@@ -400,6 +519,13 @@ f_c_col = "字段备注"
 @router.get("/exportDsSchema/{id}", response_model=None, summary=f"{PLACEHOLDER_PREFIX}ds_export_ds_schema")
 @require_permissions(permission=SqlbotPermission(role=['ws_admin'], type='ds', keyExpression="id"))
 async def export_ds_schema(session: SessionDep, id: int = Path(..., description=f"{PLACEHOLDER_PREFIX}ds_id")):
+    """
+    Xuất cấu trúc + chú thích của nguồn dữ liệu ``id`` ra file Excel (quyền ws_admin trên nguồn đó).
+
+    Truyền ``id=0`` để tải file mẫu (template) trống. Ngược lại xuất danh sách bảng và cột kèm chú thích
+    hiện có (nguồn không có bảng thì trả 400). Dùng để chỉnh chú thích hàng loạt offline rồi upload lại
+    qua /uploadDsSchema. Trả về file .xlsx dạng stream.
+    """
     # {
     #     'sheet':'', sheet name
     #     'c1_h':'', column1 column name
@@ -476,6 +602,13 @@ async def export_ds_schema(session: SessionDep, id: int = Path(..., description=
 @require_permissions(permission=SqlbotPermission(role=['ws_admin'], type='ds', keyExpression="id"))
 async def upload_ds_schema(session: SessionDep, id: int = Path(..., description=f"{PLACEHOLDER_PREFIX}ds_id"),
                            file: UploadFile = File(...)):
+    """
+    Nhập chú thích bảng/cột hàng loạt cho nguồn dữ liệu ``id`` từ file Excel (quyền ws_admin trên nguồn đó).
+
+    Chỉ nhận .xlsx/.xls (sai định dạng trả 400). File theo mẫu do /exportDsSchema tạo: sheet danh sách
+    bảng + các sheet chú thích cột. Cập nhật ``custom_comment`` cho bảng và cột tương ứng. Lỗi parse trả
+    500. Trả về true nếu thành công.
+    """
     ALLOWED_EXTENSIONS = {"xlsx", "xls"}
     if not file.filename.lower().endswith(tuple(ALLOWED_EXTENSIONS)):
         raise HTTPException(400, "Only support .xlsx/.xls")
@@ -537,6 +670,13 @@ async def upload_ds_schema(session: SessionDep, id: int = Path(..., description=
 @router.post("/parseExcel", response_model=None, summary=f"{PLACEHOLDER_PREFIX}ds_parse_excel")
 @require_permissions(permission=SqlbotPermission(role=['ws_admin']))
 async def parse_excel(file: UploadFile = File(..., description=f"{PLACEHOLDER_PREFIX}ds_excel")):
+    """
+    Tải file Excel/CSV lên và phân tích trước (preview) cấu trúc từng sheet — quyền ws_admin.
+
+    Chỉ nhận .xlsx/.xls/.csv (sai định dạng trả 400). Lưu file tạm và trả về ``filePath`` cùng dữ liệu
+    xem trước (tên sheet, cột, kiểu, vài dòng mẫu). Bước 1 của luồng import: người dùng xác nhận/chỉnh
+    kiểu cột trước khi gọi /importToDb.
+    """
     ALLOWED_EXTENSIONS = {".xlsx", ".xls", ".csv"}
     if not file.filename.lower().endswith(tuple(ALLOWED_EXTENSIONS)):
         raise HTTPException(400, "Only support .xlsx/.xls/.csv")
@@ -560,6 +700,13 @@ async def parse_excel(file: UploadFile = File(..., description=f"{PLACEHOLDER_PR
 @router.post("/importToDb", response_model=None, summary=f"{PLACEHOLDER_PREFIX}ds_import_to_db")
 @require_permissions(permission=SqlbotPermission(role=['ws_admin']))
 async def import_to_db(session: SessionDep, trans: Trans, import_req: ImportRequest):
+    """
+    Nạp dữ liệu từ file đã parse vào PostgreSQL nội bộ thành các bảng — quyền ws_admin.
+
+    Body ``ImportRequest`` gồm ``filePath`` (từ /parseExcel) và danh sách sheet kèm cấu hình cột (tên,
+    kiểu). File không tồn tại trả 400. Mỗi sheet tạo một bảng ``excel_<tên>_<hash>`` và nạp dữ liệu bằng
+    COPY. Bước 2 của luồng import. Trả về danh sách bảng đã tạo kèm số dòng.
+    """
     save_path = os.path.join(path, import_req.filePath)
     if not os.path.exists(save_path):
         raise HTTPException(400, "File not found")

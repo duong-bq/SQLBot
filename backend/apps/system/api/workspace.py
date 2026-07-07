@@ -17,7 +17,7 @@ from common.utils.time import get_timestamp
 
 router = APIRouter(tags=["system_ws"], prefix="/system/workspace")
 
-@router.get("/uws/option/pager/{pageNum}/{pageSize}", response_model=PaginatedResponse[UserWsOption], summary=f"{PLACEHOLDER_PREFIX}ws_user_grid_api", description=f"{PLACEHOLDER_PREFIX}ws_user_grid_api")
+@router.get("/uws/option/pager/{pageNum}/{pageSize}", response_model=PaginatedResponse[UserWsOption], summary=f"{PLACEHOLDER_PREFIX}ws_user_grid_api")
 @require_permissions(permission=SqlbotPermission(role=['ws_admin']))
 async def option_pager(
     session: SessionDep,
@@ -28,6 +28,12 @@ async def option_pager(
     oid: int = Query(description=f"{PLACEHOLDER_PREFIX}oid"),
     keyword: Optional[str] = Query(None, description=f"{PLACEHOLDER_PREFIX}keyword"),
 ):
+    """
+    Danh sách người dùng **chưa** thuộc workspace ``oid``, có phân trang (dùng khi thêm thành viên).
+
+    Chỉ admin. Lọc theo ``keyword`` (tài khoản/tên). Loại trừ người dùng đã là thành viên của ``oid``
+    và tài khoản hệ thống (id=1). Kết quả để chọn người bổ sung vào workspace.
+    """
     if not current_user.isAdmin:
         raise Exception(trans('i18n_permission.no_permission', url = ", ", msg = trans('i18n_permission.only_admin')))
     if not oid:
@@ -60,6 +66,11 @@ async def option_user(
     trans: Trans,
     keyword: str = Query(description="搜索关键字")
     ):
+    """
+    Tìm một người dùng chưa thuộc workspace hiện tại theo ``keyword`` khớp chính xác (tài khoản hoặc tên).
+
+    Dùng để tra nhanh một người trước khi thêm vào workspace. Ẩn khỏi tài liệu Swagger.
+    """
     if not keyword:
         raise Exception(trans('i18n_miss_args', key = '[keyword]'))
     if (not current_user.isAdmin) and current_user.weight == 0:
@@ -92,6 +103,12 @@ async def pager(
     keyword: Optional[str] = Query(None, description="搜索关键字(可选)"),
     oid: Optional[int] = Query(None, description="空间ID(仅admin用户生效)"),
 ):
+    """
+    Danh sách thành viên của một workspace, có phân trang. Ẩn khỏi tài liệu Swagger.
+
+    Admin có thể chỉ định ``oid`` bất kỳ; người dùng thường chỉ xem workspace hiện tại của mình.
+    Lọc theo ``keyword`` (tài khoản/tên/email). Kèm ``weight`` (vai trò trong workspace).
+    """
     if not current_user.isAdmin and current_user.weight == 0:
         raise Exception(trans('i18n_permission.no_permission', url = '', msg = ''))
     if current_user.isAdmin:
@@ -122,11 +139,18 @@ async def pager(
     )
     
 
-@router.post("/uws", summary=f"{PLACEHOLDER_PREFIX}ws_user_bind_api", description=f"{PLACEHOLDER_PREFIX}ws_user_bind_api")
+@router.post("/uws", summary=f"{PLACEHOLDER_PREFIX}ws_user_bind_api")
 @require_permissions(permission=SqlbotPermission(role=['ws_admin']))
 @system_log(LogConfig(operation_type=OperationType.ADD, module=OperationModules.MEMBER, resource_id_expr="creator.uid_list",
                       ))
 async def create(session: SessionDep, current_user: CurrentUser, trans: Trans, creator: UserWsDTO):
+    """
+    Thêm (gán) một hoặc nhiều người dùng vào workspace.
+
+    Body ``UserWsDTO`` gồm ``uid_list``, ``oid`` và ``weight`` (vai trò). Chỉ admin mới được chỉ định
+    ``oid``/``weight`` tùy ý; người dùng thường mặc định gán vào workspace hiện tại với weight 0.
+    Có reset workspace mặc định và xóa cache cho từng người được thêm.
+    """
     if not current_user.isAdmin and current_user.weight == 0:
         raise Exception(trans('i18n_permission.no_permission', url = '', msg = ''))
     oid: int = creator.oid if (current_user.isAdmin and creator.oid) else current_user.oid
@@ -146,11 +170,17 @@ async def create(session: SessionDep, current_user: CurrentUser, trans: Trans, c
         
     session.add_all(db_model_list)
 
-@router.put("/uws", summary=f"{PLACEHOLDER_PREFIX}ws_user_status_api", description=f"{PLACEHOLDER_PREFIX}ws_user_status_api")
+@router.put("/uws", summary=f"{PLACEHOLDER_PREFIX}ws_user_status_api")
 @require_permissions(permission=SqlbotPermission(role=['admin']))
 @system_log(LogConfig(operation_type=OperationType.UPDATE, module=OperationModules.MEMBER, resource_id_expr="editor.uid_list",
                       ))
 async def uws_edit(session: SessionDep, trans: Trans, editor: UserWsEditor):
+    """
+    Cập nhật vai trò (``weight``) của một thành viên trong workspace (chỉ admin).
+
+    Body ``UserWsEditor`` gồm ``uid``, ``oid`` và ``weight`` mới. Xem logic ở hàm ``edit``;
+    có xóa cache người dùng để vai trò mới có hiệu lực.
+    """
     await edit(session, trans, editor)
     
 async def edit(session: SessionDep, trans: Trans, editor: UserWsEditor):
@@ -167,11 +197,17 @@ async def edit(session: SessionDep, trans: Trans, editor: UserWsEditor):
     
     await clean_user_cache(editor.uid)
 
-@router.delete("/uws", summary=f"{PLACEHOLDER_PREFIX}ws_user_unbind_api", description=f"{PLACEHOLDER_PREFIX}ws_user_unbind_api")
+@router.delete("/uws", summary=f"{PLACEHOLDER_PREFIX}ws_user_unbind_api")
 @require_permissions(permission=SqlbotPermission(role=['ws_admin']))
 @system_log(LogConfig(operation_type=OperationType.DELETE, module=OperationModules.MEMBER, resource_id_expr="dto.uid_list",
                       ))
 async def delete(session: SessionDep, current_user: CurrentUser, trans: Trans, dto: UserWsBase):
+    """
+    Gỡ (unbind) một hoặc nhiều người dùng khỏi workspace.
+
+    Body ``UserWsBase`` gồm ``uid_list`` và ``oid``. Xóa liên kết ``UserWsModel`` tương ứng, reset
+    workspace mặc định của các người bị gỡ và xóa cache của họ.
+    """
     if not current_user.isAdmin and current_user.weight == 0:
         raise Exception(trans('i18n_permission.no_permission', url = '', msg = ''))
     oid: int = dto.oid if (current_user.isAdmin and dto.oid) else current_user.oid
@@ -185,9 +221,14 @@ async def delete(session: SessionDep, current_user: CurrentUser, trans: Trans, d
         await reset_single_user_oid(session, uid, oid, False)
         await clean_user_cache(uid)
         
-@router.get("", response_model=list[WorkspaceModel], summary=f"{PLACEHOLDER_PREFIX}ws_all_api", description=f"{PLACEHOLDER_PREFIX}ws_all_api")
+@router.get("", response_model=list[WorkspaceModel], summary=f"{PLACEHOLDER_PREFIX}ws_all_api")
 @require_permissions(permission=SqlbotPermission(role=['admin'])) 
 async def query(session: SessionDep, trans: Trans):
+    """
+    Lấy danh sách tất cả workspace của hệ thống (chỉ admin).
+
+    Tên workspace bắt đầu bằng ``i18n`` sẽ được dịch qua ``trans``. Kết quả sắp xếp theo tên.
+    """
     list_result = session.exec(select(WorkspaceModel)).all()
     for ws in list_result:
         if ws.name.startswith('i18n'):
@@ -195,21 +236,31 @@ async def query(session: SessionDep, trans: Trans):
     list_result.sort(key=lambda x: x.name)
     return list_result
 
-@router.post("", summary=f"{PLACEHOLDER_PREFIX}ws_create_api", description=f"{PLACEHOLDER_PREFIX}ws_create_api")
+@router.post("", summary=f"{PLACEHOLDER_PREFIX}ws_create_api")
 @require_permissions(permission=SqlbotPermission(role=['admin']))
 @system_log(LogConfig(operation_type=OperationType.CREATE, module=OperationModules.WORKSPACE, result_id_expr="id",
                       ))
 async def add(session: SessionDep, creator: WorkspaceBase):
+    """
+    Tạo workspace mới (chỉ admin).
+
+    Body ``WorkspaceBase`` gồm tên workspace. Trả về bản ghi vừa tạo.
+    """
     db_model = WorkspaceModel.model_validate(creator)
     db_model.create_time = get_timestamp()
     session.add(db_model)
     return db_model
     
-@router.put("", summary=f"{PLACEHOLDER_PREFIX}ws_update_api", description=f"{PLACEHOLDER_PREFIX}ws_update_api")
+@router.put("", summary=f"{PLACEHOLDER_PREFIX}ws_update_api")
 @require_permissions(permission=SqlbotPermission(role=['admin']))
 @system_log(LogConfig(operation_type=OperationType.UPDATE, module=OperationModules.WORKSPACE, resource_id_expr="editor.id",
                       ))
 async def update(session: SessionDep, editor: WorkspaceEditor):
+    """
+    Đổi tên một workspace (chỉ admin).
+
+    Body ``WorkspaceEditor`` gồm ``id`` và ``name`` mới.
+    """
     id = editor.id
     db_model = session.get(WorkspaceModel, id)
     if not db_model:
@@ -217,9 +268,14 @@ async def update(session: SessionDep, editor: WorkspaceEditor):
     db_model.name = editor.name
     session.add(db_model)
 
-@router.get("/{id}", response_model=WorkspaceModel, summary=f"{PLACEHOLDER_PREFIX}ws_query_api", description=f"{PLACEHOLDER_PREFIX}ws_query_api")
+@router.get("/{id}", response_model=WorkspaceModel, summary=f"{PLACEHOLDER_PREFIX}ws_query_api")
 @require_permissions(permission=SqlbotPermission(role=['admin']))    
 async def get_one(session: SessionDep, trans: Trans, id: int = Path(description=f"{PLACEHOLDER_PREFIX}oid")):
+    """
+    Lấy chi tiết một workspace theo ``id`` (chỉ admin).
+
+    Tên bắt đầu bằng ``i18n`` sẽ được dịch qua ``trans``.
+    """
     db_model = session.get(WorkspaceModel, id)
     if not db_model:
         raise HTTPException(f"WorkspaceModel with id {id} not found")
@@ -227,11 +283,17 @@ async def get_one(session: SessionDep, trans: Trans, id: int = Path(description=
         db_model.name = trans(db_model.name)
     return db_model
 
-@router.delete("/{id}", summary=f"{PLACEHOLDER_PREFIX}ws_del_api", description=f"{PLACEHOLDER_PREFIX}ws_del_api")
+@router.delete("/{id}", summary=f"{PLACEHOLDER_PREFIX}ws_del_api")
 @require_permissions(permission=SqlbotPermission(role=['admin']))
 @system_log(LogConfig(operation_type=OperationType.DELETE, module=OperationModules.WORKSPACE, resource_id_expr="id",
                       ))
 async def single_delete(session: SessionDep, current_user: CurrentUser, id: int = Path(description=f"{PLACEHOLDER_PREFIX}oid")):
+    """
+    Xóa một workspace theo ``id`` (chỉ admin).
+
+    Không cho xóa workspace mặc định (id=1). Nếu người gọi đang ở workspace bị xóa thì đưa về mặc định.
+    Reset workspace mặc định cho mọi thành viên, xóa các liên kết ``UserWsModel`` và làm sạch cache liên quan.
+    """
     if not current_user.isAdmin:
         raise HTTPException("only admin can delete workspace")
     if id == 1:

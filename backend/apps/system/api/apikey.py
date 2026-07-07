@@ -14,12 +14,23 @@ from common.audit.schemas.logger_decorator import LogConfig, system_log
 
 @router.get("")
 async def grid(session: SessionDep, current_user: CurrentUser) -> list[ApikeyGridItem]:
+    """
+    Danh sách API key của người dùng hiện tại (toàn bộ router này ẩn khỏi Swagger).
+
+    Sắp xếp theo thời gian tạo giảm dần. API key dùng để gọi API/MCP thay cho đăng nhập.
+    """
     query = select(ApiKeyModel).where(ApiKeyModel.uid == current_user.id).order_by(ApiKeyModel.create_time.desc())
     return session.exec(query).all()
 
 @router.post("")
 @system_log(LogConfig(operation_type=OperationType.CREATE, module=OperationModules.API_KEY,result_id_expr='result.self'))
 async def create(session: SessionDep, current_user: CurrentUser):
+    """
+    Tạo một cặp API key (access_key/secret_key) mới cho người dùng hiện tại.
+
+    Mỗi người dùng tối đa 5 key (vượt quá sẽ báo lỗi). Key được sinh ngẫu nhiên, trạng thái bật.
+    Trả về id của key vừa tạo.
+    """
     count = session.exec(select(func.count()).select_from(ApiKeyModel).where(ApiKeyModel.uid == current_user.id)).one()
     if count >= 5:
         raise ValueError("Maximum of 5 API keys allowed")
@@ -39,6 +50,12 @@ async def create(session: SessionDep, current_user: CurrentUser):
 @router.put("/status")
 @system_log(LogConfig(operation_type=OperationType.UPDATE, module=OperationModules.API_KEY,resource_id_expr='id'))
 async def status(session: SessionDep, current_user: CurrentUser, dto: ApikeyStatus):
+    """
+    Bật/tắt trạng thái một API key.
+
+    Body ``ApikeyStatus`` gồm ``id`` và ``status``. Chỉ chủ sở hữu key mới được sửa (nếu không, báo lỗi
+    thiếu quyền). Có xóa cache API key để thay đổi có hiệu lực ngay.
+    """
     api_key = session.get(ApiKeyModel, dto.id)
     if not api_key:
         raise ValueError("API Key not found")
@@ -54,6 +71,11 @@ async def status(session: SessionDep, current_user: CurrentUser, dto: ApikeyStat
 @router.delete("/{id}")
 @system_log(LogConfig(operation_type=OperationType.DELETE, module=OperationModules.API_KEY,resource_id_expr='id'))
 async def delete(session: SessionDep, current_user: CurrentUser, id: int):
+    """
+    Xóa một API key theo ``id``.
+
+    Chỉ chủ sở hữu key mới được xóa. Có xóa cache API key tương ứng.
+    """
     api_key = session.get(ApiKeyModel, id)
     if not api_key:
         raise ValueError("API Key not found")
