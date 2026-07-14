@@ -309,6 +309,9 @@ const list = () => {
   datasourceApi.list().then((res: any) => {
     options.value = res || []
   })
+  getAdvancedApplicationList().then((res: any) => {
+    adv_options.value = res || []
+  })
 }
 
 const saveHandler = () => {
@@ -342,6 +345,7 @@ const editHandler = (row: any) => {
   if (row) {
     pageForm.value = cloneDeep(row)
   }
+  console.log(pageForm.value)
   list()
   dialogTitle.value = row?.id ? t('prompt.edit_prompt_word') : t('prompt.add_prompt_word')
   dialogFormVisible.value = true
@@ -471,7 +475,7 @@ const drawerMainClose = () => {
           {{ $t('prompt.data_prediction') }}
         </el-button>
       </div>
-      <div class="tool-row">
+      <div class="tool-row flex-gap-fallback">
         <el-input
           v-model="keywords"
           style="width: 240px; margin-right: 12px"
@@ -812,6 +816,7 @@ const drawerMainClose = () => {
     display: flex;
     align-items: center;
     flex-direction: row;
+    --gap-size: 8px;
     gap: 8px;
   }
 

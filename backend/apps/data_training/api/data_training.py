@@ -51,7 +51,8 @@ async def pager(session: SessionDep, current_user: CurrentUser, current_page: in
 
 @router.put("", response_model=int, summary=f"{PLACEHOLDER_PREFIX}create_or_update_dt")
 @require_permissions(permission=SqlbotPermission(role=['ws_admin'], type='ds', keyExpression="info.datasource"))
-@system_log(LogConfig(operation_type=OperationType.CREATE_OR_UPDATE, module=OperationModules.DATA_TRAINING,resource_id_expr='info.id', result_id_expr="result_self"))
+@system_log(LogConfig(operation_type=OperationType.CREATE_OR_UPDATE, module=OperationModules.DATA_TRAINING,
+                      resource_id_expr='info.id', result_id_expr="result_self"))
 async def create_or_update(session: SessionDep, current_user: CurrentUser, trans: Trans, info: DataTrainingInfo):
     """
     Tạo mới hoặc cập nhật một mẫu dữ liệu huấn luyện (quyền ws_admin, kèm kiểm tra quyền trên nguồn dữ liệu).
@@ -67,7 +68,8 @@ async def create_or_update(session: SessionDep, current_user: CurrentUser, trans
 
 
 @router.delete("", summary=f"{PLACEHOLDER_PREFIX}delete_dt")
-@system_log(LogConfig(operation_type=OperationType.DELETE, module=OperationModules.DATA_TRAINING,resource_id_expr='id_list'))
+@system_log(
+    LogConfig(operation_type=OperationType.DELETE, module=OperationModules.DATA_TRAINING, resource_id_expr='id_list'))
 @require_permissions(permission=SqlbotPermission(role=['ws_admin']))
 async def delete(session: SessionDep, id_list: list[int]):
     """
@@ -77,7 +79,8 @@ async def delete(session: SessionDep, id_list: list[int]):
 
 
 @router.get("/{id}/enable/{enabled}", summary=f"{PLACEHOLDER_PREFIX}enable_dt")
-@system_log(LogConfig(operation_type=OperationType.UPDATE, module=OperationModules.DATA_TRAINING,resource_id_expr='id'))
+@system_log(
+    LogConfig(operation_type=OperationType.UPDATE, module=OperationModules.DATA_TRAINING, resource_id_expr='id'))
 @require_permissions(permission=SqlbotPermission(role=['ws_admin']))
 async def enable(session: SessionDep, id: int, enabled: bool, trans: Trans):
     """
@@ -114,9 +117,7 @@ async def export_excel(session: SessionDep, trans: Trans, current_user: CurrentU
         fields.append(AxisObj(name=trans('i18n_data_training.problem_description'), value='question'))
         fields.append(AxisObj(name=trans('i18n_data_training.sample_sql'), value='description'))
         fields.append(AxisObj(name=trans('i18n_data_training.effective_data_sources'), value='datasource_name'))
-        if current_user.oid == 1:
-            fields.append(
-                AxisObj(name=trans('i18n_data_training.advanced_application'), value='advanced_application_name'))
+        fields.append(AxisObj(name=trans('i18n_data_training.advanced_application'), value='advanced_application_name'))
 
         md_data, _fields_list = DataFormat.convert_object_array_for_pandas(fields, data_list)
 
@@ -157,10 +158,9 @@ async def excel_template(trans: Trans, current_user: CurrentUser):
         fields.append(AxisObj(name=trans('i18n_data_training.sample_sql_template'), value='description'))
         fields.append(
             AxisObj(name=trans('i18n_data_training.effective_data_sources_template'), value='datasource_name'))
-        if current_user.oid == 1:
-            fields.append(
-                AxisObj(name=trans('i18n_data_training.advanced_application_template'),
-                        value='advanced_application_name'))
+        fields.append(
+            AxisObj(name=trans('i18n_data_training.advanced_application_template'),
+                    value='advanced_application_name'))
 
         md_data, _fields_list = DataFormat.convert_object_array_for_pandas(fields, data_list)
 
@@ -211,10 +211,7 @@ async def upload_excel(trans: Trans, current_user: CurrentUser, file: UploadFile
 
     oid = current_user.oid
 
-    use_cols = [0, 1, 2]  # 问题, 描述, 数据源名称
-    # 根据oid确定要读取的列
-    if oid == 1:
-        use_cols = [0, 1, 2, 3]  # 问题, 描述, 数据源名称, 高级应用名称
+    use_cols = [0, 1, 2, 3]  # 问题, 描述, 数据源名称, 高级应用名称
 
     def inner():
 
@@ -247,19 +244,14 @@ async def upload_excel(trans: Trans, current_user: CurrentUser, file: UploadFile
                 description = row[1].strip() if pd.notna(row[1]) and row[1].strip() else ''
                 datasource_name = row[2].strip() if pd.notna(row[2]) and row[2].strip() else ''
 
-                advanced_application_name = ''
-                if oid == 1 and len(row) > 3:
+                advanced_application_name = None
+                if len(row) > 3:
                     advanced_application_name = row[3].strip() if pd.notna(row[3]) and row[3].strip() else ''
 
-                if oid == 1:
-                    import_data.append(
-                        DataTrainingInfo(oid=oid, question=question, description=description,
-                                         datasource_name=datasource_name,
-                                         advanced_application_name=advanced_application_name))
-                else:
-                    import_data.append(
-                        DataTrainingInfo(oid=oid, question=question, description=description,
-                                         datasource_name=datasource_name))
+                import_data.append(
+                    DataTrainingInfo(oid=oid, question=question, description=description,
+                                     datasource_name=datasource_name,
+                                     advanced_application_name=advanced_application_name))
 
         res = batch_create_training(session, import_data, oid, trans)
 
@@ -283,9 +275,8 @@ async def upload_excel(trans: Trans, current_user: CurrentUser, file: UploadFile
             fields.append(AxisObj(name=trans('i18n_data_training.problem_description'), value='question'))
             fields.append(AxisObj(name=trans('i18n_data_training.sample_sql'), value='description'))
             fields.append(AxisObj(name=trans('i18n_data_training.effective_data_sources'), value='datasource_name'))
-            if current_user.oid == 1:
-                fields.append(
-                    AxisObj(name=trans('i18n_data_training.advanced_application'), value='advanced_application_name'))
+            fields.append(
+                AxisObj(name=trans('i18n_data_training.advanced_application'), value='advanced_application_name'))
             fields.append(AxisObj(name=trans('i18n_data_training.error_info'), value='errors'))
 
             md_data, _fields_list = DataFormat.convert_object_array_for_pandas(fields, data_list)

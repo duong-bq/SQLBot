@@ -2,7 +2,6 @@ import base64
 import json
 import os
 import platform
-import re
 import urllib.parse
 from datetime import datetime, date, time, timedelta
 from decimal import Decimal
@@ -35,7 +34,6 @@ from apps.db.es_engine import get_es_connect, get_es_index, get_es_fields, get_e
 from common.core.config import settings
 import sqlglot
 from sqlglot import expressions as exp
-from sqlalchemy.pool import NullPool
 from pyhive import hive
 
 try:
@@ -144,25 +142,35 @@ def get_engine(ds: CoreDatasource, timeout: int = 0) -> Engine:
     if timeout > 0:
         conf.timeout = timeout
 
+    db_config = {
+        'pool_size': conf.poolSize if conf.poolSize else 5,
+        'max_overflow': 20,
+        'pool_recycle': 3600
+    }
+
     if equals_ignore_case(ds.type, "pg"):
         if conf.dbSchema is not None and conf.dbSchema != "":
             engine = create_engine(get_uri(ds),
                                    connect_args={"options": f"-c search_path={urllib.parse.quote(conf.dbSchema)}",
-                                                 "connect_timeout": conf.timeout}, poolclass=NullPool)
+                                                 "connect_timeout": conf.timeout}, **db_config)
         else:
-            engine = create_engine(get_uri(ds), connect_args={"connect_timeout": conf.timeout}, poolclass=NullPool)
+            engine = create_engine(get_uri(ds), connect_args={"connect_timeout": conf.timeout}, **db_config)
     elif equals_ignore_case(ds.type, 'sqlServer'):
         engine = create_engine('mssql+pymssql://', creator=lambda: get_origin_connect(ds.type, conf),
-                               poolclass=NullPool)
+                               **db_config)
     elif equals_ignore_case(ds.type, 'oracle'):
-        engine = create_engine(get_uri(ds), poolclass=NullPool)
+        engine = create_engine(get_uri(ds), **db_config)
     elif equals_ignore_case(ds.type, 'mysql'):  # mysql
         ssl_mode = {"require": True} if conf.ssl else None
         engine = create_engine(get_uri(ds), connect_args={"connect_timeout": conf.timeout, "ssl": ssl_mode},
-                               poolclass=NullPool)
+                               **db_config)
     else:  # ck
-        engine = create_engine(get_uri(ds), connect_args={"connect_timeout": conf.timeout}, poolclass=NullPool)
+        engine = create_engine(get_uri(ds), connect_args={"connect_timeout": conf.timeout}, **db_config)
     return engine
+
+
+def get_connection(ds: CoreDatasource | AssistantOutDsSchema, db_config):
+    pass
 
 
 def get_session(ds: CoreDatasource | AssistantOutDsSchema):
@@ -171,10 +179,12 @@ def get_session(ds: CoreDatasource | AssistantOutDsSchema):
         out_conf = get_out_ds_conf(ds, 30)
         ds.configuration = out_conf
 
-    engine = get_engine(ds)
-    session_maker = sessionmaker(bind=engine)
-    session = session_maker()
-    return session
+    # engine = get_engine(ds)
+    # session_maker = sessionmaker(bind=engine)
+
+    # get session from pool
+    session = pool_manager.get_pool(ds=ds, **{})
+    return session()
 
 
 def check_connection(trans: Optional[Trans], ds: CoreDatasource | AssistantOutDsSchema, is_raise: bool = False):
@@ -582,6 +592,91 @@ def convert_value(value, datetime_format='space'):
         return value
 
 
+def is_numeric_type_code(type_code, dialect_name: str) -> bool:
+    """
+    根据数据库方言和 type_code 判断是否为数值类型
+
+    Args:
+        type_code: cursor.description[col_idx][1] 的值
+        dialect_name: SQLAlchemy dialect name (mysql/postgresql/mssql/oracle/sqlite 等)
+
+    Returns:
+        bool: 是否为数值类型
+    """
+    dialect_name = dialect_name.lower()
+
+    # ---------- MySQL (pymysql) ----------
+    if dialect_name == 'mysql':
+        if isinstance(type_code, int):
+            return type_code in {
+                1,  # TINYINT
+                2,  # SMALLINT
+                3,  # INT
+                4,  # FLOAT
+                5,  # DOUBLE
+                8,  # BIGINT
+                9,  # MEDIUMINT
+                16,  # BIT
+                246,  # DECIMAL/NEWDECIMAL
+            }
+        return False
+
+    # ---------- PostgreSQL (psycopg2) ----------
+    if dialect_name == 'postgresql':
+        if isinstance(type_code, int):
+            return type_code in {
+                20,  # int8
+                21,  # int2
+                23,  # int4
+                700,  # float4
+                701,  # float8
+                1700,  # numeric
+                16,  # boolean
+            }
+        return False
+
+    # ---------- Oracle (cx_Oracle / oracledb) ----------
+    if dialect_name == 'oracle':
+        type_str = str(type_code).upper()
+        return any(kw in type_str for kw in ['NUMBER', 'FLOAT', 'INTEGER', 'BINARY_FLOAT', 'BINARY_DOUBLE'])
+
+    if dialect_name == 'clickhouse':
+        if isinstance(type_code, str):
+            upper_type = type_code.upper()
+            # 数值类型关键字
+            numeric_prefixes = (
+                'INT',  # Int8/16/32/64
+                'UINT',  # UInt8/16/32/64  ✅ 加上 UINT
+                'FLOAT',  # Float32, Float64
+                'DECIMAL',  # Decimal, Decimal32/64/128
+                'BOOL',  # Bool
+                'BIT',  # 极少数场景
+            )
+            return any(upper_type.startswith(p) for p in numeric_prefixes)
+
+    # ---------- SQL Server (pyodbc / pymssql) ----------
+    if dialect_name == 'mssql':
+        if isinstance(type_code, int):
+            # SQL Server (pyodbc / ODBC) 数值类型码
+            return type_code in {
+                2,  # smallint
+                3,  # int
+                4,  # tinyint
+                5,  # float / real / decimal / numeric / money / smallmoney
+                6,  # bit
+                7,  # bigint
+            }
+
+    # ---------- SQLite ----------
+    if dialect_name == 'sqlite':
+        if isinstance(type_code, int):
+            return type_code in {1, 2, 3, 4, 5}  # INTEGER, FLOAT, NUMERIC, etc.
+        return False
+
+    # ---------- 未知数据库，保守返回 False ----------
+    return False
+
+
 def exec_sql(ds: CoreDatasource | AssistantOutDsSchema, sql: str, origin_column=False):
     while sql.endswith(';'):
         sql = sql[:-1]
@@ -593,15 +688,34 @@ def exec_sql(ds: CoreDatasource | AssistantOutDsSchema, sql: str, origin_column=
     db = DB.get_db(ds.type)
     if db.connect_type == ConnectType.sqlalchemy:
         with get_session(ds) as session:
+            # 获取当前数据库方言
+            dialect_name = session.bind.dialect.name
+
             with session.execute(text(sql)) as result:
                 try:
                     columns = result.keys()._keys if origin_column else [item.lower() for item in result.keys()._keys]
+
+                    fields_info = []
+
+                    for col_idx, col_name in enumerate(columns):
+                        is_numeric = False
+                        try:
+                            type_code = result.cursor.description[col_idx][1]
+                            is_numeric = is_numeric_type_code(type_code, dialect_name)
+                        except (IndexError, AttributeError):
+                            pass
+
+                        fields_info.append({
+                            "name": col_name,
+                            "is_numeric": is_numeric
+                        })
+
                     res = result.fetchall()
                     result_list = [
                         {str(columns[i]): convert_value(value) for i, value in enumerate(tuple_item)} for tuple_item in
                         res
                     ]
-                    return {"fields": columns, "data": result_list,
+                    return {"fields": columns, "data": result_list, "fields_info": fields_info,
                             "sql": bytes.decode(base64.b64encode(bytes(sql, 'utf-8')))}
                 except Exception as ex:
                     raise ParseSQLResultError(str(ex))
@@ -617,11 +731,12 @@ def exec_sql(ds: CoreDatasource | AssistantOutDsSchema, sql: str, origin_column=
                     columns = [field[0] for field in cursor.description] if origin_column else [field[0].lower() for
                                                                                                 field in
                                                                                                 cursor.description]
+                    fields_info = build_fields_info_from_cursor(cursor, origin_column, 'dm')
                     result_list = [
                         {str(columns[i]): convert_value(value) for i, value in enumerate(tuple_item)} for tuple_item in
                         res
                     ]
-                    return {"fields": columns, "data": result_list,
+                    return {"fields": columns, "data": result_list, "fields_info": fields_info,
                             "sql": bytes.decode(base64.b64encode(bytes(sql, 'utf-8')))}
                 except Exception as ex:
                     raise ParseSQLResultError(str(ex))
@@ -637,11 +752,12 @@ def exec_sql(ds: CoreDatasource | AssistantOutDsSchema, sql: str, origin_column=
                     columns = [field[0] for field in cursor.description] if origin_column else [field[0].lower() for
                                                                                                 field in
                                                                                                 cursor.description]
+                    fields_info = build_fields_info_from_cursor(cursor, origin_column, 'mysql')
                     result_list = [
                         {str(columns[i]): convert_value(value) for i, value in enumerate(tuple_item)} for tuple_item in
                         res
                     ]
-                    return {"fields": columns, "data": result_list,
+                    return {"fields": columns, "data": result_list, "fields_info": fields_info,
                             "sql": bytes.decode(base64.b64encode(bytes(sql, 'utf-8')))}
                 except Exception as ex:
                     raise ParseSQLResultError(str(ex))
@@ -655,11 +771,12 @@ def exec_sql(ds: CoreDatasource | AssistantOutDsSchema, sql: str, origin_column=
                     columns = [field[0] for field in cursor.description] if origin_column else [field[0].lower() for
                                                                                                 field in
                                                                                                 cursor.description]
+                    fields_info = build_fields_info_from_cursor(cursor, origin_column, 'postgresql')
                     result_list = [
                         {str(columns[i]): convert_value(value) for i, value in enumerate(tuple_item)} for tuple_item in
                         res
                     ]
-                    return {"fields": columns, "data": result_list,
+                    return {"fields": columns, "data": result_list, "fields_info": fields_info,
                             "sql": bytes.decode(base64.b64encode(bytes(sql, 'utf-8')))}
                 except Exception as ex:
                     raise ParseSQLResultError(str(ex))
@@ -674,25 +791,28 @@ def exec_sql(ds: CoreDatasource | AssistantOutDsSchema, sql: str, origin_column=
                     columns = [field[0] for field in cursor.description] if origin_column else [field[0].lower() for
                                                                                                 field in
                                                                                                 cursor.description]
+                    fields_info = build_fields_info_from_cursor(cursor, origin_column, 'postgresql')
                     result_list = [
                         {str(columns[i]): convert_value(value) for i, value in enumerate(tuple_item)} for tuple_item in
                         res
                     ]
-                    return {"fields": columns, "data": result_list,
+                    return {"fields": columns, "data": result_list, "fields_info": fields_info,
                             "sql": bytes.decode(base64.b64encode(bytes(sql, 'utf-8')))}
                 except Exception as ex:
                     raise ParseSQLResultError(str(ex))
         elif equals_ignore_case(ds.type, 'es'):
             try:
-                res, columns = get_es_data_by_http(conf, sql)
-                columns = [field.get('name') for field in columns] if origin_column else [field.get('name').lower() for
-                                                                                          field in
-                                                                                          columns]
+                res, raw_columns = get_es_data_by_http(conf, sql)
+                columns = [field.get('name') for field in raw_columns] if origin_column else [field.get('name').lower()
+                                                                                              for
+                                                                                              field in
+                                                                                              raw_columns]
+                fields_info = build_fields_info_from_es(raw_columns, origin_column)
                 result_list = [
                     {str(columns[i]): convert_value(value) for i, value in enumerate(tuple_item)} for tuple_item in
                     res
                 ]
-                return {"fields": columns, "data": result_list,
+                return {"fields": columns, "data": result_list, "fields_info": fields_info,
                         "sql": bytes.decode(base64.b64encode(bytes(sql, 'utf-8')))}
             except Exception as ex:
                 raise Exception(str(ex))
@@ -707,14 +827,116 @@ def exec_sql(ds: CoreDatasource | AssistantOutDsSchema, sql: str, origin_column=
                     columns = [field[0] for field in cursor.description] if origin_column else [field[0].lower() for
                                                                                                 field in
                                                                                                 cursor.description]
+                    fields_info = build_fields_info_from_cursor(cursor, origin_column, 'hive')
                     result_list = [
                         {str(columns[i]): convert_value(value) for i, value in enumerate(tuple_item)} for tuple_item in
                         res
                     ]
-                    return {"fields": columns, "data": result_list,
+                    return {"fields": columns, "data": result_list, "fields_info": fields_info,
                             "sql": bytes.decode(base64.b64encode(bytes(hive_sql, 'utf-8')))}
                 except Exception as ex:
                     raise ParseSQLResultError(str(ex))
+
+
+def build_fields_info_from_cursor(cursor, origin_column, db_type='postgresql'):
+    """
+    根据数据库游标的 description 构建字段信息列表
+
+    Args:
+        cursor: 数据库游标对象
+        origin_column: 是否保留原始列名大小写
+        db_type: 数据库类型，支持 'mysql', 'postgresql', 'redshift', 'kingbase', 'dm', 'hive'
+
+    Returns:
+        list: 包含字段名和是否数值类型的字典列表
+    """
+    fields_info = []
+
+    for col_info in cursor.description:
+        col_name = col_info[0]
+
+        if db_type in ('mysql', 'mariadb', 'doris', 'starrocks'):
+            # MySQL/pymysql 类型码
+            is_numeric = col_info[1] in (
+                1,  # TINYINT
+                2,  # SMALLINT
+                3,  # INT
+                4,  # FLOAT
+                5,  # DOUBLE
+                8,  # BIGINT
+                9,  # MEDIUMINT
+                16,  # BIT
+                246,  # DECIMAL/NEWDECIMAL
+            )
+        elif db_type in ('postgresql', 'redshift', 'kingbase'):
+            # PostgreSQL/psycopg2 类型 OID
+            is_numeric = col_info[1] in (
+                16,  # bool
+                20,  # int8
+                21,  # int2
+                23,  # int4
+                700,  # float4
+                701,  # float8
+                790,  # money
+                1700,  # numeric
+            )
+        elif db_type == 'dm':
+            # 达梦数据库类型码 <class 'dmPython.DECIMAL'>
+            # 获取类型类名
+            type_name = col_info[1].__name__.upper() if hasattr(col_info[1], '__name__') else str(col_info[1]).upper()
+
+            is_numeric = type_name in {
+                'INT', 'INTEGER',
+                'BIGINT', 'SMALLINT', 'TINYINT',
+                'NUMBER', 'NUMERIC', 'DECIMAL',
+                'FLOAT', 'DOUBLE', 'REAL',
+                'BIT', 'BOOLEAN',
+            }
+        elif db_type == 'hive':
+            # Hive 类型对象转字符串判断
+            type_str = str(col_info[1]).lower()
+            NUMERIC_PREFIXES = ('tinyint', 'smallint', 'int', 'bigint', 'float', 'double', 'decimal', 'numeric')
+            is_numeric = type_str == 'boolean' or any(type_str.startswith(p) for p in NUMERIC_PREFIXES)
+        else:
+            is_numeric = False
+
+        fields_info.append({
+            "name": col_name if origin_column else col_name.lower(),
+            "is_numeric": is_numeric
+        })
+
+    return fields_info
+
+
+def build_fields_info_from_es(raw_columns, origin_column):
+    """
+    专门为 Elasticsearch 构建字段信息
+
+    Args:
+        raw_columns: ES 返回的列信息列表
+        origin_column: 是否保留原始列名大小写
+
+    Returns:
+        list: 包含字段名和是否数值类型的字典列表
+    """
+    fields_info = []
+
+    for field in raw_columns:
+        field_name = field.get('name') if origin_column else field.get('name').lower()
+        field_type = field.get('type', '').lower()
+
+        is_numeric = field_type in (
+            'long', 'integer', 'short', 'byte',
+            'double', 'float', 'half_float', 'scaled_float',
+            'unsigned_long', 'boolean'
+        )
+
+        fields_info.append({
+            "name": field_name,
+            "is_numeric": is_numeric
+        })
+
+    return fields_info
 
 
 def get_sqlglot_dialect(ds_type: str) -> str:
@@ -744,6 +966,7 @@ DS_SPECIFIC_DANGEROUS_FUNCTIONS = {
 
 # 危险模式正则表达式（用于检查特殊语法）
 import re
+
 DANGEROUS_PATTERNS = [
     r'\bINTO\s+OUTFILE\b',
     r'\bINTO\s+DUMPFILE\b',
@@ -765,7 +988,7 @@ def check_dangerous_functions(statements: list, ds_type: str) -> bool:
     """检查是否使用了危险函数，返回 True 表示安全"""
     dangerous_functions = get_dangerous_functions(ds_type)
     dangerous_functions_upper = {f.upper() for f in dangerous_functions}
-    
+
     for stmt in statements:
         if stmt:
             for func in stmt.find_all(exp.Anonymous):
@@ -849,3 +1072,53 @@ def checkParams(extraParams: str, illegalParams: List[str]):
             k, v = kv.split('=')
             if k in illegalParams:
                 raise HTTPException(status_code=500, detail=f'Illegal Parameter: {k}')
+
+
+import threading
+from collections import OrderedDict
+
+
+class ConnectionPoolManager:
+    def __init__(self, max_pools=500):
+        """
+        init
+        :param max_pools: max pool
+        """
+        self.max_pools = max_pools
+        self._pools = OrderedDict()  # 使用有序字典实现 LRU
+        self._lock = threading.Lock()  # 保证多线程安全
+
+    def get_pool(self, ds: CoreDatasource | AssistantOutDsSchema, **db_config):
+        """
+        get connection pool（lazy load + LRU update）
+        """
+        with self._lock:
+            if ds.id:
+                # 1. 如果连接池已存在，将其移动到字典末尾（标记为最近使用）
+                if ds.id in self._pools:
+                    self._pools.move_to_end(ds.id)
+                    print(f"[LRU] return: {ds.id}")
+                    return self._pools[ds.id]
+
+                # 2. 如果连接池不存在，检查是否达到上限，若达到则淘汰最久未使用的（字典头部）
+                if len(self._pools) >= self.max_pools:
+                    oldest_id, oldest_pool = self._pools.popitem(last=False)
+                    oldest_pool.close()  # 安全关闭被驱逐的连接池
+                    print(f"[LRU] remove oldest: {oldest_id}")
+
+            # 3. 创建新连接池并放入字典末尾
+            engine = get_engine(ds)
+            new_pool = sessionmaker(bind=engine)
+            self._pools[ds.id] = new_pool
+            print(f"[LRU] create: {ds.id}")
+            return new_pool
+
+    def close_all(self):
+        """stop"""
+        with self._lock:
+            for pool in self._pools.values():
+                pool.close()
+            self._pools.clear()
+
+
+pool_manager = ConnectionPoolManager(max_pools=500)

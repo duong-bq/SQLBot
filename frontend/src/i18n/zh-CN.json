@@ -76,6 +76,7 @@
     "context_record_count": "上下文记录数",
     "context_record_count_hint": "用户提问轮数",
     "model_thinking_process": "展开模型思考过程",
+    "hide_model_thinking_process": "隐藏模型思考过程",
     "rows_of_data": "限制 1000 行数据",
     "third_party_platform_settings": "登录认证设置",
     "by_third_party_platform": "自动创建用户",
@@ -788,6 +789,8 @@
     "no_data": "暂无数据",
     "loading_data": "加载中...",
     "show_error_detail": "查看具体信息",
+    "thousands_separator_setting": "千分位符设置",
+    "thousands_separator_display": "应用千分位符展示",
     "log": {
       "GENERATE_SQL": "生成 SQL",
       "GENERATE_CHART": "生成图表结构",
