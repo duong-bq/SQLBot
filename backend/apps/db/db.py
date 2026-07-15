@@ -11,7 +11,7 @@ import oracledb
 import psycopg2
 import pymssql
 
-from apps.db.db_sql import get_table_sql, get_field_sql, get_version_sql
+from apps.db.db_sql import get_table_sql, get_field_sql, get_version_sql, get_relation_sql
 from common.error import ParseSQLResultError
 
 if platform.system() != "Darwin":
@@ -21,7 +21,7 @@ import redshift_connector
 from sqlalchemy import create_engine, text, Engine
 from sqlalchemy.orm import sessionmaker
 
-from apps.datasource.models.datasource import DatasourceConf, CoreDatasource, TableSchema, ColumnSchema
+from apps.datasource.models.datasource import DatasourceConf, CoreDatasource, TableSchema, ColumnSchema, RelationSchema
 from apps.datasource.utils.utils import aes_decrypt
 from apps.db.constant import DB, ConnectType
 from apps.db.engine import get_engine_config
@@ -517,6 +517,26 @@ def get_fields(ds: CoreDatasource, table_name: str = None):
                 res = cursor.fetchall()
                 res_list = [ColumnSchema(*item) for item in res]
                 return res_list
+
+
+def get_relations(ds: CoreDatasource):
+    """Fetch declared foreign keys of the datasource as a list of RelationSchema.
+
+    Returns an empty list for databases without foreign-key support (e.g. ClickHouse)
+    or when the schema declares none.
+    """
+    conf = DatasourceConf(**json.loads(aes_decrypt(ds.configuration))) if not equals_ignore_case(ds.type,
+                                                                                                 "excel") else get_engine_config()
+    db = DB.get_db(ds.type)
+    sql, sql_param = get_relation_sql(ds, conf)
+    if not sql:
+        return []
+    if db.connect_type == ConnectType.sqlalchemy:
+        with get_session(ds) as session:
+            with session.execute(text(sql), {"param": sql_param}) as result:
+                res = result.fetchall()
+                return [RelationSchema(*item) for item in res]
+    return []
 
 
 def convert_value(value, datetime_format='space'):

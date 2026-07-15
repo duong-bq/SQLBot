@@ -175,6 +175,19 @@ class ColumnSchemaResponse(BaseModel):
     fieldComment: str | None = ''
 
 
+class RelationSchema:
+    def __init__(self, attr1, attr2, attr3, attr4):
+        self.srcTable = attr1
+        self.srcColumn = attr2
+        self.tgtTable = attr3
+        self.tgtColumn = attr4
+
+    srcTable: str
+    srcColumn: str
+    tgtTable: str
+    tgtColumn: str
+
+
 class TableAndFields:
     def __init__(self, schema, table, fields):
         self.schema = schema

@@ -168,6 +168,35 @@ def get_table_sql(ds: CoreDatasource, conf: DatasourceConf, db_version: str = ''
                 """, None
 
 
+def get_relation_sql(ds: CoreDatasource, conf: DatasourceConf):
+    """Return declared foreign keys as (src_table, src_column, tgt_table, tgt_column) rows.
+
+    Only databases that natively support foreign keys are handled. Composite keys are
+    expanded to one row per column pair via unnest ... WITH ORDINALITY. Databases without
+    a foreign-key concept (e.g. ClickHouse) return an empty statement.
+    """
+    if equals_ignore_case(ds.type, "pg", "excel"):
+        return """
+              SELECT src_tbl.relname AS SRC_TABLE,
+                     src_col.attname AS SRC_COLUMN,
+                     tgt_tbl.relname AS TGT_TABLE,
+                     tgt_col.attname AS TGT_COLUMN
+              FROM pg_constraint con
+                       JOIN pg_class     src_tbl ON src_tbl.oid = con.conrelid
+                       JOIN pg_namespace src_ns ON src_ns.oid = src_tbl.relnamespace
+                       JOIN pg_class     tgt_tbl ON tgt_tbl.oid = con.confrelid
+                       JOIN LATERAL unnest(con.conkey, con.confkey) WITH ORDINALITY AS ord(src_attnum, tgt_attnum, n)
+                            ON true
+                       JOIN pg_attribute src_col ON src_col.attrelid = con.conrelid AND src_col.attnum = ord.src_attnum
+                       JOIN pg_attribute tgt_col ON tgt_col.attrelid = con.confrelid AND tgt_col.attnum = ord.tgt_attnum
+              WHERE con.contype = 'f'
+                AND src_ns.nspname = :param
+              ORDER BY src_tbl.relname, con.conname, ord.n \
+              """, conf.dbSchema
+    else:
+        return "", None
+
+
 def get_field_sql(ds: CoreDatasource, conf: DatasourceConf, table_name: str = None):
     if equals_ignore_case(ds.type, "mysql"):
         sql1 = """

@@ -1,5 +1,6 @@
 import datetime
 import json
+import uuid
 from typing import List, Optional
 
 from fastapi import HTTPException
@@ -11,7 +12,7 @@ from apps.datasource.crud.permission import get_column_permission_fields, get_ro
 from apps.datasource.embedding.table_embedding import calc_table_embedding
 from apps.datasource.utils.utils import aes_decrypt
 from apps.db.constant import DB
-from apps.db.db import get_tables, get_fields, exec_sql, check_connection
+from apps.db.db import get_tables, get_fields, exec_sql, check_connection, get_relations
 from apps.db.engine import get_engine_config, get_engine_conn
 from apps.system.schemas.auth import CacheName, CacheNamespace
 from common.core.config import settings
@@ -191,6 +192,114 @@ def sync_single_fields(session: SessionDep, trans: Trans, id: int):
     run_save_ds_embeddings([ds.id])
 
 
+def build_relation_graph(session: SessionDep, ds: CoreDatasource) -> list:
+    """Build an X6 graph (nodes + FK edges) from the datasource's declared foreign keys.
+
+    Mirrors the structure the frontend ER editor persists into core_datasource.table_relation:
+    er-rect nodes carry ports keyed by CoreField.id; edges reference nodes by CoreTable.id
+    (source/target.cell) and columns by CoreField.id (source/target.port).
+
+    Returns an empty list when the source database declares no foreign keys (in which case
+    the caller should leave table_relation untouched so behaviour is unchanged).
+    """
+    try:
+        relations = get_relations(ds)
+    except Exception as e:
+        SQLBotLogUtil.warning(f"build_relation_graph: get_relations failed for ds {ds.id}: {e}")
+        return []
+    if not relations:
+        return []
+
+    tables = session.query(CoreTable).filter(CoreTable.ds_id == ds.id).all()
+    if not tables:
+        return []
+    fields = session.query(CoreField).filter(CoreField.ds_id == ds.id).all()
+
+    table_by_name = {t.table_name: t for t in tables}
+    field_by_table_and_name = {}
+    fields_by_table_id = {}
+    for f in fields:
+        field_by_table_and_name[(f.table_id, f.field_name)] = f
+        fields_by_table_id.setdefault(f.table_id, []).append(f)
+
+    cells = []
+    col_count = 4  # simple grid auto-layout; user can rearrange freely afterwards
+    for idx, t in enumerate(tables):
+        row, col = divmod(idx, col_count)
+        port_items = []
+        for f in sorted(fields_by_table_id.get(t.id, []),
+                        key=lambda x: x.field_index if x.field_index is not None else 0):
+            port_items.append({
+                "id": f.id,
+                "group": "list",
+                "attrs": {
+                    "portNameLabel": {"text": f.field_name},
+                    "portTypeLabel": {"text": f.field_type},
+                },
+            })
+        cells.append({
+            "id": t.id,
+            "shape": "er-rect",
+            "position": {"x": col * 320, "y": row * 400},
+            "size": {"width": 180, "height": 51},
+            "zIndex": idx + 1,
+            "visible": True,
+            "attrs": {
+                "text": {"text": t.table_name},
+                "label": {
+                    "text": t.table_name,
+                    "textAnchor": "left",
+                    "refX": 34,
+                    "refY": 28,
+                    "textWrap": {"width": 120, "height": 24, "ellipsis": True},
+                },
+            },
+            "ports": {"items": port_items},
+        })
+
+    z_index = len(tables) + 1
+    for r in relations:
+        src_t = table_by_name.get(r.srcTable)
+        tgt_t = table_by_name.get(r.tgtTable)
+        if src_t is None or tgt_t is None:
+            continue  # FK pointing at a table the user did not select
+        src_f = field_by_table_and_name.get((src_t.id, r.srcColumn))
+        tgt_f = field_by_table_and_name.get((tgt_t.id, r.tgtColumn))
+        if src_f is None or tgt_f is None:
+            continue
+        cells.append({
+            "id": str(uuid.uuid4()),
+            "shape": "edge",
+            "attrs": {"line": {"stroke": "#DEE0E3"}},
+            "source": {"cell": src_t.id, "port": str(src_f.id)},
+            "target": {"cell": tgt_t.id, "port": str(tgt_f.id)},
+            "zIndex": z_index,
+        })
+        z_index += 1
+
+    return cells
+
+
+def seed_table_relation(session: SessionDep, ds: CoreDatasource):
+    """Seed core_datasource.table_relation from declared FK, only when it is currently empty.
+
+    Never overwrites a graph the user has already edited (same one-time seeding contract as
+    custom_comment). Failures are swallowed so datasource creation is never blocked.
+    """
+    try:
+        record = session.query(CoreDatasource).filter(CoreDatasource.id == ds.id).first()
+        if record is None or record.table_relation:
+            return
+        graph = build_relation_graph(session, record)
+        if graph:
+            record.table_relation = graph
+            session.add(record)
+            session.commit()
+            ds.table_relation = graph
+    except Exception as e:
+        SQLBotLogUtil.warning(f"seed_table_relation failed for ds {ds.id}: {e}")
+
+
 def sync_table(session: SessionDep, ds: CoreDatasource, tables: List[CoreTable]):
     id_list = []
     for item in tables:
@@ -229,6 +338,9 @@ def sync_table(session: SessionDep, ds: CoreDatasource, tables: List[CoreTable])
         session.query(CoreTable).filter(CoreTable.ds_id == ds.id).delete(synchronize_session=False)
         session.query(CoreField).filter(CoreField.ds_id == ds.id).delete(synchronize_session=False)
         session.commit()
+
+    # seed table relations from declared foreign keys (one-time, only when not set yet)
+    seed_table_relation(session, ds)
 
     # do table embedding
     run_save_table_embeddings(id_list)
