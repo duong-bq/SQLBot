@@ -69,16 +69,25 @@ i18n = I18n()
 
 
 def extract_tables_from_sql(sql: str, ds_type: str = None) -> set:
-    """从 SQL 中提取表名（使用 sqlglot 解析，可信）"""
+    """Trích xuất tên bảng thật từ SQL (parse bằng sqlglot, đáng tin cậy).
+
+    Loại bỏ tên CTE (WITH ... AS): đó là tập kết quả tạm do chính câu SQL này định nghĩa, không
+    phải bảng trong database. sqlglot parse tham chiếu tới CTE cũng thành exp.Table; nếu không
+    loại ra, bước kiểm tra an toàn sẽ coi tên CTE là "bảng chưa được cấp phép" và từ chối MỌI câu
+    SQL có WITH. Bảng thật nằm trong thân CTE là các node exp.Table riêng biệt nên vẫn được trích
+    xuất — kể cả khi một CTE được build từ bảng chưa cấp phép, bảng đó vẫn bị kiểm tra.
+    """
     tables = set()
     dialect = get_sqlglot_dialect(ds_type)
     try:
         statements = sqlglot.parse(sql, dialect=dialect)
         for stmt in statements:
-            if stmt:
-                for table in stmt.find_all(exp.Table):
-                    if table.name:
-                        tables.add(table.name)
+            if not stmt:
+                continue
+            cte_names = {cte.alias_or_name for cte in stmt.find_all(exp.CTE)}
+            for table in stmt.find_all(exp.Table):
+                if table.name and table.name not in cte_names:
+                    tables.add(table.name)
     except Exception:
         pass
     return tables
