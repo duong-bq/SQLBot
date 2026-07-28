@@ -1,0 +1,34 @@
+{
+  "mcpServers": {
+    "postgres-data": {
+      "type": "stdio",
+      "command": "npx",
+      "args": [
+        "-y",
+        "@modelcontextprotocol/server-postgres",
+        "postgresql://postgres:Elcom%40123@10.20.254.127:5433/IOCLC_BE_VDATACORE"
+      ],
+      "env": {}
+    },
+    "postgres-data-pruned": {
+      "type": "stdio",
+      "command": "npx",
+      "args": [
+        "-y",
+        "@modelcontextprotocol/server-postgres",
+        "postgresql://postgres:postgres@localhost:5437/IOCLC_BE_VDATACORE"
+      ],
+      "env": {}
+    },
+    "postgres": {
+      "type": "stdio",
+      "command": "npx",
+      "args": [
+        "-y",
+        "@modelcontextprotocol/server-postgres",
+        "postgresql://root:Password123%40pg@localhost:5434/sqlbot"
+      ],
+      "env": {}
+    }
+  }
+}
