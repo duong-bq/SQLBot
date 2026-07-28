@@ -1,0 +1,3 @@
+# Dump SSE thô do 01_chat_standard.py / 02_chat_mcp.py sinh ra khi chạy: dung lượng lớn (~1 MB mỗi
+# lần chạy) và chứa số liệu thật của database nghiệp vụ, không nên đưa vào repo.
+output/
