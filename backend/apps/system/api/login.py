@@ -4,7 +4,6 @@ from fastapi.security import OAuth2PasswordRequestForm
 from apps.system.schemas.logout_schema import LogoutSchema
 from apps.system.schemas.system_schema import BaseUserDTO
 from common.core.deps import SessionDep, Trans
-from common.utils.crypto import sqlbot_decrypt
 from ..crud.user import authenticate
 from common.core.security import create_access_token
 from datetime import timedelta
@@ -31,14 +30,14 @@ async def local_login(
     """
     Đăng nhập nội bộ, cấp access token (JWT).
 
-    Nhận ``username``/``password`` (đã mã hóa phía client, được ``sqlbot_decrypt`` giải mã) theo chuẩn
-    OAuth2 password flow. Xác thực tài khoản rồi kiểm tra tuần tự: có gắn workspace không, trạng thái
-    kích hoạt, đúng nguồn đăng nhập nội bộ. Thất bại ở bước nào trả về lỗi 400 tương ứng.
-    Thành công trả về ``Token`` chứa access_token có hạn ``ACCESS_TOKEN_EXPIRE_MINUTES``.
+    Nhận ``username``/``password`` dạng plaintext theo chuẩn OAuth2 password flow (không còn
+    qua bước mã hóa/giải mã phía xpack — deploy nội bộ công ty đã có reverse proxy terminate
+    HTTPS trước khi traffic chạm tới đây). Xác thực tài khoản rồi kiểm tra tuần tự: có gắn
+    workspace không, trạng thái kích hoạt, đúng nguồn đăng nhập nội bộ. Thất bại ở bước nào trả
+    về lỗi 400 tương ứng. Thành công trả về ``Token`` chứa access_token có hạn
+    ``ACCESS_TOKEN_EXPIRE_MINUTES``.
     """
-    origin_account = await sqlbot_decrypt(form_data.username)
-    origin_pwd = await sqlbot_decrypt(form_data.password)
-    user: BaseUserDTO = authenticate(session=session, account=origin_account, password=origin_pwd)
+    user: BaseUserDTO = authenticate(session=session, account=form_data.username, password=form_data.password)
     if not user:
         raise HTTPException(status_code=400, detail=trans('i18n_login.account_pwd_error'))
     if not user.oid or user.oid == 0:

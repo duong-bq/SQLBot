@@ -540,13 +540,14 @@ def system_log(config: Union[LogConfig, Dict]):
                     )
 
                 if config.operation_type == OperationType.LOGIN:
-                    input_account_dec = SystemLogger.extract_from_function_params(
+                    # Username đi vào ở dạng plaintext (xem apps/system/api/login.py) nên không giải mã
+                    # nữa. Trước đây chỗ này gọi sqlbot_decrypt và ném lỗi base64 TRƯỚC khi handler
+                    # chạy, làm mọi lần đăng nhập trả 500 dù login.py đã bỏ giải mã.
+                    input_account = SystemLogger.extract_from_function_params(
                         "form_data.username",
                         args,
                         kwargs
                     )
-                    from common.utils.crypto import sqlbot_decrypt
-                    input_account = await sqlbot_decrypt(input_account_dec)
                     with Session(engine) as session:
                         userInfo = get_user_by_account(session=session, account=input_account)
                         if userInfo is not None:
