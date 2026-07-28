@@ -656,8 +656,10 @@ async def stream_sql(
         stream: Kiểu trả về. ``True`` = ``StreamingResponse`` (trả dần); ``False`` = chạy hết rồi gom mẩu
             kết quả cuối và trả về một ``JSONResponse`` (dùng cho MCP đồng bộ). Lỗi cũng theo hai nhánh này.
         finish_step: "Núm vặn" điểm dừng của pipeline, tăng dần:
-            ``SELECT_DATASOURCE`` < ``GENERATE_SQL`` < ``QUERY_DATA`` < ``GENERATE_CHART``. UI chat để mặc
+            ``GENERATE_SQL`` < ``QUERY_DATA`` < ``GENERATE_ANSWER`` < ``GENERATE_CHART``. UI chat để mặc
             định ``GENERATE_CHART`` (chạy hết); MCP thường dừng sớm ở ``GENERATE_SQL`` hoặc ``QUERY_DATA``.
+            Lưu ý ``GENERATE_ANSWER`` đứng TRƯỚC ``GENERATE_CHART`` vì pha sinh câu trả lời chữ chạy
+            song song với pha sinh biểu đồ, khởi động ngay khi có dữ liệu.
         embedding: Cờ đánh dấu bật RAG/embedding cho phiên, truyền tiếp vào ``LLMService.create``. Lưu ý:
             việc thực sự có dùng embedding để chọn nguồn dữ liệu/schema hay không còn phụ thuộc
             ``settings.TABLE_EMBEDDING_ENABLED`` và cấu hình từng nguồn dữ liệu; mặc định ``False``.

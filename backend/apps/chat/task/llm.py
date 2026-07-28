@@ -1,6 +1,7 @@
 import concurrent
 import json
 import os
+import queue
 import traceback
 import urllib.parse
 import warnings
@@ -33,7 +34,7 @@ from apps.chat.curd.chat import save_question, save_sql_answer, save_sql, \
     get_old_questions, save_analysis_predict_record, rename_chat, get_chart_config, \
     get_chat_chart_data, list_generate_sql_logs, list_generate_chart_logs, start_log, end_log, \
     get_last_execute_sql_error, format_json_data, format_chart_fields, get_chat_brief_generate, get_chat_predict_data, \
-    get_chat_chart_config, trigger_log_error
+    get_chat_chart_config, trigger_log_error, save_answer
 from apps.chat.models.chat_model import ChatQuestion, ChatRecord, Chat, RenameChat, ChatLog, OperationEnum, \
     ChatFinishStep, AxisObj, SystemPromptMessage, HumanPromptMessage, AIPromptMessage
 from apps.data_training.curd.data_training import get_training_template
@@ -62,6 +63,11 @@ executor = ThreadPoolExecutor(max_workers=200)
 
 dynamic_ds_types = [1, 3]
 dynamic_subsql_prefix = 'select * from sqlbot_dynamic_temp_table_'
+
+# Số dòng dữ liệu tối đa nhồi vào prompt của pha answer. SQL đã bị chặn ở 1000 dòng, nhưng nhồi cả
+# 1000 dòng vào prompt chỉ làm chậm và tốn token: câu trả lời chữ chỉ cần nêu vài điểm nổi bật chứ
+# không đọc hết bảng. Cắt bớt ở đây không ảnh hưởng bảng dữ liệu và biểu đồ mà client nhận được.
+ANSWER_MAX_ROWS = 100
 
 session_maker = scoped_session(sessionmaker(bind=engine, class_=Session))
 
@@ -518,6 +524,130 @@ class LLMService:
                                                             token_usage=token_usage)
         self.record = save_analysis_answer(session=_session, record_id=self.record.id,
                                            answer=orjson.dumps({'content': full_analysis_text}).decode())
+
+    def build_answer_prompts(self, fields: Any, data: Optional[List[Dict[str, Any]]]) -> tuple[str, str]:
+        """Dựng sẵn cặp (system, user) prompt cho pha answer, chạy TRONG luồng chính.
+
+        Phải dựng trước khi spawn thread: pha answer chạy song song với pha sinh chart mà cả hai
+        cùng đọc self.chat_question. Dựng trên một bản model_copy() rồi chỉ đưa hai chuỗi đã render
+        sang thread, nên thread không còn chạm vào state dùng chung — hết đường tranh chấp.
+
+        Lấy fields/data từ kết quả thực thi SQL chứ không từ chart config như generate_analysis:
+        lúc này chart chưa sinh xong, và chính việc bỏ phụ thuộc vào chart mới cho phép chạy song song.
+        """
+        answer_question = self.chat_question.model_copy()
+        rows = data if data else []
+        if len(rows) > ANSWER_MAX_ROWS:
+            rows = rows[:ANSWER_MAX_ROWS]
+        answer_question.fields = orjson.dumps(fields if fields else []).decode()
+        answer_question.data = orjson.dumps(prepare_for_orjson(rows)).decode()
+        return answer_question.answer_sys_question(), answer_question.answer_user_question()
+
+    def generate_answer(self, _session: Session, sys_prompt: str, user_prompt: str):
+        """Gọi LLM sinh câu trả lời chữ cuối cùng, yield từng chunk như các pha khác.
+
+        Nhận prompt đã render sẵn thay vì tự dựng (xem build_answer_prompts). Không gán lại
+        self.record sau khi lưu — luồng chart cũng đang gán self.record, ghi đè lẫn nhau sẽ hỏng.
+        """
+        answer_msg: List[Union[BaseMessage, dict[str, Any]]] = [
+            SystemPromptMessage(content=sys_prompt),
+            HumanMessage(content=user_prompt),
+        ]
+
+        self.current_logs[OperationEnum.ANSWER] = start_log(session=_session,
+                                                            ai_modal_id=self.chat_question.ai_modal_id,
+                                                            ai_modal_name=self.chat_question.ai_modal_name,
+                                                            operate=OperationEnum.ANSWER,
+                                                            record_id=self.record.id,
+                                                            full_message=[
+                                                                {'type': msg.type,
+                                                                 'sqlbot_system': getattr(msg, 'sqlbot_system',
+                                                                                          False) is True,
+                                                                 'content': msg.content} for
+                                                                msg
+                                                                in answer_msg])
+        full_thinking_text = ''
+        full_answer_text = ''
+        token_usage = {}
+        res = process_stream(self.llm.stream(answer_msg), token_usage)
+        for chunk in res:
+            if chunk.get('content'):
+                full_answer_text += chunk.get('content')
+            if chunk.get('reasoning_content'):
+                full_thinking_text += chunk.get('reasoning_content')
+            yield chunk
+
+        answer_msg.append(AIMessage(full_answer_text))
+
+        # strip(): LLM hay mở đầu bằng vài dòng trống sau khối reasoning, để nguyên thì client nào
+        # render thẳng cũng bị thụt một khoảng trắng đầu câu trả lời.
+        save_answer(session=_session, record_id=self.record.id,
+                    answer=orjson.dumps({'content': full_answer_text.strip()}).decode())
+        self.current_logs[OperationEnum.ANSWER] = end_log(session=_session,
+                                                          log=self.current_logs[OperationEnum.ANSWER],
+                                                          full_message=[
+                                                              {'type': msg.type,
+                                                               'sqlbot_system': getattr(msg, 'sqlbot_system',
+                                                                                        False) is True,
+                                                               'content': msg.content}
+                                                              for msg in answer_msg],
+                                                          reasoning_content=full_thinking_text,
+                                                          token_usage=token_usage)
+
+    def run_answer_worker(self, sys_prompt: str, user_prompt: str, out_queue: queue.Queue):
+        """Thân thread của pha answer: đẩy từng chunk vào queue cho luồng chính vét ra.
+
+        Mở session riêng vì session_maker là scoped_session (thread-local) — dùng lại session của
+        luồng chính từ thread khác sẽ hỏng. Luôn đặt sentinel 'done' trong finally, nếu không luồng
+        chính sẽ chờ vô hạn ở lần vét cuối.
+        """
+        _session = None
+        try:
+            _session = session_maker()
+            for chunk in self.generate_answer(_session, sys_prompt, user_prompt):
+                out_queue.put(('chunk', chunk))
+        except Exception as e:
+            traceback.print_exc()
+            out_queue.put(('error', e))
+        finally:
+            out_queue.put(('done', None))
+            if _session is not None:
+                session_maker.remove()
+
+    def drain_answer_queue(self, answer_queue: Optional[queue.Queue], state: Dict[str, Any], block: bool):
+        """Vét chunk answer từ queue và phát ra event SSE, xen vào giữa dòng event của pha chart.
+
+        block=False dùng khi đang stream chart: chỉ lấy những gì đã sẵn, không được chặn luồng chart.
+        block=True dùng sau khi chart xong: chờ tới sentinel 'done'.
+
+        Answer lỗi thì chỉ báo bằng event info rồi đi tiếp, KHÔNG phát event 'error': SQL và chart
+        đã chạy xong và vẫn dùng được, giết cả lượt hỏi chỉ vì pha phụ hỏng là mất dữ liệu vô ích.
+        """
+        if answer_queue is None or state.get('done'):
+            return
+        while True:
+            try:
+                kind, payload = answer_queue.get(block=block, timeout=None if block else 0.01)
+            except queue.Empty:
+                return
+            if kind == 'chunk':
+                if payload.get('content'):
+                    state['text'] = state.get('text', '') + payload.get('content')
+                yield 'data:' + orjson.dumps(
+                    {'content': payload.get('content'), 'reasoning_content': payload.get('reasoning_content'),
+                     'type': 'answer-result'}).decode() + '\n\n'
+            elif kind == 'error':
+                SQLBotLogUtil.error(f'Generate answer failed: {payload}')
+                state['failed'] = True
+            else:
+                state['done'] = True
+                if state.get('failed'):
+                    yield 'data:' + orjson.dumps({'type': 'info', 'msg': 'answer failed'}).decode() + '\n\n'
+                else:
+                    yield 'data:' + orjson.dumps({'type': 'info', 'msg': 'answer generated'}).decode() + '\n\n'
+                    yield 'data:' + orjson.dumps(
+                        {'content': state.get('text', '').strip(), 'type': 'answer'}).decode() + '\n\n'
+                return
 
     def generate_predict(self, _session: Session):
         fields = self.get_fields_from_chart(_session)
@@ -1437,6 +1567,28 @@ class LLMService:
                     yield json_result
                 return
 
+            # Sinh câu trả lời chữ SONG SONG với pha sinh chart: answer chỉ cần fields/data (đã có
+            # ngay sau khi chạy SQL) nên không phải chờ chart, và chart cũng không phải chờ answer.
+            # Hai luồng event xen kẽ nhau trên cùng một stream — client phân biệt được vì mỗi event
+            # đã mang sẵn 'type' riêng (answer-result vs chart-result).
+            # Hiện chỉ bật cho nhánh in_chat (SSE của UI); nhánh MCP (markdown / JSON tổng hợp) chưa
+            # dùng tới nên chưa nối vào, tránh đổi hành vi của client MCP đang chạy.
+            answer_queue: Optional[queue.Queue] = None
+            answer_state: Dict[str, Any] = {}
+            if in_chat:
+                answer_sys_prompt, answer_user_prompt = self.build_answer_prompts(result.get('fields'),
+                                                                                  result.get('data'))
+                answer_queue = queue.Queue()
+                executor.submit(self.run_answer_worker, answer_sys_prompt, answer_user_prompt, answer_queue)
+
+            if finish_step.value <= ChatFinishStep.GENERATE_ANSWER.value:
+                yield from self.drain_answer_queue(answer_queue, answer_state, block=True)
+                if in_chat:
+                    yield 'data:' + orjson.dumps({'type': 'finish'}).decode() + '\n\n'
+                if not stream:
+                    yield json_result
+                return
+
             # generate chart
             used_tables_schema, used_tables = self.out_ds_instance.get_db_schema(
                 self.ds.id, self.chat_question.question, embedding=False,
@@ -1455,6 +1607,8 @@ class LLMService:
                     yield 'data:' + orjson.dumps(
                         {'content': chunk.get('content'), 'reasoning_content': chunk.get('reasoning_content'),
                          'type': 'chart-result'}).decode() + '\n\n'
+                    # Vét không chặn: answer chảy ra cùng nhịp với chart thay vì dồn cục ở cuối.
+                    yield from self.drain_answer_queue(answer_queue, answer_state, block=False)
             if in_chat:
                 yield 'data:' + orjson.dumps({'type': 'info', 'msg': 'chart generated'}).decode() + '\n\n'
 
@@ -1484,6 +1638,9 @@ class LLMService:
                         yield markdown_table + '\n\n'
 
             if in_chat:
+                # Chart xong trước answer là chuyện bình thường (chart thường nhanh hơn), nên chặn
+                # chờ nốt ở đây. 'finish' phải là event cuối cùng — client dừng đọc ngay khi thấy nó.
+                yield from self.drain_answer_queue(answer_queue, answer_state, block=True)
                 yield 'data:' + orjson.dumps({'type': 'finish'}).decode() + '\n\n'
             else:
                 # generate picture

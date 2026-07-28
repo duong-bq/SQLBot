@@ -13,6 +13,7 @@ from sqlmodel import SQLModel, Field
 from apps.db.constant import DB
 from apps.template.filter.generator import get_permissions_template
 from apps.template.generate_analysis.generator import get_analysis_template
+from apps.template.generate_answer.generator import get_answer_template
 from apps.template.generate_chart.generator import get_chart_template
 from apps.template.generate_dynamic.generator import get_dynamic_template
 from apps.template.generate_guess_question.generator import get_guess_question_template
@@ -47,12 +48,23 @@ class OperationEnum(Enum):
     FILTER_CUSTOM_PROMPT = '11'
     EXECUTE_SQL = '12'
     GENERATE_PICTURE = '13'
+    ANSWER = '14'
 
 
 class ChatFinishStep(Enum):
+    """Điểm dừng của pipeline. Giá trị số CHÍNH LÀ thứ tự pha, các chốt trong run_task so sánh
+    `finish_step.value <= X` nên chèn pha mới bắt buộc phải đánh số lại cho đúng thứ tự chạy.
+
+    GENERATE_ANSWER nằm giữa QUERY_DATA và GENERATE_CHART vì answer chạy ngay khi có dữ liệu
+    (để câu trả lời chữ về sớm), không phải chờ sinh xong biểu đồ.
+
+    Giá trị chỉ tồn tại trong runtime — không lưu DB, không nhận từ request — nên đánh số lại
+    an toàn, miễn là sửa hết các chỗ đang truyền tường minh (hiện chỉ có apps/mcp/mcp.py).
+    """
     GENERATE_SQL = 1
     QUERY_DATA = 2
-    GENERATE_CHART = 3
+    GENERATE_ANSWER = 3
+    GENERATE_CHART = 4
 
 
 class QuickCommand(Enum):
@@ -118,6 +130,7 @@ class ChatRecord(SQLModel, table=True):
     data: str = Field(sa_column=Column(Text, nullable=True))
     chart_answer: str = Field(sa_column=Column(Text, nullable=True))
     chart: str = Field(sa_column=Column(Text, nullable=True))
+    answer: str = Field(sa_column=Column(Text, nullable=True))
     analysis: str = Field(sa_column=Column(Text, nullable=True))
     predict: str = Field(sa_column=Column(Text, nullable=True))
     predict_data: str = Field(sa_column=Column(Text, nullable=True))
@@ -145,6 +158,7 @@ class ChatRecordResult(BaseModel):
     data: Optional[str] = None
     chart_answer: Optional[str] = None
     chart: Optional[str] = None
+    answer: Optional[str] = None
     analysis: Optional[str] = None
     predict: Optional[str] = None
     predict_data: Optional[str] = None
@@ -306,6 +320,25 @@ class AiModelQuestion(BaseModel):
 
     def analysis_user_question(self):
         return get_analysis_template()['user'].format(fields=self.fields, data=self.data)
+
+    def answer_sys_question(self):
+        """Dựng system prompt cho pha sinh câu trả lời chữ cuối cùng.
+
+        Dùng chung `terminologies`/`custom_prompt` với analysis để câu trả lời hiểu đúng thuật ngữ
+        nghiệp vụ đã khai báo trong workspace.
+        """
+        return get_answer_template()['system'].format(lang=self.lang, terminologies=self.terminologies,
+                                                      custom_prompt=self.custom_prompt,
+                                                      sqlbot_name=self.sqlbot_name)
+
+    def answer_user_question(self):
+        """Dựng user prompt cho pha answer: câu hỏi gốc + SQL đã chạy + fields + data.
+
+        Khác analysis ở chỗ có `question` và `sql`: thiếu câu hỏi thì LLM chỉ mô tả chung chung
+        bảng số chứ không trả lời đúng thứ được hỏi.
+        """
+        return get_answer_template()['user'].format(question=self.question, sql=self.sql,
+                                                    fields=self.fields, data=self.data)
 
     def predict_sys_question(self):
         return get_predict_template()['system'].format(lang=self.lang, custom_prompt=self.custom_prompt,

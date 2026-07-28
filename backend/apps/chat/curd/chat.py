@@ -342,7 +342,8 @@ def get_chat_with_records(session: SessionDep, chart_id: int, current_user: Curr
 
     stmt = (select(ChatRecord.id, ChatRecord.chat_id, ChatRecord.create_time, ChatRecord.finish_time,
                    ChatRecord.question, ChatRecord.sql_answer, ChatRecord.sql, ChatRecord.datasource,
-                   ChatRecord.chart_answer, ChatRecord.chart, ChatRecord.analysis, ChatRecord.predict,
+                   ChatRecord.chart_answer, ChatRecord.chart, ChatRecord.answer, ChatRecord.analysis,
+                   ChatRecord.predict,
                    ChatRecord.datasource_select_answer, ChatRecord.analysis_record_id, ChatRecord.predict_record_id,
                    ChatRecord.regenerate_record_id,
                    ChatRecord.recommended_question, ChatRecord.first_chat,
@@ -369,7 +370,8 @@ def get_chat_with_records(session: SessionDep, chart_id: int, current_user: Curr
     if with_data:
         stmt = select(ChatRecord.id, ChatRecord.chat_id, ChatRecord.create_time, ChatRecord.finish_time,
                       ChatRecord.question, ChatRecord.sql_answer, ChatRecord.sql, ChatRecord.datasource,
-                      ChatRecord.chart_answer, ChatRecord.chart, ChatRecord.analysis, ChatRecord.predict,
+                      ChatRecord.chart_answer, ChatRecord.chart, ChatRecord.answer, ChatRecord.analysis,
+                      ChatRecord.predict,
                       ChatRecord.datasource_select_answer, ChatRecord.analysis_record_id, ChatRecord.predict_record_id,
                       ChatRecord.regenerate_record_id,
                       ChatRecord.recommended_question, ChatRecord.first_chat,
@@ -436,7 +438,7 @@ def get_chat_with_records(session: SessionDep, chart_id: int, current_user: Curr
                                  total_tokens=total_tokens,
                                  question=row.question, sql_answer=row.sql_answer, sql=row.sql,
                                  datasource=row.datasource,
-                                 chart_answer=row.chart_answer, chart=row.chart,
+                                 chart_answer=row.chart_answer, chart=row.chart, answer=row.answer,
                                  analysis=row.analysis, predict=row.predict,
                                  datasource_select_answer=row.datasource_select_answer,
                                  analysis_record_id=row.analysis_record_id, predict_record_id=row.predict_record_id,
@@ -456,7 +458,7 @@ def get_chat_with_records(session: SessionDep, chart_id: int, current_user: Curr
                                  total_tokens=total_tokens,
                                  question=row.question, sql_answer=row.sql_answer, sql=row.sql,
                                  datasource=row.datasource,
-                                 chart_answer=row.chart_answer, chart=row.chart,
+                                 chart_answer=row.chart_answer, chart=row.chart, answer=row.answer,
                                  analysis=row.analysis, predict=row.predict,
                                  datasource_select_answer=row.datasource_select_answer,
                                  analysis_record_id=row.analysis_record_id, predict_record_id=row.predict_record_id,
@@ -494,6 +496,13 @@ def format_record(record: ChatRecordResult):
         _dict['chart_answer'] = _obj.get('reasoning_content')
     if record.chart_reasoning_content and record.chart_reasoning_content.strip() != '':
         _dict['chart_answer'] = record.chart_reasoning_content
+    # Bóc vỏ {"content": ...} để client nhận thẳng chuỗi văn bản, giống cách xử lý analysis bên dưới:
+    # event SSE 'answer' lúc streaming đã trả text thuần, nếu đọc lại lịch sử lại ra JSON bọc thì
+    # client phải viết hai nhánh parse cho cùng một dữ liệu.
+    if record.answer and record.answer.strip() != '' and record.answer.strip()[0] == '{' and \
+            record.answer.strip()[-1] == '}':
+        _obj = orjson.loads(record.answer)
+        _dict['answer'] = _obj.get('content')
     if record.analysis and record.analysis.strip() != '' and record.analysis.strip()[0] == '{' and \
             record.analysis.strip()[-1] == '}':
         _obj = orjson.loads(record.analysis)
@@ -922,6 +931,26 @@ def save_analysis_answer(session: SessionDep, record_id: int, answer: str = '') 
     record = get_chat_record_by_id(session, record_id)
 
     return record
+
+
+def save_answer(session: SessionDep, record_id: int, answer: str = '') -> None:
+    """Lưu câu trả lời chữ cuối cùng vào cột chat_record.answer.
+
+    Cố ý KHÔNG select lại record để trả về (khác save_analysis_answer): hàm này chạy trong thread
+    riêng song song với pha sinh chart, mà thread chart cũng đang gán lại self.record — trả record
+    về đây chỉ tạo cơ hội cho hai luồng ghi đè state của nhau. UPDATE chỉ chạm đúng một cột nên
+    hai luồng ghi đồng thời không tranh chấp ở phía DB.
+    """
+    if not record_id:
+        raise Exception("Record id cannot be None")
+
+    stmt = update(ChatRecord).where(and_(ChatRecord.id == record_id)).values(
+        answer=answer,
+    )
+
+    session.execute(stmt)
+
+    session.commit()
 
 
 def save_predict_answer(session: SessionDep, record_id: int, answer: str) -> ChatRecord:
