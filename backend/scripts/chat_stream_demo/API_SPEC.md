@@ -326,10 +326,10 @@ event `answer`. SQL vẫn dùng được bình thường.
 | `id` | `{type, id}` | **Record ID** — lưu lại để tra log |
 | `question` | `{type, question}` | Câu hỏi đã chuẩn hóa |
 | `sql-result` | `{type, content, reasoning_content}` | Đang sinh SQL, từng token |
-| `info` | `{type, msg: "sql generated"}` | Kết thúc pha sinh SQL |
+| `info` | `{type, msg: "sql generated"}` | Kết thúc **một lượt** sinh SQL — có thể xuất hiện nhiều lần, xem [§6.7](#67-sql-hỏng-không-phải-lúc-nào-cũng-thành-error) |
 | `brief` | `{type, brief}` | Tiêu đề hội thoại LLM tự đặt. *Chỉ có ở câu hỏi đầu tiên* |
-| `sql` | `{type, content}` | **SQL chính thức**, đã qua kiểm duyệt và format |
-| `sql-data` | `{type, content: "execute-success"}` | **Tín hiệu: SQL chạy xong.** Không kèm số liệu |
+| `sql` | `{type, content}` | **SQL chính thức**, đã qua kiểm duyệt và format. *Có thể không có* — xem [§6.7](#67-sql-hỏng-không-phải-lúc-nào-cũng-thành-error) |
+| `sql-data` | `{type, content: "execute-success"}` | **Tín hiệu: SQL chạy xong.** Không kèm số liệu. *Có thể không có* |
 | `answer-result` | `{type, content, reasoning_content}` | ★ **Câu trả lời**, từng token — cộng dồn `content` |
 | `info` | `{type, msg: "answer generated"}` | Kết thúc pha answer |
 | `info` | `{type, msg: "answer failed"}` | Pha answer lỗi — sẽ **không có** event `answer` |
@@ -378,6 +378,9 @@ trên, **trừ `brief`** — tiêu đề chỉ sinh một lần cho cả hội t
 - Không phải câu hỏi đầu tiên → không có `brief`
 - Pha answer lỗi → không có `answer`, chỉ có `info: answer failed`
 - Pipeline lỗi → `error` thay thế toàn bộ phần còn lại
+- SQL sinh hỏng, server sinh lại → **`sql-result` và `info: sql generated` về thành nhiều đợt**
+  (xem [§6.7](#67-sql-hỏng-không-phải-lúc-nào-cũng-thành-error))
+- SQL hỏng hẳn → không có `sql` / `sql-data`, nhưng **vẫn có `answer-result` + `answer` + `finish`**
 
 ### 6.5. Nội dung câu trả lời và câu SQL
 
@@ -407,6 +410,42 @@ trên, **trừ `brief`** — tiêu đề chỉ sinh một lần cho cả hội t
 Nếu pipeline hỏng (LLM lỗi, SQL sai, DB mất kết nối), server gửi `{"type": "error", "content": "..."}`
 rồi đóng stream bình thường — status code vẫn **200**. Client bắt buộc có nhánh xử lý
 `type == "error"`; chỉ kiểm tra HTTP status là không đủ.
+
+Trường `content` của event `error` **không có schema cố định**: khi là văn xuôi, khi là một chuỗi
+JSON `{"message": ..., "traceback": ...}`. Hãy hiển thị nó như text; nếu muốn bóc `message` thì thử
+`JSON.parse` trong `try/catch` rồi fallback về chuỗi gốc.
+
+### 6.7. SQL hỏng không phải lúc nào cũng thành `error`
+
+Khi pha sinh SQL hỏng, server **tự sinh lại một lần** trước khi bỏ cuộc. Việc này **không sinh ra
+event mới nào** — client chỉ thấy pha sinh SQL lặp lại:
+
+```
+sql-result ×N                        ← lần thử 1 (SQL hỏng, sẽ không thành event `sql`)
+info  {"msg":"sql generated"}
+sql-result ×M                        ← lần thử 2, nối tiếp ngay sau
+info  {"msg":"sql generated"}
+```
+
+Hệ quả: **`info: sql generated` có thể đến nhiều lần trong một câu hỏi**, và nội dung `sql-result`
+cộng dồn sẽ chứa cả lần hỏng lẫn lần sau. Nếu UI hiển thị `sql-result` như phần "suy luận" của bot
+thì cứ nối tiếp bình thường, không cần xử lý gì thêm. Nếu muốn tách sạch từng lần thử, hãy dùng
+`info: sql generated` làm mốc cắt.
+
+Nếu lần thử lại vẫn hỏng, thay vì trả `error`, server chuyển sang cho bot **trả lời bằng lời dựa
+trên lịch sử hội thoại**:
+
+```
+answer-result ×K   → answer → finish   ← KHÔNG có sql, KHÔNG có sql-data, KHÔNG có error
+```
+
+Đây là ca thường gặp với câu hỏi tham chiếu ngược (*"trong đó bảng nào tên dài nhất"*): dữ liệu để
+trả lời đã có từ lượt trước, chỉ là không diễn đạt được thành SQL mới. Với client, hệ quả là:
+
+- **`sql` và `sql-data` là tùy chọn**, không phải event chắc chắn có. Đừng chờ `sql-data` mới bắt
+  đầu render `answer-result`, và đừng coi việc thiếu chúng là lỗi.
+- Lý do hỏng **không được gửi qua stream** — nó chỉ nằm trong log server. Người dùng cuối chỉ thấy
+  câu trả lời trong `answer-result`.
 
 ---
 

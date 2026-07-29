@@ -135,6 +135,20 @@ class Settings(BaseSettings):
     # — đổi biến môi trường này thay vì sửa code khi đổi nhà cung cấp.
     LLM_DISABLE_THINKING_EXTRA_BODY: str = '{"chat_template_kwargs": {"enable_thinking": false}}'
 
+    # Số lần sinh lại SQL trong CÙNG một lượt hỏi khi pha SQL hỏng (LLM từ chối, JSON sai, không
+    # trích được tên bảng, SQL chạy lỗi). Lỗi phần lớn là ngẫu nhiên nên thử lại một lần cứu được
+    # đa số ca; đặt 0 để tắt. Mỗi lần thử tốn thêm một vòng gọi LLM nên đừng để cao.
+    LLM_SQL_MAX_RETRY: int = 1
+    # Khi pha SQL hỏng hẳn (hết lượt retry), vẫn cho LLM answer trả lời bằng lời dựa trên lịch sử
+    # hội thoại thay vì trả về event `error` cụt lủn. Người dùng hỏi tiếp dạng "trong đó cái nào
+    # lớn nhất" thường vẫn trả lời được từ dữ liệu lượt trước mà không cần chạy SQL mới.
+    LLM_ANSWER_ON_FAILURE: bool = True
+    # Số lượt hỏi-đáp cũ đưa vào prompt fallback. Mỗi lượt kèm câu hỏi, SQL và một mẩu dữ liệu nên
+    # tốn token nhanh — 3 lượt là đủ cho các câu hỏi tham chiếu ngược ("trong đó", "vừa rồi").
+    LLM_ANSWER_FALLBACK_ROUNDS: int = 3
+    # Số dòng dữ liệu tối đa của MỖI lượt cũ đưa vào prompt fallback.
+    LLM_ANSWER_FALLBACK_ROWS: int = 20
+
     PG_POOL_SIZE: int = 20
     PG_MAX_OVERFLOW: int = 30
     PG_POOL_RECYCLE: int = 3600
@@ -153,6 +167,7 @@ class Settings(BaseSettings):
                      'PG_POOL_PRE_PING',
                      'TABLE_EMBEDDING_ENABLED',
                      'LLM_DISABLE_THINKING',
+                     'LLM_ANSWER_ON_FAILURE',
                      mode='before')
     @classmethod
     def lowercase_bool(cls, v: Any) -> Any:

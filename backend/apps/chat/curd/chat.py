@@ -187,6 +187,58 @@ def get_last_execute_sql_error(session: SessionDep, chart_id: int):
     return None
 
 
+def get_recent_qa_history(session: SessionDep, chat_id: int, exclude_record_id: Optional[int] = None,
+                          rounds: int = 3, max_rows: int = 20) -> str:
+    """Tóm tắt các lượt hỏi-đáp gần nhất của một hội thoại thành chuỗi cho prompt fallback.
+
+    Đọc thẳng từ chat_record thay vì dùng lại `sql_message` của pha sinh SQL: message ở đó là prompt
+    đã render đầy đủ (kèm cả m-schema hàng chục KB) nên nhét vào prompt answer là phí token, mà phần
+    cần lại là dữ liệu đã truy vấn được — thứ `sql_message` không hề có.
+
+    Bỏ qua lượt hiện tại (`exclude_record_id`) và các lượt không có dữ liệu lẫn câu trả lời: chúng
+    chỉ làm loãng ngữ cảnh. Trả về chuỗi rỗng khi không có gì đáng đưa vào, để caller tự quyết định.
+    """
+    stmt = select(ChatRecord.id, ChatRecord.question, ChatRecord.sql, ChatRecord.data,
+                  ChatRecord.answer).where(and_(ChatRecord.chat_id == chat_id))
+    if exclude_record_id:
+        stmt = stmt.where(ChatRecord.id != exclude_record_id)
+    stmt = stmt.order_by(ChatRecord.create_time.desc()).limit(rounds)
+
+    blocks: List[str] = []
+    # Đảo ngược để lượt cũ nhất nằm trên: LLM đọc theo thứ tự thời gian mới hiểu được các câu hỏi
+    # tham chiếu ngược kiểu "trong đó cái nào lớn nhất".
+    for row in reversed(session.execute(stmt).all()):
+        _question, _sql, _data, _answer = row.question, row.sql, row.data, row.answer
+        fields_text = ''
+        rows_text = ''
+        if _data:
+            try:
+                data_obj = orjson.loads(_data)
+                fields_text = orjson.dumps(data_obj.get('fields') or []).decode()
+                _rows = data_obj.get('data') or []
+                rows_text = orjson.dumps(_rows[:max_rows]).decode()
+                if len(_rows) > max_rows:
+                    rows_text += f'\n(còn {len(_rows) - max_rows} dòng nữa không hiển thị)'
+            except Exception:
+                # Dữ liệu cũ hỏng định dạng thì bỏ qua phần data, các phần khác vẫn dùng được.
+                fields_text = ''
+                rows_text = ''
+        if not rows_text and not _answer:
+            continue
+        parts = [f'  <user-question>\n{_question or ""}\n  </user-question>']
+        if _sql:
+            parts.append(f'  <executed-sql>\n{_sql}\n  </executed-sql>')
+        if fields_text:
+            parts.append(f'  <fields>\n{fields_text}\n  </fields>')
+        if rows_text:
+            parts.append(f'  <data>\n{rows_text}\n  </data>')
+        if _answer:
+            parts.append(f'  <bot-answer>\n{_answer}\n  </bot-answer>')
+        blocks.append('<round>\n' + '\n'.join(parts) + '\n</round>')
+
+    return '\n'.join(blocks)
+
+
 def format_json_data(origin_data: dict):
     result = {'fields': origin_data.get('fields') if origin_data.get('fields') else [],
               'fields_info': origin_data.get('fields_info') if origin_data.get('fields_info') else None}

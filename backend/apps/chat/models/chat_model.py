@@ -254,6 +254,9 @@ class AiModelQuestion(BaseModel):
     regenerate_record_id: Optional[int] = None
     sample_data: str = ""
     sqlbot_name: str = "SQLBot"
+    # Dùng cho nhánh answer fallback (pha SQL hỏng hẳn): lý do hỏng và tóm tắt các lượt hỏi-đáp cũ.
+    fallback_reason: str = ""
+    fallback_history: str = ""
 
     def sql_sys_question(self, db_type: Union[str, DB], enable_query_limit: bool = True):
         templates: dict[str, str] = {}
@@ -309,6 +312,15 @@ class AiModelQuestion(BaseModel):
                                                  rule=self.rule, current_time=current_time, error_msg=self.error_msg,
                                                  change_title=change_title)
 
+    def sql_retry_question(self, reason: str):
+        """Dựng user prompt cho lần sinh SQL lại trong cùng một lượt hỏi.
+
+        Cố ý KHÔNG lặp lại schema/rule: message này được append vào cuối `sql_message` đang có, nên
+        toàn bộ ngữ cảnh (system prompt, m-schema, câu hỏi gốc, câu trả lời hỏng của LLM) vẫn nằm
+        ngay phía trên. Nhắc lại chỉ tốn token và làm loãng phần quan trọng nhất là <failure>.
+        """
+        return get_sql_template()['retry_hint'].format(reason=reason)
+
     def chart_sys_question(self):
         templates: dict[str, str] = {
             'system': get_chart_template()['system'].format(lang=self.lang, sqlbot_name=self.sqlbot_name),
@@ -345,6 +357,24 @@ class AiModelQuestion(BaseModel):
         """
         return get_answer_template()['user'].format(question=self.question, sql=self.sql,
                                                     fields=self.fields, data=self.data)
+
+    def answer_fallback_sys_question(self):
+        """System prompt cho pha answer khi lượt này KHÔNG lấy được dữ liệu mới.
+
+        Tách hẳn khỏi `answer_sys_question` thay vì nhét thêm rule vào đó: prompt chính bắt buộc
+        "chỉ dùng số trong <data>", mà nhánh này không có <data> nào — dùng chung sẽ đẩy LLM vào
+        thế phải trả lời "không tìm thấy dữ liệu" kể cả khi lịch sử hội thoại thừa sức trả lời.
+        """
+        return get_answer_template()['fallback_system'].format(lang=self.lang,
+                                                               terminologies=self.terminologies,
+                                                               custom_prompt=self.custom_prompt,
+                                                               sqlbot_name=self.sqlbot_name)
+
+    def answer_fallback_user_question(self):
+        """User prompt cho nhánh fallback: câu hỏi + lý do hỏng + tóm tắt các lượt hỏi-đáp cũ."""
+        return get_answer_template()['fallback_user'].format(question=self.question,
+                                                             reason=self.fallback_reason,
+                                                             history=self.fallback_history)
 
     def predict_sys_question(self):
         return get_predict_template()['system'].format(lang=self.lang, custom_prompt=self.custom_prompt,

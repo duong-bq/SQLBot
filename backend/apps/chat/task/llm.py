@@ -34,7 +34,7 @@ from apps.chat.curd.chat import save_question, save_sql_answer, save_sql, \
     get_old_questions, save_analysis_predict_record, rename_chat, get_chart_config, \
     get_chat_chart_data, list_generate_sql_logs, list_generate_chart_logs, start_log, end_log, \
     get_last_execute_sql_error, format_json_data, format_chart_fields, get_chat_brief_generate, get_chat_predict_data, \
-    get_chat_chart_config, trigger_log_error, save_answer
+    get_chat_chart_config, trigger_log_error, save_answer, get_recent_qa_history
 from apps.chat.models.chat_model import ChatQuestion, ChatRecord, Chat, RenameChat, ChatLog, OperationEnum, \
     ChatFinishStep, AxisObj, SystemPromptMessage, HumanPromptMessage, AIPromptMessage
 from apps.data_training.curd.data_training import get_training_template
@@ -97,6 +97,27 @@ def extract_tables_from_sql(sql: str, ds_type: str = None) -> set:
     except Exception:
         pass
     return tables
+
+
+def _humanize_error(message: str) -> str:
+    """Rút chuỗi lỗi nội bộ về đúng phần người đọc hiểu được, bỏ traceback.
+
+    Các `SingleMessageError` trong file này không thống nhất định dạng: chỗ raise chuỗi thuần, chỗ
+    raise JSON `{"message": ..., "traceback": ...}`. Hàm này gom cả hai về một dạng để prompt
+    fallback không bị dính traceback — LLM đọc thấy traceback là chép nguyên thuật ngữ kỹ thuật
+    vào câu trả lời cho người dùng cuối.
+    """
+    if not message:
+        return ''
+    text = message.strip()
+    if text.startswith('{'):
+        try:
+            obj = orjson.loads(text)
+            if isinstance(obj, dict) and obj.get('message'):
+                return str(obj['message'])
+        except Exception:
+            pass
+    return text
 
 
 class LLMService:
@@ -540,6 +561,27 @@ class LLMService:
         answer_question.data = orjson.dumps(prepare_for_orjson(rows)).decode()
         return answer_question.answer_sys_question(), answer_question.answer_user_question()
 
+    def build_answer_fallback_prompts(self, _session: Session, reason: str) -> tuple[str, str]:
+        """Dựng cặp prompt cho pha answer khi lượt này KHÔNG lấy được dữ liệu mới.
+
+        Thay dữ liệu vừa truy vấn (không có) bằng tóm tắt các lượt hỏi-đáp cũ. Phần lớn câu hỏi làm
+        pha SQL gãy là câu tham chiếu ngược ("trong đó bảng nào dài nhất") — dữ liệu để trả lời đã
+        nằm sẵn ở lượt trước, chỉ là không diễn đạt được thành SQL mới.
+
+        `reason` được rút gọn về đúng thông điệp cho người đọc: chuỗi lỗi nội bộ hay là JSON bọc
+        traceback, nhét nguyên vào prompt chỉ làm LLM chép lại thuật ngữ kỹ thuật vào câu trả lời.
+        """
+        answer_question = self.chat_question.model_copy()
+        answer_question.fallback_reason = _humanize_error(reason)
+        answer_question.fallback_history = get_recent_qa_history(
+            session=_session,
+            chat_id=self.record.chat_id,
+            exclude_record_id=self.record.id,
+            rounds=settings.LLM_ANSWER_FALLBACK_ROUNDS,
+            max_rows=settings.LLM_ANSWER_FALLBACK_ROWS,
+        )
+        return answer_question.answer_fallback_sys_question(), answer_question.answer_fallback_user_question()
+
     def generate_answer(self, _session: Session, sys_prompt: str, user_prompt: str):
         """Gọi LLM sinh câu trả lời chữ cuối cùng, yield từng chunk như các pha khác.
 
@@ -912,11 +954,20 @@ class LLMService:
         if _error:
             raise _error
 
-    def generate_sql(self, _session: Session):
+    def generate_sql(self, _session: Session, retry_reason: Optional[str] = None):
+        """Sinh SQL, yield từng chunk. `retry_reason` khác None nghĩa là đang sinh lại trong cùng lượt.
+
+        Lần retry chỉ append một message ngắn nêu lý do hỏng chứ không dựng lại prompt đầy đủ: câu
+        hỏi gốc và câu trả lời hỏng của LLM vẫn nằm trong `self.sql_message` từ lần trước, nên model
+        có đủ ngữ cảnh để tự sửa. Dựng lại từ đầu vừa tốn token vừa khiến model lặp lại đúng lỗi cũ.
+        """
         # append current question
-        self.sql_message.append(HumanMessage(
-            self.chat_question.sql_user_question(current_time=datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-                                                 change_title=self.change_title)))
+        if retry_reason:
+            self.sql_message.append(HumanMessage(self.chat_question.sql_retry_question(retry_reason)))
+        else:
+            self.sql_message.append(HumanMessage(
+                self.chat_question.sql_user_question(current_time=datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                                                     change_title=self.change_title)))
 
         self.current_logs[OperationEnum.GENERATE_SQL] = start_log(session=_session,
                                                                   ai_modal_id=self.chat_question.ai_modal_id,
@@ -1424,132 +1475,185 @@ class LLMService:
             if not connected:
                 raise SQLBotDBConnectionError('Connect DB failed')
 
-            # generate sql
-            sql_res = self.generate_sql(_session)
-            full_sql_text = ''
-            for chunk in sql_res:
-                full_sql_text += chunk.get('content')
-                if in_chat:
-                    yield 'data:' + orjson.dumps(
-                        {'content': chunk.get('content'), 'reasoning_content': chunk.get('reasoning_content'),
-                         'type': 'sql-result'}).decode() + '\n\n'
-            if in_chat:
-                yield 'data:' + orjson.dumps({'type': 'info', 'msg': 'sql generated'}).decode() + '\n\n'
-            # filter sql
-            SQLBotLogUtil.info(full_sql_text)
+            # Pha SQL (sinh → kiểm tra → chạy) hỏng vì nhiều lý do phần lớn là ngẫu nhiên: LLM trả
+            # JSON sai định dạng, từ chối vì hiểu nhầm câu hỏi, sinh ra SQL không parse được bảng
+            # nào, hoặc SQL chạy lỗi trên DB. Thử lại tại chỗ với thông báo lỗi đưa ngược vào hội
+            # thoại cứu được đa số ca mà không cần người dùng hỏi lại.
+            #
+            # Hết lượt thử vẫn hỏng thì KHÔNG ném lỗi ra ngoài nữa: chuyển sang nhánh answer
+            # fallback ở khối except. Câu hỏi làm gãy pha SQL thường là câu tham chiếu ngược
+            # ("trong đó bảng nào tên dài nhất") — dữ liệu để trả lời đã có từ lượt trước, chỉ là
+            # không diễn đạt được thành SQL mới, nên trả về event `error` là phí một câu trả lời
+            # hoàn toàn khả thi.
+            max_sql_retry = max(0, settings.LLM_SQL_MAX_RETRY)
+            sql_attempt = 0
+            retry_reason: Optional[str] = None
+            degraded_reason: Optional[str] = None
+            result: Optional[Dict[str, Any]] = None
+            tables = None
+            chart_type = None
+            _data = None
 
-            chart_type = self.get_chart_type_from_sql_answer(full_sql_text)
-
-            # return title
-            if self.change_title:
-                llm_brief = self.get_brief_from_sql_answer(full_sql_text)
-                llm_brief_generated = bool(llm_brief)
-                if llm_brief_generated or (self.chat_question.question and self.chat_question.question.strip() != ''):
-                    save_brief = llm_brief if (llm_brief and llm_brief != '') else self.chat_question.question.strip()[
-                                                                                   :20]
-                    brief = rename_chat(session=_session,
-                                        rename_object=RenameChat(id=self.get_record().chat_id,
-                                                                 brief=save_brief, brief_generate=llm_brief_generated))
+            while True:
+                try:
+                    # generate sql
+                    sql_res = self.generate_sql(_session, retry_reason=retry_reason)
+                    full_sql_text = ''
+                    for chunk in sql_res:
+                        full_sql_text += chunk.get('content')
+                        if in_chat:
+                            yield 'data:' + orjson.dumps(
+                                {'content': chunk.get('content'),
+                                 'reasoning_content': chunk.get('reasoning_content'),
+                                 'type': 'sql-result'}).decode() + '\n\n'
                     if in_chat:
-                        yield 'data:' + orjson.dumps({'type': 'brief', 'brief': brief}).decode() + '\n\n'
+                        yield 'data:' + orjson.dumps({'type': 'info', 'msg': 'sql generated'}).decode() + '\n\n'
+                    # filter sql
+                    SQLBotLogUtil.info(full_sql_text)
+
+                    chart_type = self.get_chart_type_from_sql_answer(full_sql_text)
+
+                    # return title
+                    # Chỉ đặt tiêu đề ở lần thử đầu: lần retry đặt lại chỉ sinh thêm một event
+                    # `brief` thứ hai cho cùng một hội thoại, client không có cách nào hiểu đúng.
+                    if self.change_title and sql_attempt == 0:
+                        llm_brief = self.get_brief_from_sql_answer(full_sql_text)
+                        llm_brief_generated = bool(llm_brief)
+                        if llm_brief_generated or (
+                                self.chat_question.question and self.chat_question.question.strip() != ''):
+                            save_brief = llm_brief if (llm_brief and llm_brief != '') else \
+                                self.chat_question.question.strip()[:20]
+                            brief = rename_chat(session=_session,
+                                                rename_object=RenameChat(id=self.get_record().chat_id,
+                                                                         brief=save_brief,
+                                                                         brief_generate=llm_brief_generated))
+                            if in_chat:
+                                yield 'data:' + orjson.dumps({'type': 'brief', 'brief': brief}).decode() + '\n\n'
+                            if not stream:
+                                json_result['title'] = brief
+
+                    use_dynamic_ds: bool = self.current_assistant and self.current_assistant.type in dynamic_ds_types
+                    is_page_embedded: bool = self.current_assistant and self.current_assistant.type == 4
+                    dynamic_sql_result = None
+                    sqlbot_temp_sql_text = None
+                    assistant_dynamic_sql = None
+                    # row permission
+
+                    sql_operate = OperationEnum.GENERATE_SQL
+                    sql, tables = self.check_sql(session=_session, res=full_sql_text, operate=sql_operate)
+
+                    # 表名安全检查：用 sqlglot 解析真实 SQL，不信任 AI 返回的 tables
+                    actual_tables = extract_tables_from_sql(sql, ds_type=self.ds.type)
+                    if not actual_tables:
+                        raise SingleMessageError(
+                            "SQL parsing failed: unable to extract table names. "
+                            "This may indicate an unsupported SQL syntax or a security issue."
+                        )
+                    allowed_tables = set(self.table_name_list)
+                    unauthorized_tables = actual_tables - allowed_tables
+                    if unauthorized_tables:
+                        raise SingleMessageError(
+                            f"SQL contains unauthorized tables: {', '.join(unauthorized_tables)}. "
+                            f"Allowed tables: {', '.join(allowed_tables)}"
+                        )
+
+                    if ((not self.current_assistant or is_page_embedded) and is_normal_user(
+                            self.current_user)) or use_dynamic_ds:
+                        sql_result = None
+
+                        if use_dynamic_ds:
+                            dynamic_sql_result = self.generate_assistant_dynamic_sql(_session, sql, tables)
+                            sqlbot_temp_sql_text = dynamic_sql_result.get(
+                                'sqlbot_temp_sql_text') if dynamic_sql_result else None
+                        else:
+                            sql_result = self.generate_filter(_session, sql, tables)  # maybe no sql and tables
+
+                        if sql_result:
+                            SQLBotLogUtil.info(sql_result)
+                            sql_operate = OperationEnum.GENERATE_SQL_WITH_PERMISSIONS
+                            sql = self.check_save_sql(session=_session, res=sql_result, operate=sql_operate)
+                        elif dynamic_sql_result and sqlbot_temp_sql_text:
+                            sql_operate = OperationEnum.GENERATE_DYNAMIC_SQL
+                            assistant_dynamic_sql = self.check_save_sql(session=_session, res=sqlbot_temp_sql_text,
+                                                                        operate=sql_operate)
+                        else:
+                            sql = self.check_save_sql(session=_session, res=full_sql_text, operate=sql_operate)
+                    else:
+                        sql = self.check_save_sql(session=_session, res=full_sql_text, operate=sql_operate)
+
+                    SQLBotLogUtil.info('sql: ' + sql)
+
                     if not stream:
-                        json_result['title'] = brief
+                        json_result['sql'] = sql
 
-            use_dynamic_ds: bool = self.current_assistant and self.current_assistant.type in dynamic_ds_types
-            is_page_embedded: bool = self.current_assistant and self.current_assistant.type == 4
-            dynamic_sql_result = None
-            sqlbot_temp_sql_text = None
-            assistant_dynamic_sql = None
-            # row permission
+                    format_sql = sqlparse.format(sql, reindent=True)
+                    if in_chat:
+                        yield 'data:' + orjson.dumps({'content': format_sql, 'type': 'sql'}).decode() + '\n\n'
+                    else:
+                        if stream:
+                            yield f'```sql\n{format_sql}\n```\n\n'
 
-            sql_operate = OperationEnum.GENERATE_SQL
-            sql, tables = self.check_sql(session=_session, res=full_sql_text, operate=sql_operate)
+                    # execute sql
+                    real_execute_sql = sql
+                    if sqlbot_temp_sql_text and assistant_dynamic_sql:
+                        dynamic_sql_result.pop('sqlbot_temp_sql_text')
+                        for origin_table, subsql in dynamic_sql_result.items():
+                            assistant_dynamic_sql = assistant_dynamic_sql.replace(
+                                f'{dynamic_subsql_prefix}{origin_table}', subsql)
+                        real_execute_sql = assistant_dynamic_sql
 
-            # 表名安全检查：用 sqlglot 解析真实 SQL，不信任 AI 返回的 tables
-            actual_tables = extract_tables_from_sql(sql, ds_type=self.ds.type)
-            if not actual_tables:
-                raise SingleMessageError(
-                    "SQL parsing failed: unable to extract table names. "
-                    "This may indicate an unsupported SQL syntax or a security issue."
-                )
-            allowed_tables = set(self.table_name_list)
-            unauthorized_tables = actual_tables - allowed_tables
-            if unauthorized_tables:
-                raise SingleMessageError(
-                    f"SQL contains unauthorized tables: {', '.join(unauthorized_tables)}. "
-                    f"Allowed tables: {', '.join(allowed_tables)}"
-                )
+                    if finish_step.value <= ChatFinishStep.GENERATE_SQL.value:
+                        if in_chat:
+                            yield 'data:' + orjson.dumps({'type': 'finish'}).decode() + '\n\n'
+                        if not stream:
+                            yield json_result
+                        return
 
-            if ((not self.current_assistant or is_page_embedded) and is_normal_user(
-                    self.current_user)) or use_dynamic_ds:
-                sql_result = None
+                    self.current_logs[OperationEnum.EXECUTE_SQL] = start_log(session=_session,
+                                                                             operate=OperationEnum.EXECUTE_SQL,
+                                                                             record_id=self.record.id,
+                                                                             local_operation=True)
+                    result = self.execute_sql(sql=real_execute_sql)
+                    self.current_logs[OperationEnum.EXECUTE_SQL] = end_log(
+                        session=_session,
+                        log=self.current_logs[OperationEnum.EXECUTE_SQL],
+                        full_message={'sql': real_execute_sql, 'count': len(result.get('data'))})
 
-                if use_dynamic_ds:
-                    dynamic_sql_result = self.generate_assistant_dynamic_sql(_session, sql, tables)
-                    sqlbot_temp_sql_text = dynamic_sql_result.get(
-                        'sqlbot_temp_sql_text') if dynamic_sql_result else None
-                else:
-                    sql_result = self.generate_filter(_session, sql, tables)  # maybe no sql and tables
+                    _data = DataFormat.convert_large_numbers_in_object_array(result.get('data'))
+                    _data = DataFormat.normalize_qualified_sql_column_keys_in_object_array(_data)
+                    result["data"] = _data
 
-                if sql_result:
-                    SQLBotLogUtil.info(sql_result)
-                    sql_operate = OperationEnum.GENERATE_SQL_WITH_PERMISSIONS
-                    sql = self.check_save_sql(session=_session, res=sql_result, operate=sql_operate)
-                elif dynamic_sql_result and sqlbot_temp_sql_text:
-                    sql_operate = OperationEnum.GENERATE_DYNAMIC_SQL
-                    assistant_dynamic_sql = self.check_save_sql(session=_session, res=sqlbot_temp_sql_text,
-                                                                operate=sql_operate)
-                else:
-                    sql = self.check_save_sql(session=_session, res=full_sql_text, operate=sql_operate)
-            else:
-                sql = self.check_save_sql(session=_session, res=full_sql_text, operate=sql_operate)
-
-            SQLBotLogUtil.info('sql: ' + sql)
-
-            if not stream:
-                json_result['sql'] = sql
-
-            format_sql = sqlparse.format(sql, reindent=True)
-            if in_chat:
-                yield 'data:' + orjson.dumps({'content': format_sql, 'type': 'sql'}).decode() + '\n\n'
-            else:
-                if stream:
-                    yield f'```sql\n{format_sql}\n```\n\n'
-
-            # execute sql
-            real_execute_sql = sql
-            if sqlbot_temp_sql_text and assistant_dynamic_sql:
-                dynamic_sql_result.pop('sqlbot_temp_sql_text')
-                for origin_table, subsql in dynamic_sql_result.items():
-                    assistant_dynamic_sql = assistant_dynamic_sql.replace(f'{dynamic_subsql_prefix}{origin_table}',
-                                                                          subsql)
-                real_execute_sql = assistant_dynamic_sql
-
-            if finish_step.value <= ChatFinishStep.GENERATE_SQL.value:
-                if in_chat:
-                    yield 'data:' + orjson.dumps({'type': 'finish'}).decode() + '\n\n'
-                if not stream:
-                    yield json_result
-                return
-
-            self.current_logs[OperationEnum.EXECUTE_SQL] = start_log(session=_session,
-                                                                     operate=OperationEnum.EXECUTE_SQL,
-                                                                     record_id=self.record.id, local_operation=True)
-            result = self.execute_sql(sql=real_execute_sql)
-            self.current_logs[OperationEnum.EXECUTE_SQL] = end_log(session=_session,
-                                                                   log=self.current_logs[OperationEnum.EXECUTE_SQL],
-                                                                   full_message={'sql': real_execute_sql,
-                                                                                 'count': len(result.get('data'))})
-
-            _data = DataFormat.convert_large_numbers_in_object_array(result.get('data'))
-            _data = DataFormat.normalize_qualified_sql_column_keys_in_object_array(_data)
-            result["data"] = _data
-
-            self.save_sql_data(session=_session, data_obj=result)
-            if in_chat:
-                yield 'data:' + orjson.dumps({'content': 'execute-success', 'type': 'sql-data'}).decode() + '\n\n'
-            if not stream:
-                json_result['data'] = get_chat_chart_data(_session, self.record.id)
+                    self.save_sql_data(session=_session, data_obj=result)
+                    if in_chat:
+                        yield 'data:' + orjson.dumps(
+                            {'content': 'execute-success', 'type': 'sql-data'}).decode() + '\n\n'
+                    if not stream:
+                        json_result['data'] = get_chat_chart_data(_session, self.record.id)
+                except (SingleMessageError, SQLBotDBError, ParseSQLResultError, SQLBotDBConnectionError) as e:
+                    reason = _humanize_error(str(e))
+                    # Mất kết nối DB thì sinh lại SQL không cứu được gì — bỏ qua thẳng sang hạ cấp.
+                    can_retry = not isinstance(e, SQLBotDBConnectionError)
+                    if can_retry and sql_attempt < max_sql_retry:
+                        sql_attempt += 1
+                        retry_reason = reason
+                        # Cố ý không phát event SSE nào cho lần sinh lại: hợp đồng stream giữ nguyên
+                        # như trước, client không phải biết tới khái niệm retry. Dấu vết nằm ở log.
+                        SQLBotLogUtil.warning(
+                            f'SQL phase failed (attempt {sql_attempt}/{max_sql_retry}), retrying: {reason}')
+                        continue
+                    # Hết lượt thử. Chỉ hạ cấp khi client thực sự chờ pha answer: nhánh MCP và các
+                    # finish_step dừng sớm vẫn cần nhận lỗi thật để giữ nguyên hợp đồng cũ.
+                    if not (in_chat and settings.LLM_ANSWER_ON_FAILURE
+                            and finish_step.value >= ChatFinishStep.GENERATE_ANSWER.value):
+                        raise
+                    degraded_reason = str(e)
+                    # Cố ý KHÔNG gọi save_error: giao diện web hiện khối lỗi đỏ với mọi record có
+                    # chat_record.error khác rỗng, mà lượt này sắp có câu trả lời tử tế. Lý do hỏng
+                    # vẫn nằm đủ trong log ở dòng dưới để truy vết.
+                    SQLBotLogUtil.warning(f'SQL phase failed after {sql_attempt} retry, '
+                                          f'falling back to answer-only: {reason}')
+                    break
+                break
 
             if finish_step.value <= ChatFinishStep.QUERY_DATA.value:
                 if stream:
@@ -1585,12 +1689,22 @@ class LLMService:
             answer_queue: Optional[queue.Queue] = None
             answer_state: Dict[str, Any] = {}
             if in_chat:
-                answer_sys_prompt, answer_user_prompt = self.build_answer_prompts(result.get('fields'),
-                                                                                  result.get('data'))
+                if degraded_reason:
+                    # Lượt này không có dữ liệu mới: trả lời dựa trên lịch sử hội thoại.
+                    # Không phát event riêng cho nhánh này: với client, lượt hạ cấp chỉ khác lượt
+                    # bình thường ở chỗ thiếu `sql` / `sql-data`, còn lại vẫn answer-result → answer
+                    # → finish như cũ.
+                    answer_sys_prompt, answer_user_prompt = self.build_answer_fallback_prompts(_session,
+                                                                                               degraded_reason)
+                else:
+                    answer_sys_prompt, answer_user_prompt = self.build_answer_prompts(result.get('fields'),
+                                                                                      result.get('data'))
                 answer_queue = queue.Queue()
                 executor.submit(self.run_answer_worker, answer_sys_prompt, answer_user_prompt, answer_queue)
 
-            if finish_step.value <= ChatFinishStep.GENERATE_ANSWER.value:
+            # Nhánh hạ cấp không có SQL lẫn dữ liệu nên mọi pha sau answer (biểu đồ, phân tích) đều
+            # vô nghĩa — dừng ngay tại đây bất kể finish_step yêu cầu đi xa tới đâu.
+            if degraded_reason or finish_step.value <= ChatFinishStep.GENERATE_ANSWER.value:
                 yield from self.drain_answer_queue(answer_queue, answer_state, block=True)
                 if in_chat:
                     yield 'data:' + orjson.dumps({'type': 'finish'}).decode() + '\n\n'

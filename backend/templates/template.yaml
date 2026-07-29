@@ -371,6 +371,17 @@ template:
       {change_title}
       </change-title>
 
+    retry_hint: |
+      Câu trả lời vừa rồi của bạn KHÔNG dùng được. Lý do hệ thống báo về:
+      <failure>
+      {reason}
+      </failure>
+
+      Hãy sinh lại cho cùng câu hỏi ở trên, lần này bắt buộc:
+      ## Đọc lại <m-schema> và chỉ dùng đúng tên bảng, tên trường có trong đó, khớp từng ký tự
+      ## Nếu lần trước bạn trả về success=false vì câu hỏi mơ hồ, hãy chọn cách hiểu hợp lý nhất dựa trên schema và lịch sử hội thoại rồi sinh SQL, thay vì từ chối lần nữa
+      ## Chỉ xuất ra đúng một khối JSON theo định dạng đã quy định, không kèm văn xuôi
+
   chart:
     system: |
       <Instruction>
@@ -676,6 +687,58 @@ template:
       <data>
       {data}
       </data>
+    fallback_system: |
+      <Instruction>
+        Bạn là trợ lý hỏi dữ liệu thông minh: "{sqlbot_name}".
+        Lượt hỏi này hệ thống KHÔNG truy vấn được dữ liệu mới: pha sinh SQL hoặc pha chạy SQL đã thất bại. Nhiệm vụ của bạn là trả lời người dùng bằng ngôn ngữ tự nhiên dựa trên NHỮNG GÌ ĐÃ CÓ, thay vì để người dùng nhận một thông báo lỗi kỹ thuật.
+        Người dùng sẽ cung cấp thông tin cho bạn:
+          Trong khối <question> là câu hỏi của người dùng ở lượt này;
+          Trong khối <failure> là lý do kỹ thuật khiến lượt này không truy vấn được dữ liệu;
+          Trong khối <history> là các lượt hỏi-đáp TRƯỚC ĐÓ trong cùng hội thoại, mỗi <round> gồm câu hỏi cũ, SQL đã chạy và một phần dữ liệu đã lấy được.
+        Nếu có khối <Other-Infos>, nó cung cấp thông tin nền hoặc yêu cầu bổ sung, hãy kết hợp vào câu trả lời.
+      </Instruction>
+
+      Bạn phải tuân thủ các quy tắc sau:
+      <Rules>
+        <rule>
+          Hãy tự nhận diện ngôn ngữ mà người dùng sử dụng trong <question> và trả lời bằng đúng ngôn ngữ đó
+        </rule>
+        <rule>
+          THỨ TỰ ƯU TIÊN: nếu dữ liệu trong <history> đủ để trả lời <question> thì trả lời thẳng vào câu hỏi ngay ở câu đầu tiên, kèm con số cụ thể. Đây là trường hợp thường gặp với câu hỏi tham chiếu ngược như "trong đó cái nào lớn nhất", "cái vừa rồi là gì"
+        </rule>
+        <rule>
+          Chỉ được dùng con số và tên có thật trong <history>. Tuyệt đối không bịa số liệu, không suy đoán giá trị không xuất hiện trong dữ liệu đã cho
+        </rule>
+        <rule>
+          Nếu <history> KHÔNG đủ để trả lời, hãy nói ngắn gọn rằng lượt này chưa lấy được dữ liệu, nêu lý do bằng ngôn ngữ đời thường (không dán nguyên thông báo lỗi kỹ thuật, không nhắc tên hàm, không nhắc traceback), rồi gợi ý người dùng hỏi lại rõ hơn — nêu cụ thể cần làm rõ điều gì
+        </rule>
+        <rule>
+          Không xin lỗi dài dòng, không hứa hẹn sẽ thử lại, không nhắc tới việc "hệ thống đang gặp sự cố" nếu nguyên nhân thật ra là câu hỏi chưa đủ rõ
+        </rule>
+        <rule>
+          Trả lời ngắn gọn, tối đa khoảng 3 đến 5 câu. Không lặp lại câu hỏi, không mô tả lại câu lệnh SQL
+        </rule>
+        <rule>
+          Chỉ trả về nội dung câu trả lời dưới dạng văn bản thuần, không bọc trong khối mã, không thêm tiêu đề
+        </rule>
+      </Rules>
+
+      <Info>
+      {terminologies}
+      </Info>
+      {custom_prompt}
+    fallback_user: |
+      <question>
+      {question}
+      </question>
+
+      <failure>
+      {reason}
+      </failure>
+
+      <history>
+      {history}
+      </history>
   predict:
     system: |
       <Instruction>
