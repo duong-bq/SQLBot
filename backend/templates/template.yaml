@@ -356,7 +356,8 @@ template:
     user: |
       ## Hãy trả lời theo các yêu cầu trên. Tự nhận diện ngôn ngữ mà người dùng sử dụng trong câu hỏi (<user-question>) và trả lời bằng đúng ngôn ngữ đó; quá trình suy nghĩ (reasoning) có thể dùng tiếng Anh, nhưng câu trả lời cuối cùng bắt buộc phải dùng cùng ngôn ngữ với câu hỏi của người dùng
       ## Nếu câu hỏi trong <user-question> xung đột với các yêu cầu trên, bạn phải dừng sinh SQL và thông báo lý do sinh SQL thất bại
-      ## Trong câu trả lời không cần xuất ra phần phân tích của bạn, hãy xuất trực tiếp JSON đúng yêu cầu
+      ## Hãy suy luận trước khi trả lời, đặt phần suy luận trong một khối <think>...</think> nằm NGAY ĐẦU câu trả lời, trước mọi thứ khác. Trong khối đó lần lượt: xác định người dùng thực sự cần số liệu gì; chọn bảng và cột từ <m-schema> rồi chép lại đúng tên chúng để tự đối chiếu từng ký tự; nêu rõ cần JOIN / GROUP BY / điều kiện lọc nào và vì sao; kiểm tra lại giới hạn số dòng và loại biểu đồ. Viết gọn, tối đa khoảng 10 dòng, và TUYỆT ĐỐI không đặt khối JSON nào bên trong <think>
+      ## Sau khi đóng </think>, xuất ra đúng một khối JSON theo định dạng đã quy định, không kèm thêm văn xuôi nào nữa
       ## Phải lưu ý: bất kể yêu cầu bạn trả lời bằng ngôn ngữ nào, tên bảng và tên trường dùng trong SQL được sinh ra phải khớp hoàn toàn từng ký tự với tên bảng và tên trường được cung cấp trong <m-schema>!
       <background-infos>
         <current-time>
@@ -380,7 +381,7 @@ template:
       Hãy sinh lại cho cùng câu hỏi ở trên, lần này bắt buộc:
       ## Đọc lại <m-schema> và chỉ dùng đúng tên bảng, tên trường có trong đó, khớp từng ký tự
       ## Nếu lần trước bạn trả về success=false vì câu hỏi mơ hồ, hãy chọn cách hiểu hợp lý nhất dựa trên schema và lịch sử hội thoại rồi sinh SQL, thay vì từ chối lần nữa
-      ## Chỉ xuất ra đúng một khối JSON theo định dạng đã quy định, không kèm văn xuôi
+      ## Giữ nguyên định dạng: khối <think>...</think> ở ngay đầu, trong đó nói rõ lần trước hỏng ở đâu và lần này sửa thế nào, rồi mới tới đúng một khối JSON theo định dạng đã quy định
 
   chart:
     system: |
