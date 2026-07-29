@@ -393,6 +393,22 @@ def get_chat_with_records(session: SessionDep, chart_id: int, current_user: Curr
     analysis_alias_log = aliased(ChatLog)
     predict_alias_log = aliased(ChatLog)
 
+    def latest_log_id(operate: OperationEnum):
+        """Id của bản ghi ChatLog mới nhất ứng với một thao tác của bản ghi hỏi đáp đang xét.
+
+        Cần thiết vì một record có thể có NHIỀU log cùng operate: pha sinh SQL được thử lại khi lần
+        đầu hỏng, mỗi lần gọi LLM ghi một log riêng (giữ nguyên để không mất token usage). Nếu join
+        thẳng theo pid + operate, mỗi log thừa nhân đôi luôn cả dòng ChatRecord và giao diện hiện
+        một lượt hỏi thành hai.
+
+        Lấy log mới nhất chứ không phải log đầu tiên: `sql_answer` lưu trên record cũng là của lần
+        thử cuối, hai thứ phải khớp nhau.
+        """
+        inner = aliased(ChatLog)
+        return (select(func.max(inner.id))
+                .where(and_(inner.pid == ChatRecord.id, inner.type == TypeEnum.CHAT, inner.operate == operate))
+                .correlate(ChatRecord).scalar_subquery())
+
     stmt = (select(ChatRecord.id, ChatRecord.chat_id, ChatRecord.create_time, ChatRecord.finish_time,
                    ChatRecord.question, ChatRecord.sql_answer, ChatRecord.sql, ChatRecord.datasource,
                    ChatRecord.chart_answer, ChatRecord.chart, ChatRecord.answer, ChatRecord.analysis,
@@ -406,18 +422,25 @@ def get_chat_with_records(session: SessionDep, chart_id: int, current_user: Curr
                    analysis_alias_log.reasoning_content.label('analysis_reasoning_content'),
                    predict_alias_log.reasoning_content.label('predict_reasoning_content')
                    )
+    # Chỉ rõ vế trái của join: các subquery `latest_log_id` cũng tham chiếu ChatRecord nên
+    # SQLAlchemy không tự suy được FROM nào là gốc.
+    .select_from(ChatRecord)
     .outerjoin(sql_alias_log, and_(sql_alias_log.pid == ChatRecord.id,
                                    sql_alias_log.type == TypeEnum.CHAT,
-                                   sql_alias_log.operate == OperationEnum.GENERATE_SQL))
+                                   sql_alias_log.operate == OperationEnum.GENERATE_SQL,
+                                   sql_alias_log.id == latest_log_id(OperationEnum.GENERATE_SQL)))
     .outerjoin(chart_alias_log, and_(chart_alias_log.pid == ChatRecord.id,
                                      chart_alias_log.type == TypeEnum.CHAT,
-                                     chart_alias_log.operate == OperationEnum.GENERATE_CHART))
+                                     chart_alias_log.operate == OperationEnum.GENERATE_CHART,
+                                     chart_alias_log.id == latest_log_id(OperationEnum.GENERATE_CHART)))
     .outerjoin(analysis_alias_log, and_(analysis_alias_log.pid == ChatRecord.id,
                                         analysis_alias_log.type == TypeEnum.CHAT,
-                                        analysis_alias_log.operate == OperationEnum.ANALYSIS))
+                                        analysis_alias_log.operate == OperationEnum.ANALYSIS,
+                                        analysis_alias_log.id == latest_log_id(OperationEnum.ANALYSIS)))
     .outerjoin(predict_alias_log, and_(predict_alias_log.pid == ChatRecord.id,
                                        predict_alias_log.type == TypeEnum.CHAT,
-                                       predict_alias_log.operate == OperationEnum.PREDICT_DATA))
+                                       predict_alias_log.operate == OperationEnum.PREDICT_DATA,
+                                       predict_alias_log.id == latest_log_id(OperationEnum.PREDICT_DATA)))
     .where(and_(ChatRecord.create_by == current_user.id, ChatRecord.chat_id == chart_id)).order_by(
         ChatRecord.create_time))
     if with_data:
@@ -540,7 +563,11 @@ def format_record(record: ChatRecordResult):
     if record.sql_answer and record.sql_answer.strip() != '' and record.sql_answer.strip()[0] == '{' and \
             record.sql_answer.strip()[-1] == '}':
         _obj = orjson.loads(record.sql_answer)
-        _dict['sql_answer'] = _obj.get('reasoning_content')
+        # Rơi về `content` khi không có `reasoning_content`: thinking đã tắt trên toàn hệ thống nên
+        # khóa đó luôn rỗng, mà cột sql_answer thực chất chỉ lưu {"content": ...}. Không fallback thì
+        # khối "suy luận" trên UI trống trơn, và với lượt hỏi bị hạ cấp thì đây là chỗ DUY NHẤT còn
+        # nhìn thấy được câu SQL model đã sinh.
+        _dict['sql_answer'] = _obj.get('reasoning_content') or _obj.get('content')
     if record.sql_reasoning_content and record.sql_reasoning_content.strip() != '':
         _dict['sql_answer'] = record.sql_reasoning_content
     if record.chart_answer and record.chart_answer.strip() != '' and record.chart_answer.strip()[0] == '{' and \

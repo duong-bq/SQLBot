@@ -43,6 +43,9 @@ export class ChatRecord {
   data?: string | any
   chart_answer?: string
   chart?: string
+  // Câu trả lời bằng lời do LLM sinh sau khi chạy SQL. Khác `analysis`: `answer` sinh tự động ở
+  // mọi lượt hỏi, còn `analysis` chỉ có khi người dùng bấm nút phân tích.
+  answer?: string
   analysis?: string
   analysis_thinking?: string
   predict?: string
@@ -72,6 +75,7 @@ export class ChatRecord {
     data: string | any | undefined,
     chart_answer: string | undefined,
     chart: string | undefined,
+    answer: string | undefined,
     analysis: string | undefined,
     analysis_thinking: string | undefined,
     predict: string | undefined,
@@ -100,6 +104,7 @@ export class ChatRecord {
     data?: string | any,
     chart_answer?: string,
     chart?: string,
+    answer?: string,
     analysis?: string,
     analysis_thinking?: string,
     predict?: string,
@@ -127,6 +132,7 @@ export class ChatRecord {
     this.data = data
     this.chart_answer = chart_answer
     this.chart = chart
+    this.answer = answer
     this.analysis = analysis
     this.analysis_thinking = analysis_thinking
     this.predict = predict
@@ -271,6 +277,7 @@ const toChatRecord = (data?: any): ChatRecord | undefined => {
     data.data,
     data.chart_answer,
     data.chart,
+    data.answer,
     data.analysis,
     data.analysis_thinking,
     data.predict,

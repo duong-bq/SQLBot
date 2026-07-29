@@ -3,6 +3,7 @@ import ChartComponent from '@/views/chat/component/ChartComponent.vue'
 import type { ChatMessage } from '@/api/chat.ts'
 import { computed, nextTick, ref } from 'vue'
 import type { ChartTypes } from '@/views/chat/component/BaseChart.ts'
+import { buildTableChartFromFields } from '@/views/chat/component/fallbackChart.ts'
 import { useI18n } from 'vue-i18n'
 
 const props = withDefaults(
@@ -23,6 +24,19 @@ const props = withDefaults(
 
 const { t } = useI18n()
 
+/** Tên các cột của kết quả SQL. `record.data` khi là chuỗi JSON, khi đã là object nên phải xử lý cả hai. */
+const dataFields = computed<Array<string> | undefined>(() => {
+  const raw = props.message?.record?.data
+  if (!raw) {
+    return undefined
+  }
+  try {
+    return (typeof raw === 'string' ? JSON.parse(raw) : raw)?.fields
+  } catch {
+    return undefined
+  }
+})
+
 const chartObject = computed<{
   type: ChartTypes
   title: string
@@ -40,7 +54,8 @@ const chartObject = computed<{
   if (props.message?.record?.chart) {
     return JSON.parse(props.message.record.chart)
   }
-  return {}
+  // Backend đã tắt pha sinh biểu đồ; dựng cấu hình bảng từ tên cột để vẫn vẽ được bảng kết quả.
+  return buildTableChartFromFields(dataFields.value) ?? {}
 })
 
 const xAxis = computed(() => {
@@ -116,9 +131,9 @@ defineExpose({
 </script>
 
 <template>
-  <div v-if="message.record?.chart" class="chart-base-container">
+  <div v-if="message.record?.chart || chartObject?.columns?.length" class="chart-base-container">
     <ChartComponent
-      v-if="message.record.id && data?.length > 0"
+      v-if="message.record?.id && data?.length > 0"
       :id="id ?? 'default_chat_id'"
       ref="chartRef"
       :type="chartType"

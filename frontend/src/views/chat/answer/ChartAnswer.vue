@@ -3,6 +3,7 @@ import BaseAnswer from './BaseAnswer.vue'
 import { Chat, chatApi, ChatInfo, type ChatMessage, ChatRecord, questionApi } from '@/api/chat.ts'
 import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
 import ChartBlock from '@/views/chat/chat-block/ChartBlock.vue'
+import MdComponent from '@/views/chat/component/MdComponent.vue'
 import JSONBig from 'json-bigint'
 
 const props = withDefaults(
@@ -111,8 +112,13 @@ const sendMessage = async () => {
     const reader = response.body.getReader()
     const decoder = new TextDecoder('utf-8')
 
-    let sql_answer = ''
+    // Tách hai nguồn của khối "suy luận": chuỗi thinking thật, và nguyên văn model xuất ra. Thinking
+    // đã tắt trên toàn hệ thống nên `reasoning_content` luôn rỗng — khi đó hiển thị `content` để
+    // khối này không trống. Không cộng gộp cả hai: bật lại thinking thì JSON sẽ dính vào cuối.
+    let sql_reasoning = ''
+    let sql_content = ''
     let chart_answer = ''
+    let answer = ''
 
     let tempResult = ''
 
@@ -188,14 +194,27 @@ const sendMessage = async () => {
                 emits('error', currentRecord.id)
                 break
               case 'sql-result':
-                sql_answer += data.reasoning_content
-                _currentChat.value.records[index.value].sql_answer = sql_answer
+                sql_reasoning += data.reasoning_content ?? ''
+                sql_content += data.content ?? ''
+                _currentChat.value.records[index.value].sql_answer = sql_reasoning || sql_content
                 break
               case 'sql':
                 _currentChat.value.records[index.value].sql = data.content
                 break
               case 'sql-data':
                 getChatData(_currentChat.value.records[index.value].id)
+                break
+              case 'answer-result':
+                // Cộng dồn từng token. Bỏ qua `reasoning_content` của pha này: thinking đã tắt trên
+                // toàn hệ thống nên nó luôn rỗng, và khối suy luận chỉ hiển thị sql_answer.
+                answer += data.content ?? ''
+                _currentChat.value.records[index.value].answer = answer
+                break
+              case 'answer':
+                // Server gửi lại bản gộp sẵn ở cuối pha. Ghi đè bản cộng dồn để phòng trường hợp
+                // mất token giữa chừng.
+                answer = data.content ?? answer
+                _currentChat.value.records[index.value].answer = answer
                 break
               case 'chart-result':
                 chart_answer += data.reasoning_content
@@ -276,6 +295,7 @@ defineExpose({ sendMessage, index: () => index.value, stop })
 
 <template>
   <BaseAnswer v-if="message" :message="message" :reasoning-name="reasoningName" :loading="_loading">
+    <MdComponent v-if="message.record?.answer" :message="message.record.answer" />
     <ChartBlock
       v-model:show-label="showLabel"
       v-model:thousands-separator-list="enableThousandsSeparatorList"

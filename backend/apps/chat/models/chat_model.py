@@ -257,6 +257,10 @@ class AiModelQuestion(BaseModel):
     # Dùng cho nhánh answer fallback (pha SQL hỏng hẳn): lý do hỏng và tóm tắt các lượt hỏi-đáp cũ.
     fallback_reason: str = ""
     fallback_history: str = ""
+    # Danh sách bảng được phép truy vấn. Có mặt để trả lời được câu hỏi về chính datasource ("có bao
+    # nhiêu bảng") — loại câu hỏi mà pha SQL gần như luôn hỏng vì không bảng nghiệp vụ nào chứa
+    # thông tin đó, còn schema thì hệ thống nắm sẵn.
+    fallback_schema: str = ""
 
     def sql_sys_question(self, db_type: Union[str, DB], enable_query_limit: bool = True):
         templates: dict[str, str] = {}
@@ -371,9 +375,10 @@ class AiModelQuestion(BaseModel):
                                                                sqlbot_name=self.sqlbot_name)
 
     def answer_fallback_user_question(self):
-        """User prompt cho nhánh fallback: câu hỏi + lý do hỏng + tóm tắt các lượt hỏi-đáp cũ."""
+        """User prompt cho nhánh fallback: câu hỏi + lý do hỏng + danh sách bảng + các lượt hỏi-đáp cũ."""
         return get_answer_template()['fallback_user'].format(question=self.question,
                                                              reason=self.fallback_reason,
+                                                             schema=self.fallback_schema,
                                                              history=self.fallback_history)
 
     def predict_sys_question(self):

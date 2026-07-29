@@ -6,6 +6,7 @@ import { computed, ref, watch } from 'vue'
 import { useClipboard } from '@vueuse/core'
 import { concat, filter, includes, map } from 'lodash-es'
 import type { ChartTypes } from '@/views/chat/component/BaseChart.ts'
+import { buildTableChartFromFields } from '@/views/chat/component/fallbackChart.ts'
 import ICON_BAR from '@/assets/svg/chart/icon_bar_outlined.svg'
 import ICON_COLUMN from '@/assets/svg/chart/icon_dashboard_outlined.svg'
 import ICON_LINE from '@/assets/svg/chart/icon_chart-line.svg'
@@ -134,8 +135,14 @@ const chartObject = computed<{
   if (props.message?.record?.chart) {
     return JSON.parse(props.message.record.chart)
   }
-  return {}
+  // Pha sinh biểu đồ đã tắt ở backend: dựng tạm cấu hình bảng từ tên cột để vẫn xem được dữ liệu.
+  return buildTableChartFromFields(dataObject.value?.fields) ?? {}
 })
+
+// Bản ghi có gì để hiển thị bên dưới thanh công cụ hay không — biểu đồ thật, hoặc bảng dựng tạm.
+const hasDisplayable = computed<boolean>(
+  () => !!props.message?.record?.chart || !!chartObject.value?.columns?.length
+)
 
 const currentChartType = ref<ChartTypes | undefined>(
   props.chatType ?? chartObject.value.type ?? 'table'
@@ -609,7 +616,7 @@ function getBaseAxis() {
       </div>
     </div>
 
-    <template v-if="message?.record?.chart">
+    <template v-if="hasDisplayable">
       <div class="chart-block">
         <DisplayChartBlock
           :id="chartId"

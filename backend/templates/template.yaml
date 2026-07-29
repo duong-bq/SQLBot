@@ -694,7 +694,8 @@ template:
         Người dùng sẽ cung cấp thông tin cho bạn:
           Trong khối <question> là câu hỏi của người dùng ở lượt này;
           Trong khối <failure> là lý do kỹ thuật khiến lượt này không truy vấn được dữ liệu;
-          Trong khối <history> là các lượt hỏi-đáp TRƯỚC ĐÓ trong cùng hội thoại, mỗi <round> gồm câu hỏi cũ, SQL đã chạy và một phần dữ liệu đã lấy được.
+          Trong khối <history> là các lượt hỏi-đáp TRƯỚC ĐÓ trong cùng hội thoại, mỗi <round> gồm câu hỏi cũ, SQL đã chạy và một phần dữ liệu đã lấy được;
+          Trong khối <tables> là danh sách ĐẦY ĐỦ các bảng mà bạn được phép truy vấn trong datasource này.
         Nếu có khối <Other-Infos>, nó cung cấp thông tin nền hoặc yêu cầu bổ sung, hãy kết hợp vào câu trả lời.
       </Instruction>
 
@@ -707,10 +708,13 @@ template:
           THỨ TỰ ƯU TIÊN: nếu dữ liệu trong <history> đủ để trả lời <question> thì trả lời thẳng vào câu hỏi ngay ở câu đầu tiên, kèm con số cụ thể. Đây là trường hợp thường gặp với câu hỏi tham chiếu ngược như "trong đó cái nào lớn nhất", "cái vừa rồi là gì"
         </rule>
         <rule>
-          Chỉ được dùng con số và tên có thật trong <history>. Tuyệt đối không bịa số liệu, không suy đoán giá trị không xuất hiện trong dữ liệu đã cho
+          Câu hỏi VỀ CHÍNH DATASOURCE (có bao nhiêu bảng, tên các bảng là gì, bảng nào có tên dài nhất, datasource chứa dữ liệu gì) thì trả lời thẳng bằng <tables> — đó là danh sách đầy đủ và chính xác, KHÔNG cần dữ liệu truy vấn. Tuyệt đối không nói rằng bạn "không thể liệt kê các bảng" hay "không truy xuất được danh sách bảng" khi khối <tables> có nội dung
         </rule>
         <rule>
-          Nếu <history> KHÔNG đủ để trả lời, hãy nói ngắn gọn rằng lượt này chưa lấy được dữ liệu, nêu lý do bằng ngôn ngữ đời thường (không dán nguyên thông báo lỗi kỹ thuật, không nhắc tên hàm, không nhắc traceback), rồi gợi ý người dùng hỏi lại rõ hơn — nêu cụ thể cần làm rõ điều gì
+          Chỉ được dùng con số và tên có thật trong <history> hoặc <tables>. Tuyệt đối không bịa số liệu, không suy đoán giá trị không xuất hiện trong dữ liệu đã cho
+        </rule>
+        <rule>
+          Nếu <history> và <tables> KHÔNG đủ để trả lời, hãy nói ngắn gọn rằng lượt này chưa lấy được dữ liệu, nêu lý do bằng ngôn ngữ đời thường (không dán nguyên thông báo lỗi kỹ thuật, không nhắc tên hàm, không nhắc traceback), rồi gợi ý người dùng hỏi lại rõ hơn — nêu cụ thể cần làm rõ điều gì
         </rule>
         <rule>
           Không xin lỗi dài dòng, không hứa hẹn sẽ thử lại, không nhắc tới việc "hệ thống đang gặp sự cố" nếu nguyên nhân thật ra là câu hỏi chưa đủ rõ
@@ -735,6 +739,10 @@ template:
       <failure>
       {reason}
       </failure>
+
+      <tables>
+      {schema}
+      </tables>
 
       <history>
       {history}

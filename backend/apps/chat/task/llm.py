@@ -82,20 +82,22 @@ def extract_tables_from_sql(sql: str, ds_type: str = None) -> set:
     loại ra, bước kiểm tra an toàn sẽ coi tên CTE là "bảng chưa được cấp phép" và từ chối MỌI câu
     SQL có WITH. Bảng thật nằm trong thân CTE là các node exp.Table riêng biệt nên vẫn được trích
     xuất — kể cả khi một CTE được build từ bảng chưa cấp phép, bảng đó vẫn bị kiểm tra.
+
+    **NÉM exception khi không parse được**, thay vì nuốt lỗi rồi trả set rỗng như trước. Set rỗng
+    phải mang đúng một nghĩa: "câu SQL này không tham chiếu bảng nào". Nếu gộp cả ca parse hỏng vào
+    đó thì phía gọi buộc phải coi set rỗng là đáng ngờ, và mọi câu SQL hợp lệ nhưng không đọc bảng
+    (vd `SELECT COUNT(*) FROM (SELECT 'a' UNION ALL SELECT 'b') t`) đều bị từ chối oan.
     """
-    tables = set()
     dialect = get_sqlglot_dialect(ds_type)
-    try:
-        statements = sqlglot.parse(sql, dialect=dialect)
-        for stmt in statements:
-            if not stmt:
-                continue
-            cte_names = {cte.alias_or_name for cte in stmt.find_all(exp.CTE)}
-            for table in stmt.find_all(exp.Table):
-                if table.name and table.name not in cte_names:
-                    tables.add(table.name)
-    except Exception:
-        pass
+    statements = [stmt for stmt in sqlglot.parse(sql, dialect=dialect) if stmt]
+    if not statements:
+        raise ValueError('SQL is empty or contains no statement')
+    tables = set()
+    for stmt in statements:
+        cte_names = {cte.alias_or_name for cte in stmt.find_all(exp.CTE)}
+        for table in stmt.find_all(exp.Table):
+            if table.name and table.name not in cte_names:
+                tables.add(table.name)
     return tables
 
 
@@ -570,9 +572,15 @@ class LLMService:
 
         `reason` được rút gọn về đúng thông điệp cho người đọc: chuỗi lỗi nội bộ hay là JSON bọc
         traceback, nhét nguyên vào prompt chỉ làm LLM chép lại thuật ngữ kỹ thuật vào câu trả lời.
+
+        Kèm luôn danh sách bảng: nhóm câu hỏi về chính datasource ("có bao nhiêu bảng") gần như luôn
+        làm pha SQL gãy vì không bảng nghiệp vụ nào chứa thông tin đó, trong khi câu trả lời nằm sẵn
+        trong schema. Chỉ đưa TÊN bảng chứ không đưa cả m-schema — m-schema nặng vài chục KB và
+        phần cột không giúp gì cho loại câu hỏi này.
         """
         answer_question = self.chat_question.model_copy()
         answer_question.fallback_reason = _humanize_error(reason)
+        answer_question.fallback_schema = '\n'.join(self.table_name_list) if self.table_name_list else ''
         answer_question.fallback_history = get_recent_qa_history(
             session=_session,
             chat_id=self.record.chat_id,
@@ -1543,12 +1551,17 @@ class LLMService:
                     sql, tables = self.check_sql(session=_session, res=full_sql_text, operate=sql_operate)
 
                     # 表名安全检查：用 sqlglot 解析真实 SQL，不信任 AI 返回的 tables
-                    actual_tables = extract_tables_from_sql(sql, ds_type=self.ds.type)
-                    if not actual_tables:
+                    try:
+                        actual_tables = extract_tables_from_sql(sql, ds_type=self.ds.type)
+                    except Exception as parse_error:
                         raise SingleMessageError(
-                            "SQL parsing failed: unable to extract table names. "
-                            "This may indicate an unsupported SQL syntax or a security issue."
+                            f"SQL parsing failed: {parse_error}. "
+                            f"This may indicate an unsupported SQL syntax or a security issue."
                         )
+                    # Parse được nhưng không tham chiếu bảng nào thì cho chạy: loại SQL này (đếm
+                    # trên hằng số, subquery toàn literal…) không đọc được dữ liệu nào nên không có
+                    # gì để rò rỉ. Đây là cách duy nhất trả lời được các câu hỏi về chính schema,
+                    # vd "datasource có bao nhiêu bảng".
                     allowed_tables = set(self.table_name_list)
                     unauthorized_tables = actual_tables - allowed_tables
                     if unauthorized_tables:
