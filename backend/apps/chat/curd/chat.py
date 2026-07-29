@@ -6,6 +6,7 @@ import orjson
 import sqlparse
 from sqlalchemy import and_, select, update
 from sqlalchemy import desc, func
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import aliased
 
 from apps.chat.models.chat_model import Chat, ChatRecord, CreateChat, ChatInfo, RenameChat, ChatQuestion, ChatLog, \
@@ -787,6 +788,80 @@ def create_chat(session: SessionDep, current_user: CurrentUser, create_chat_obj:
         chat_info.records.append(_record)
 
     return chat_info
+
+
+def resolve_chat_id(session: SessionDep, current_user: CurrentUser, chat_id: Union[int, str],
+                    datasource_id: Optional[int] = None) -> int:
+    """Quy ``chat_id`` client gửi lên về id nội bộ (int) của bảng chat, tạo hội thoại nếu chưa có.
+
+    Hai nguồn gọi có hai kiểu chat_id khác nhau:
+
+    - UI web / MCP gửi **id nội bộ** (int) của hội thoại đã tạo sẵn qua /chat/start → trả về nguyên
+      giá trị đó, không tạo mới.
+    - Hệ thống tích hợp bên ngoài gửi **UUID** tự sinh và không gọi /chat/start → tra theo cột
+      ``chat.external_id``, chưa có thì tạo hội thoại mới (id nội bộ do Identity cấp như bình thường).
+
+    Vì sao không cho đối tác đặt thẳng ``chat.id``: cột đó khai ``Identity(always=True)``, ghi tay
+    vào sẽ phải dùng OVERRIDING SYSTEM VALUE rồi setval lại sequence, và chỉ cần quên một nhịp là
+    UI web sinh trùng khóa chính. Tách hẳn sang ``external_id`` bỏ được toàn bộ rủi ro đó.
+
+    Tra ``external_id`` trên phạm vi TOÀN HỆ THỐNG chứ không lọc theo người dùng: nếu lọc, một UUID
+    trùng với hội thoại của người khác sẽ lọt xuống nhánh tạo mới rồi chết vì vi phạm UNIQUE. Trả
+    về id thật để decorator ``require_permissions(type='chat')`` từ chối đúng bản chất — không có
+    quyền, chứ không phải lỗi hệ thống.
+    """
+    # Chuỗi toàn chữ số vẫn hiểu là id nội bộ: client JS hay gửi số dưới dạng string, còn UUID thì
+    # không bao giờ toàn chữ số nên không sợ nhập nhằng.
+    if isinstance(chat_id, int) or (isinstance(chat_id, str) and chat_id.strip().isdigit()):
+        return int(chat_id)
+
+    external_id = chat_id.strip() if isinstance(chat_id, str) else ''
+    if not external_id or len(external_id) > 64:
+        raise Exception("chat_id must be a non-empty string of at most 64 characters")
+
+    chat: Chat | None = session.query(Chat).filter(Chat.external_id == external_id).first()
+    if chat:
+        return chat.id
+
+    if not datasource_id:
+        raise Exception(
+            f"Chat with id {external_id} does not exist. Provide 'datasource' in the request body "
+            f"so it can be created automatically."
+        )
+
+    ds = session.get(CoreDatasource, datasource_id)
+    if not ds:
+        raise Exception(f"Datasource with id {datasource_id} not found")
+    if ds.oid != current_user.oid:
+        raise Exception(f"Datasource with id {datasource_id} does not belong to current workspace")
+
+    now = datetime.datetime.now()
+    chat = Chat(
+        external_id=external_id,
+        oid=current_user.oid if current_user.oid is not None else 1,
+        create_time=now,
+        create_by=current_user.id,
+        brief=now.strftime("%Y-%m-%d %H:%M:%S"),
+        chat_type='chat',
+        datasource=datasource_id,
+        engine_type=ds.type_name,
+        origin=0,
+        brief_generate=False,
+    )
+    session.add(chat)
+    try:
+        session.commit()
+    except IntegrityError:
+        # Hai câu hỏi đầu tiên cùng một UUID chạy song song: bản thua cuộc rollback rồi dùng lại
+        # hội thoại bản thắng vừa tạo, thay vì ném lỗi ra cho đối tác.
+        session.rollback()
+        chat = session.query(Chat).filter(Chat.external_id == external_id).first()
+        if not chat:
+            raise
+        return chat.id
+    session.refresh(chat)
+
+    return chat.id
 
 
 def save_question(session: SessionDep, current_user: CurrentUser, question: ChatQuestion) -> ChatRecord:

@@ -53,7 +53,15 @@ def deepcopy_ignore_extra(src, dest):
     return dest
 
 
-def extract_nested_json(text):
+def scan_json_candidates(text) -> list:
+    """Quét text, trả về MỌI chuỗi con là JSON hợp lệ (cân bằng ngoặc), theo thứ tự xuất hiện.
+
+    Quét thủ công thay vì regex vì JSON lồng nhau nhiều tầng không biểu diễn được bằng regex.
+    Mỗi ứng viên đều được orjson.loads() để xác thực, nên chuỗi trả về chắc chắn parse được.
+
+    Tách riêng khỏi extract_nested_json để bên gọi chọn được ứng viên theo schema thay vì
+    buộc phải lấy cái đầu tiên — xem extract_json_object.
+    """
     stack = []
     start_index = -1
     results = []
@@ -75,9 +83,54 @@ def extract_nested_json(text):
                         pass
             else:
                 stack = []  # 括号不匹配则重置
+    return results
+
+
+def extract_nested_json(text):
+    """Trả về chuỗi JSON hợp lệ ĐẦU TIÊN tìm được trong text, hoặc None.
+
+    Giữ nguyên hành vi cũ cho các chỗ gọi chưa cần lọc theo schema. Với đáp án của LLM thì nên
+    dùng extract_json_object: khi model viết thêm văn xuôi (hoặc reasoning tràn sang content),
+    mẩu JSON đầu tiên thường là bản nháp giữa chừng chứ không phải đáp án cuối.
+    """
+    results = scan_json_candidates(text)
     if len(results) > 0 and results[0]:
         return results[0]
     return None
+
+
+def extract_json_object(text, required_keys=None, prefer_last: bool = True) -> Optional[str]:
+    """Trích JSON đáp án của LLM, chọn theo schema thay vì theo vị trí.
+
+    Lý do tồn tại: LLM hay kèm văn xuôi quanh JSON, và khi tắt thinking thì phần suy luận có thể
+    rơi thẳng vào content. Trong đoạn suy luận đó thường có sẵn JSON nháp hợp lệ (vd mảng tên bảng
+    ["ten_bang"]), nên lấy "cái đầu tiên" sẽ bốc nhầm bản nháp rồi nổ khi truy cập khóa.
+
+    required_keys: tập khóa bắt buộc — chỉ nhận dict chứa đủ các khóa này, nhờ đó loại được mảng
+    và các object lạc. prefer_last=True vì đáp án chính thức luôn nằm sau phần suy luận.
+
+    Trả về chuỗi JSON (chưa parse) để bên gọi tự orjson.loads, hoặc None nếu không có ứng viên nào
+    khớp. Không có ứng viên khớp thì KHÔNG lùi về ứng viên bất kỳ — thà báo lỗi rõ còn hơn chạy
+    tiếp với dữ liệu sai.
+    """
+    candidates = scan_json_candidates(text)
+    if not candidates:
+        return None
+
+    if required_keys:
+        matched = []
+        for candidate in candidates:
+            try:
+                parsed = orjson.loads(candidate)
+            except Exception:
+                continue
+            if isinstance(parsed, dict) and all(key in parsed for key in required_keys):
+                matched.append(candidate)
+        candidates = matched
+
+    if not candidates:
+        return None
+    return candidates[-1] if prefer_last else candidates[0]
 
 def string_to_numeric_hash(text: str, bits: Optional[int] = 64) -> int:
     hash_bytes = hashlib.sha256(text.encode()).digest()

@@ -4,7 +4,12 @@ Mục đích: nhìn tận mắt sự khác nhau về **dữ liệu trả về** 
 endpoint chat dành cho MCP client, trên cùng một câu hỏi và cùng một datasource.
 
 > **Cần đặc tả để giao cho đối tác tích hợp?** Xem [`API_SPEC.md`](API_SPEC.md) — tài liệu hoàn
-> chỉnh 5 API của luồng chat thường.
+> chỉnh luồng 3 API dành cho hệ thống bên thứ ba, kèm client tham chiếu
+> [`reference_client.py`](reference_client.py).
+
+> **Số liệu đo trong file này đã cũ** (đo khi còn bật thinking và còn pha sinh biểu đồ). Từ khi
+> tắt thinking mặc định và bỏ pha sinh biểu đồ, một lượt hỏi chỉ còn **2–10 giây** và vài trăm
+> event thay vì hàng nghìn. Giữ lại để đối chiếu mức cải thiện.
 
 Datasource dùng làm demo: **DataLaoCai** (`core_datasource.id = 5`) — thu/chi ngân sách tỉnh Lào Cai.
 
@@ -78,3 +83,8 @@ Mốc thời gian MCP: `Answer ID` 1s → khối SQL 23s → bảng markdown 49s
 > **Lưu ý pha sinh chart hay treo.** Lần chạy đầu tiên bị đứng hẳn ở `chart-result` (LLM rơi vào
 > vòng lặp lặp từ, liên quan thiếu `presence_penalty`). Vì vậy `_common.py` đặt `READ_TIMEOUT=60`:
 > stream im quá 60 giây thì client dừng đọc và ghi chú vào file, thay vì treo vô hạn.
+>
+> **Đã xử lý.** Nguyên nhân gốc là model reasoning kẹt vòng lặp trong lúc thinking: nó lặp mãi một
+> đoạn suy luận cho tới khi cạn token mà không xuất ra `content` nào, khiến pipeline nhận chuỗi
+> rỗng rồi chết với thông báo khó hiểu "SQL answer is not a valid json object". Nay
+> `settings.LLM_DISABLE_THINKING` mặc định tắt thinking, và pha sinh biểu đồ đã bị bỏ hẳn.

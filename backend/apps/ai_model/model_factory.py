@@ -9,6 +9,7 @@ from sqlmodel import Session, select
 
 from apps.ai_model.openai.llm import BaseChatOpenAI
 from apps.system.models.system_model import AiModelDetail
+from common.core.config import settings
 from common.core.db import engine
 from common.utils.crypto import sqlbot_decrypt
 from common.utils.utils import prepare_model_arg
@@ -145,6 +146,38 @@ class LLMFactory:
     return config """
 
 
+def apply_disable_thinking(additional_params: Dict[str, Any]) -> Dict[str, Any]:
+    """Tiêm cờ tắt thinking vào extra_body của tham số gọi LLM.
+
+    Tách thành hàm riêng vì phải hợp nhất (merge) chứ không ghi đè: admin có thể đã cấu hình
+    extra_body cho việc khác trong màn hình quản trị model, ghi đè thẳng sẽ nuốt mất cấu hình đó.
+    Cấu hình do admin đặt được ưu tiên — nếu admin đã tự khai enable_thinking thì tôn trọng.
+
+    Trả về dict mới thay vì sửa tại chỗ, vì LLMConfig khai frozen=True và được lru_cache theo hash.
+    """
+    if not settings.LLM_DISABLE_THINKING:
+        return additional_params
+
+    try:
+        payload = json.loads(settings.LLM_DISABLE_THINKING_EXTRA_BODY)
+    except Exception:
+        # Cấu hình sai định dạng thì bỏ qua, không được để chết cả pipeline chỉ vì một biến env.
+        return additional_params
+    if not isinstance(payload, dict):
+        return additional_params
+
+    merged = dict(additional_params or {})
+    extra_body = dict(merged.get('extra_body') or {})
+    for key, value in payload.items():
+        if key not in extra_body:
+            extra_body[key] = value
+        elif isinstance(extra_body[key], dict) and isinstance(value, dict):
+            # Gộp một tầng cho trường hợp chat_template_kwargs đã có sẵn khóa khác.
+            extra_body[key] = {**value, **extra_body[key]}
+    merged['extra_body'] = extra_body
+    return merged
+
+
 async def get_default_config(custom_model_id: Optional[int] = None) -> LLMConfig:
     with Session(engine) as session:
         db_model: AiModelDetail | None = None
@@ -165,6 +198,8 @@ async def get_default_config(custom_model_id: Optional[int] = None) -> LLMConfig
                                      "key" in item and "val" in item}
             except Exception:
                 pass
+
+        additional_params = apply_disable_thinking(additional_params)
         if not db_model.api_domain.startswith("http"):
             db_model.api_domain = await sqlbot_decrypt(db_model.api_domain)
             if db_model.api_key:

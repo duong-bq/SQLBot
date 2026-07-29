@@ -97,6 +97,12 @@ class ChatLog(SQLModel, table=True):
 class Chat(SQLModel, table=True):
     __tablename__ = "chat"
     id: Optional[int] = Field(sa_column=Column(BigInteger, Identity(always=True), primary_key=True))
+    # Khóa đối chiếu do hệ thống tích hợp bên ngoài tự sinh (UUID). Tách khỏi `id` vì `id` khai
+    # Identity(always=True) — không thể để client tự đặt mà không phá sequence của giao diện web.
+    # UNIQUE để hai lần hỏi cùng UUID chắc chắn rơi vào đúng một hội thoại; NULL với hội thoại tạo
+    # từ UI web (Postgres cho phép nhiều NULL trong ràng buộc UNIQUE).
+    external_id: Optional[str] = Field(default=None, max_length=64, nullable=True,
+                                       unique=True, index=True)
     oid: Optional[int] = Field(sa_column=Column(BigInteger, nullable=True, default=1))
     create_time: datetime = Field(sa_column=Column(DateTime(timezone=False), nullable=True))
     create_by: int = Field(sa_column=Column(BigInteger, nullable=True))
@@ -404,10 +410,20 @@ class ChatStart(BaseModel):
 
 class ChatQuestionBase(BaseModel):
     question: str = Body(description='用户提问')
-    chat_id: int = Body(description='会话ID')
+    # Hai kiểu cùng tồn tại: UI web gửi id nội bộ (int), hệ thống tích hợp bên ngoài gửi UUID (str).
+    # Cả hai được quy về id nội bộ ở `resolve_chat_id` trước khi vào pipeline.
+    chat_id: Union[int, str] = Body(description='会话ID：内部数字ID，或外部系统自生成的UUID')
+    # Hệ thống tích hợp bên ngoài tự sinh chat_id và không gọi /chat/start, nên phải kèm datasource
+    # để server tự tạo hội thoại ở lần hỏi đầu. Hội thoại đã tồn tại thì trường này bị bỏ qua —
+    # datasource gắn cứng lúc tạo, đổi giữa chừng sẽ làm hỏng ngữ cảnh multi-turn.
+    datasource: Optional[int] = Body(description='数据源ID，仅当 chat_id 尚不存在、需要自动创建会话时必填',
+                                     default=None)
 
 
 class McpQuestion(ChatQuestionBase):
+    # Giữ nguyên hợp đồng cũ của MCP: client MCP luôn lấy chat_id từ /mcp/access_token nên chỉ có
+    # id nội bộ, không cần (và không nên) nới lỏng sang UUID.
+    chat_id: int = Body(description='会话ID')
     token: str = Body(description='token')
     stream: Optional[bool] = Body(description='是否流式输出，默认为true开启, 关闭false则返回JSON对象', default=True)
     lang: Optional[str] = Body(description='语言：zh-CN|zh-TW|en|ko-KR', default='zh-CN')

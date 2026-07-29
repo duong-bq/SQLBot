@@ -125,6 +125,16 @@ class Settings(BaseSettings):
     DEFAULT_REASONING_CONTENT_START: str = '<think>'
     DEFAULT_REASONING_CONTENT_END: str = '</think>'
 
+    # Tắt pha thinking của LLM. Model reasoning (Qwen3…) có thể kẹt trong vòng lặp suy luận, đốt
+    # hết ngân sách token mà không xuất ra content nào — pipeline nhận chuỗi rỗng rồi chết. Tắt
+    # thinking khiến model trả thẳng đáp án, nhanh và ổn định hơn nhiều cho tác vụ sinh SQL.
+    # Đặt False nếu muốn bật lại thinking cho model hỗ trợ tốt.
+    LLM_DISABLE_THINKING: bool = True
+    # Payload tiêm vào extra_body để tắt thinking. Mặc định theo chuẩn vLLM/SGLang
+    # (chat_template_kwargs.enable_thinking). API kiểu DashScope dùng thẳng {"enable_thinking": false}
+    # — đổi biến môi trường này thay vì sửa code khi đổi nhà cung cấp.
+    LLM_DISABLE_THINKING_EXTRA_BODY: str = '{"chat_template_kwargs": {"enable_thinking": false}}'
+
     PG_POOL_SIZE: int = 20
     PG_MAX_OVERFLOW: int = 30
     PG_POOL_RECYCLE: int = 3600
@@ -142,6 +152,7 @@ class Settings(BaseSettings):
                      'PARSE_REASONING_BLOCK_ENABLED',
                      'PG_POOL_PRE_PING',
                      'TABLE_EMBEDDING_ENABLED',
+                     'LLM_DISABLE_THINKING',
                      mode='before')
     @classmethod
     def lowercase_bool(cls, v: Any) -> Any:

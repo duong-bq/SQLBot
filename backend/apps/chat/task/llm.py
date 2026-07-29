@@ -55,7 +55,7 @@ from common.core.deps import CurrentAssistant, CurrentUser
 from common.error import SingleMessageError, SQLBotDBError, ParseSQLResultError, SQLBotDBConnectionError
 from common.utils.data_format import DataFormat
 from common.utils.locale import I18n, I18nHelper
-from common.utils.utils import SQLBotLogUtil, extract_nested_json, prepare_for_orjson
+from common.utils.utils import SQLBotLogUtil, extract_nested_json, extract_json_object, prepare_for_orjson
 
 warnings.filterwarnings("ignore")
 
@@ -200,12 +200,9 @@ class LLMService:
             ds if isinstance(ds, AssistantOutDsSchema) else CoreDatasource(**ds.model_dump())) if ds else None
         self.chat_question = chat_question
         self.config = config
-        if no_reasoning:
-            # only work while using qwen
-            if self.config.additional_params:
-                if self.config.additional_params.get('extra_body'):
-                    if self.config.additional_params.get('extra_body').get('enable_thinking'):
-                        del self.config.additional_params['extra_body']['enable_thinking']
+        # Việc tắt thinking đã chuyển về apply_disable_thinking() trong model_factory (áp dụng cho
+        # mọi lời gọi LLM, điều khiển bằng settings.LLM_DISABLE_THINKING). Tham số no_reasoning giữ
+        # lại cho tương thích chữ ký nhưng không còn tác dụng.
 
         self.chat_question.ai_modal_id = self.config.model_id
         self.chat_question.ai_modal_name = self.config.model_name
@@ -841,7 +838,8 @@ class LLMService:
                                                                          reasoning_content=full_thinking_text,
                                                                          token_usage=token_usage)
 
-            json_str = extract_nested_json(full_text)
+            # Đáp án chọn datasource luôn có khóa 'id'; lọc theo khóa để không bốc nhầm JSON nháp.
+            json_str = extract_json_object(full_text, required_keys=('id',))
             if json_str is None:
                 raise SingleMessageError(f'Cannot parse datasource from answer: {full_text}')
             ds = orjson.loads(json_str)
@@ -1130,12 +1128,22 @@ class LLMService:
                                                                   token_usage=token_usage)
 
     def check_sql(self, session: Session, res: str, operate: OperationEnum) -> tuple[str, Optional[list]]:
-        json_str = extract_nested_json(res)
+        # Lọc theo khóa 'success' thay vì lấy JSON đầu tiên: nếu model kèm văn xuôi (hoặc reasoning
+        # tràn vào content khi tắt thinking), mẩu JSON đầu thường là bản nháp trong lúc suy luận.
+        json_str = extract_json_object(res, required_keys=('success',))
 
         log = self.current_logs[operate]
 
         if json_str is None:
             trigger_log_error(session, log)
+            # Content rỗng là ca riêng: model kẹt trong vòng suy luận và không xuất ra gì cả. Báo
+            # tách bạch, nếu không thông báo sẽ cụt ngủn ("...json object:\n") che mất nguyên nhân.
+            if not res or res.strip() == '':
+                raise SingleMessageError(orjson.dumps(
+                    {'message': 'LLM returned empty content while generating SQL',
+                     'traceback': 'LLM returned empty content while generating SQL. '
+                                  'The model likely exhausted its budget on reasoning tokens '
+                                  'without emitting an answer.'}).decode())
             raise SingleMessageError(orjson.dumps({'message': 'SQL answer is not a valid json object',
                                                    'traceback': "SQL answer is not a valid json object:\n" + res}).decode())
         sql: str
@@ -1163,7 +1171,7 @@ class LLMService:
 
     @staticmethod
     def get_chart_type_from_sql_answer(res: str) -> Optional[str]:
-        json_str = extract_nested_json(res)
+        json_str = extract_json_object(res, required_keys=('success',))
         if json_str is None:
             return None
 
@@ -1183,7 +1191,7 @@ class LLMService:
 
     @staticmethod
     def get_brief_from_sql_answer(res: str) -> Optional[str]:
-        json_str = extract_nested_json(res)
+        json_str = extract_json_object(res, required_keys=('success',))
         if json_str is None:
             return None
 
@@ -1211,7 +1219,8 @@ class LLMService:
 
     def check_save_chart(self, session: Session, res: str) -> Dict[str, Any]:
 
-        json_str = extract_nested_json(res)
+        # Cấu hình biểu đồ luôn có khóa 'type' — dùng nó để bỏ qua JSON nháp trong phần suy luận.
+        json_str = extract_json_object(res, required_keys=('type',))
         if json_str is None:
             raise SingleMessageError(orjson.dumps({'message': 'Cannot parse chart config from answer',
                                                    'traceback': "Cannot parse chart config from answer:\n" + res}).decode())
@@ -1349,18 +1358,18 @@ class LLMService:
             yield chunk
 
     def run_task_async(self, in_chat: bool = True, stream: bool = True,
-                       finish_step: ChatFinishStep = ChatFinishStep.GENERATE_CHART, return_img: bool = True):
+                       finish_step: ChatFinishStep = ChatFinishStep.GENERATE_ANSWER, return_img: bool = True):
         if in_chat:
             stream = True
         self.future = executor.submit(self.run_task_cache, in_chat, stream, finish_step, return_img)
 
     def run_task_cache(self, in_chat: bool = True, stream: bool = True,
-                       finish_step: ChatFinishStep = ChatFinishStep.GENERATE_CHART, return_img: bool = True):
+                       finish_step: ChatFinishStep = ChatFinishStep.GENERATE_ANSWER, return_img: bool = True):
         for chunk in self.run_task(in_chat, stream, finish_step, return_img):
             self.chunk_list.append(chunk)
 
     def run_task(self, in_chat: bool = True, stream: bool = True,
-                 finish_step: ChatFinishStep = ChatFinishStep.GENERATE_CHART, return_img: bool = True):
+                 finish_step: ChatFinishStep = ChatFinishStep.GENERATE_ANSWER, return_img: bool = True):
         json_result: Dict[str, Any] = {'success': True}
         _session = None
         try:

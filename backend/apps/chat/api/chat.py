@@ -5,7 +5,7 @@ from typing import Optional, List
 
 import orjson
 import pandas as pd
-from fastapi import APIRouter, HTTPException, Path
+from fastapi import APIRouter, Depends, HTTPException, Path
 from fastapi.responses import StreamingResponse
 from sqlalchemy import and_, select
 from starlette.responses import JSONResponse
@@ -14,7 +14,7 @@ from apps.chat.curd.chat import delete_chat_with_user, get_chart_data_with_user,
     list_chats, get_chat_with_records, create_chat, get_chat_chart_data, get_chat_predict_data, \
     get_chat_with_records_with_data, get_chat_record_by_id, \
     format_json_data, format_json_list_data, get_chart_config, list_recent_questions, rename_chat_with_user, \
-    get_chat_log_history, get_chart_data_with_user_live
+    get_chat_log_history, get_chart_data_with_user_live, resolve_chat_id
 from apps.chat.models.chat_model import CreateChat, ChatRecord, RenameChat, ChatQuestion, AxisObj, QuickCommand, \
     ChatInfo, Chat, ChatFinishStep, ChatQuestionBase, SimpleChat
 from apps.chat.task.llm import LLMService
@@ -412,26 +412,56 @@ def find_base_question(record_id: int, session: SessionDep):
         return rec_question
 
 
+async def resolve_chat_for_question(
+    session: SessionDep,
+    current_user: CurrentUser,
+    request_question: ChatQuestionBase,
+) -> int:
+    """Dependency: quy ``chat_id`` client gửi lên (UUID hoặc id nội bộ) về id nội bộ, tạo hội thoại
+    nếu UUID đó chưa từng xuất hiện.
+
+    Phải là dependency chứ không phải code trong thân route, vì decorator
+    ``require_permissions(type='chat')`` kiểm tra chat_id có nằm trong workspace hay không TRƯỚC khi
+    thân route chạy — hội thoại chưa tồn tại sẽ bị chặn ngay ở đó, và một UUID thì không bao giờ
+    khớp danh sách id nội bộ. FastAPI resolve dependency trước khi gọi route (tức trước cả decorator),
+    nên id trả về từ đây chính là thứ decorator đem đi kiểm quyền.
+
+    Khai lại ``request_question`` cùng tên và cùng kiểu với route để FastAPI dùng chung một body,
+    không đòi client gửi hai lần.
+    """
+    return resolve_chat_id(
+        session=session,
+        current_user=current_user,
+        chat_id=request_question.chat_id,
+        datasource_id=request_question.datasource,
+    )
+
+
 @router.post("/question", summary=f"{PLACEHOLDER_PREFIX}ask_question")
 @require_permissions(
-    permission=SqlbotPermission(type="chat", keyExpression="request_question.chat_id")
+    permission=SqlbotPermission(type="chat", keyExpression="resolved_chat_id")
 )
 async def question_answer(
     session: SessionDep,
     current_user: CurrentUser,
     request_question: ChatQuestionBase,
     current_assistant: CurrentAssistant,
+    resolved_chat_id: int = Depends(resolve_chat_for_question),
 ):
     """
-    Endpoint cốt lõi: người dùng đặt câu hỏi, hệ thống sinh SQL + biểu đồ và trả kết quả dạng streaming (SSE).
+    Endpoint cốt lõi: người dùng đặt câu hỏi, hệ thống sinh SQL và trả kết quả dạng streaming (SSE).
 
-    Body ``ChatQuestionBase`` gồm ``chat_id`` và ``question``. Có kiểm tra quyền trên hội thoại
-    (``require_permissions`` type='chat'). Bật ``embedding=True`` để dùng RAG (thuật ngữ + SQL mẫu).
+    Body ``ChatQuestionBase`` gồm ``chat_id``, ``question`` và ``datasource`` (chỉ cần khi ``chat_id``
+    là UUID chưa tồn tại — xem ``resolve_chat_for_question``). Có kiểm tra quyền trên hội thoại
+    (``require_permissions`` type='chat', đọc trên ``resolved_chat_id`` chứ không phải chat_id thô).
+    Bật ``embedding=True`` để dùng RAG (thuật ngữ + SQL mẫu).
     Toàn bộ pipeline Text-to-SQL nằm trong ``LLMService.run_task`` (apps/chat/task/llm.py).
     Hỗ trợ quick command trong câu hỏi (regenerate / analysis / predict) — xem ``question_answer_inner``.
+
+    Pipeline dừng ở pha sinh câu trả lời bằng lời; pha sinh biểu đồ đã tắt trên toàn hệ thống.
     """
     question = ChatQuestion(
-        chat_id=request_question.chat_id, question=request_question.question
+        chat_id=resolved_chat_id, question=request_question.question
     )
     return await question_answer_inner(
         session, current_user, question, current_assistant, embedding=True
@@ -445,7 +475,7 @@ async def question_answer_inner(
     current_assistant: Optional[CurrentAssistant] = None,
     in_chat: bool = True,
     stream: bool = True,
-    finish_step: ChatFinishStep = ChatFinishStep.GENERATE_CHART,
+    finish_step: ChatFinishStep = ChatFinishStep.GENERATE_ANSWER,
     embedding: bool = False,
     return_img: bool = True,
 ):
@@ -630,7 +660,7 @@ async def stream_sql(
     current_assistant: Optional[CurrentAssistant] = None,
     in_chat: bool = True,
     stream: bool = True,
-    finish_step: ChatFinishStep = ChatFinishStep.GENERATE_CHART,
+    finish_step: ChatFinishStep = ChatFinishStep.GENERATE_ANSWER,
     embedding: bool = False,
     return_img: bool = True,
 ):
@@ -656,8 +686,10 @@ async def stream_sql(
         stream: Kiểu trả về. ``True`` = ``StreamingResponse`` (trả dần); ``False`` = chạy hết rồi gom mẩu
             kết quả cuối và trả về một ``JSONResponse`` (dùng cho MCP đồng bộ). Lỗi cũng theo hai nhánh này.
         finish_step: "Núm vặn" điểm dừng của pipeline, tăng dần:
-            ``GENERATE_SQL`` < ``QUERY_DATA`` < ``GENERATE_ANSWER`` < ``GENERATE_CHART``. UI chat để mặc
-            định ``GENERATE_CHART`` (chạy hết); MCP thường dừng sớm ở ``GENERATE_SQL`` hoặc ``QUERY_DATA``.
+            ``GENERATE_SQL`` < ``QUERY_DATA`` < ``GENERATE_ANSWER`` < ``GENERATE_CHART``. Mặc định là
+            ``GENERATE_ANSWER``: pha sinh biểu đồ đã bị tắt trên toàn hệ thống vì phía tích hợp chỉ
+            dùng câu trả lời bằng lời, mà pha đó tốn thêm một lượt gọi LLM đắt đỏ. Muốn bật lại biểu
+            đồ thì truyền tường minh ``GENERATE_CHART``. MCP dừng sớm hơn ở ``QUERY_DATA``.
             Lưu ý ``GENERATE_ANSWER`` đứng TRƯỚC ``GENERATE_CHART`` vì pha sinh câu trả lời chữ chạy
             song song với pha sinh biểu đồ, khởi động ngay khi có dữ liệu.
         embedding: Cờ đánh dấu bật RAG/embedding cho phiên, truyền tiếp vào ``LLMService.create``. Lưu ý:
