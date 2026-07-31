@@ -40,6 +40,12 @@ class Settings(BaseSettings):
         list[AnyUrl] | str, BeforeValidator(parse_cors)
     ] = []
 
+    # Mở CORS cho mọi origin. Không khai được bằng BACKEND_CORS_ORIGINS='*' vì kiểu là AnyUrl.
+    # Bật cờ này thì main.py dùng allow_origin_regex='.*' thay cho allow_origins: Starlette luôn
+    # echo lại Origin của request nên vẫn hoạt động với credentials, khác allow_origins=['*'] chỉ
+    # trả literal '*' khi request không có cookie.
+    CORS_ALLOW_ALL_ORIGINS: bool = False
+
     @computed_field  # type: ignore[prop-decorator]
     @property
     def all_cors_origins(self) -> list[str]:
@@ -115,7 +121,20 @@ class Settings(BaseSettings):
 
     # 是否启用SQL查询行数限制，默认值，可被参数配置覆盖
     GENERATE_SQL_QUERY_LIMIT_ENABLED: bool = True
-    GENERATE_SQL_QUERY_HISTORY_ROUND_COUNT: int = 3
+    GENERATE_SQL_QUERY_HISTORY_ROUND_COUNT: int = 5
+    # Trần ký tự cho MỘT câu trả lời của LLM khi đưa vào lịch sử hội thoại. Model đôi khi lặp vô
+    # hạn phần suy luận và xuất hàng chục nghìn ký tự; nhét nguyên vào lịch sử là lượt sau vỡ
+    # context window rồi hỏng vĩnh viễn vì message độc đã nằm trong chuỗi log.
+    LLM_SQL_HISTORY_ANSWER_MAX_CHARS: int = 4000
+    # Trần ký tự cho TOÀN BỘ phần lịch sử phát lại vào prompt sinh SQL. Chặn ở đây thay vì tin vào
+    # số lượt: một lượt hỏi có thể to bất thường, mà m-schema trong system prompt đã ăn sẵn ~24K.
+    LLM_SQL_HISTORY_TOTAL_MAX_CHARS: int = 24000
+    # Chỉ giữ khối JSON của pha sinh SQL khi đưa câu trả lời model vào lịch sử, bỏ phần văn xuôi
+    # suy luận. Vì đã tắt thinking, văn xuôi rơi hết vào `content` và mang theo cả lời tự kiểm điểm
+    # về lần thử hỏng sang các lượt sau — nghi là nguồn nhiễu ngữ cảnh. JSON vẫn chứa nguyên câu SQL
+    # nên các giá trị lọc của lượt trước (năm, giới tính…) không mất. Đây là biến đang được đo bằng
+    # bộ test HĐND; đừng đổi mặc định mà không kèm số liệu.
+    LLM_SQL_HISTORY_JSON_ONLY: bool = False
 
     # 安全配置：是否允许元数据查询（SHOW/DESCRIBE/DESC/EXPLAIN）
     # 默认关闭，防止通过元数据查询泄露数据库结构
@@ -168,6 +187,7 @@ class Settings(BaseSettings):
                      'TABLE_EMBEDDING_ENABLED',
                      'LLM_DISABLE_THINKING',
                      'LLM_ANSWER_ON_FAILURE',
+                     'LLM_SQL_HISTORY_JSON_ONLY',
                      mode='before')
     @classmethod
     def lowercase_bool(cls, v: Any) -> Any:

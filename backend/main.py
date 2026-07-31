@@ -209,7 +209,15 @@ mcp = FastApiMCP(
 mcp.mount(mcp_app)
 
 # Set all CORS enabled origins
-if settings.all_cors_origins:
+if settings.CORS_ALLOW_ALL_ORIGINS:
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origin_regex=".*",
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+elif settings.all_cors_origins:
     app.add_middleware(
         CORSMiddleware,
         allow_origins=settings.all_cors_origins,

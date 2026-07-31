@@ -67,7 +67,32 @@ dynamic_subsql_prefix = 'select * from sqlbot_dynamic_temp_table_'
 # Số dòng dữ liệu tối đa nhồi vào prompt của pha answer. SQL đã bị chặn ở 1000 dòng, nhưng nhồi cả
 # 1000 dòng vào prompt chỉ làm chậm và tốn token: câu trả lời chữ chỉ cần nêu vài điểm nổi bật chứ
 # không đọc hết bảng. Cắt bớt ở đây không ảnh hưởng bảng dữ liệu và biểu đồ mà client nhận được.
+#
+# CẢNH BÁO: cắt dòng mà không nói cho LLM biết đã cắt thì nó đếm số dòng nhận được rồi báo đó là
+# tổng — đo bằng bộ test HĐND: SQL trả 136 dòng, câu trả lời khẳng định "tổng cộng 72 nghị quyết".
+# Vì vậy mọi chỗ cắt dòng phải đi kèm `build_data_scope_note`.
 ANSWER_MAX_ROWS = 100
+
+
+def build_data_scope_note(total_rows: int, sent_rows: int) -> str:
+    """Dựng câu mô tả phạm vi dữ liệu để LLM biết khối <data> có phải toàn bộ kết quả hay không.
+
+    Lý do phải có: pha answer chỉ nhận ANSWER_MAX_ROWS dòng đầu, nhưng prompt lại yêu cầu "chỉ dùng
+    con số có trong <data>". LLM không có cách nào biết mình đang xem bản cắt, nên khi cần một con số
+    tổng nó tự đếm số dòng nhận được — ra đúng bằng số dòng bị cắt còn lại. Đây là lỗi nguy hiểm nhất
+    của pha answer vì SQL hoàn toàn đúng, người dùng không có dấu hiệu nào để nghi ngờ.
+
+    Nêu tổng thật kể cả khi KHÔNG cắt: có tổng cho sẵn thì LLM khỏi phải tự đếm, tránh luôn lỗi cộng
+    sai khi liệt kê (đo được: liệt kê đúng đủ 15 tên nhưng mở đầu viết "gồm 16 cán bộ").
+    """
+    if total_rows <= 0:
+        return 'Truy vấn không trả về dòng dữ liệu nào.'
+    if sent_rows >= total_rows:
+        return (f'Truy vấn trả về tổng cộng {total_rows} dòng. Khối <data> chứa ĐỦ toàn bộ {total_rows} '
+                f'dòng, không bị cắt bớt.')
+    return (f'Truy vấn trả về tổng cộng {total_rows} dòng. Khối <data> CHỈ chứa {sent_rows} dòng đầu '
+            f'tiên, {total_rows - sent_rows} dòng còn lại đã bị cắt bỏ để tiết kiệm ngữ cảnh và KHÔNG '
+            f'được gửi cho bạn.')
 
 session_maker = scoped_session(sessionmaker(bind=engine, class_=Session))
 
@@ -99,6 +124,34 @@ def extract_tables_from_sql(sql: str, ds_type: str = None) -> set:
             if table.name and table.name not in cte_names:
                 tables.add(table.name)
     return tables
+
+
+def _cap_history_answer(text: str) -> str:
+    """Chặn trần độ dài câu trả lời của LLM trước khi đưa vào lịch sử hội thoại.
+
+    Từ khi prompt yêu cầu model suy luận, phần suy luận chỉ nằm ngoài `content` khi model bọc nó
+    trong <think>. Không bọc thì toàn bộ suy luận rơi vào `content`, và đã gặp ca model lặp vô hạn
+    xuất 94.731 ký tự. Nhét nguyên chuỗi đó vào `sql_message` thì lượt kế tiếp phát lại là vỡ
+    context window — và hỏng vĩnh viễn, vì message độc đã được `end_log` lưu vào chuỗi log.
+
+    Mặc định CHỈ cắt theo độ dài. Bật `LLM_SQL_HISTORY_JSON_ONLY` thì rút về riêng khối JSON, bỏ
+    phần văn xuôi suy luận — xem chú thích của biến đó về lý do. Trần độ dài vẫn áp cho cả hai
+    nhánh: khi không tìm được JSON (model chưa xuất ra khối nào thì đã chết giữa stream) thì phải
+    còn đường lùi, và bản thân câu SQL cũng có thể dài bất thường.
+
+    Đừng chọn nhánh nào dựa trên cảm giác: đây là biến phải đo bằng `backend/scripts/eval_text2sql`.
+    Từng thử đo tay 6 lượt hỏi và kết luận sai — khác biệt không có ý nghĩa thống kê (Fisher p≈0.5),
+    chạy lại đúng cấu hình đó còn cho kết quả khác.
+    """
+    stripped = (text or '').strip()
+    if settings.LLM_SQL_HISTORY_JSON_ONLY:
+        json_str = extract_json_object(stripped, required_keys=('success',), prefer_last=True)
+        if json_str:
+            stripped = json_str
+    limit = settings.LLM_SQL_HISTORY_ANSWER_MAX_CHARS
+    if len(stripped) <= limit:
+        return stripped
+    return stripped[:limit] + '\n...[nội dung quá dài, đã cắt bớt]'
 
 
 def _humanize_error(message: str) -> str:
@@ -328,6 +381,7 @@ class LLMService:
 
         if last_sql_messages is not None and len(last_sql_messages) > 0:
             last_rounds = get_last_conversation_rounds(last_sql_messages, rounds=count_limit)
+            last_rounds = trim_history_by_size(last_rounds, settings.LLM_SQL_HISTORY_TOTAL_MAX_CHARS)
 
             for _msg_dict in last_rounds:
                 _msg: BaseMessage
@@ -554,13 +608,18 @@ class LLMService:
 
         Lấy fields/data từ kết quả thực thi SQL chứ không từ chart config như generate_analysis:
         lúc này chart chưa sinh xong, và chính việc bỏ phụ thuộc vào chart mới cho phép chạy song song.
+
+        Tổng số dòng phải đếm TRƯỚC khi cắt và truyền riêng qua `data_scope` — xem
+        `build_data_scope_note` về lý do.
         """
         answer_question = self.chat_question.model_copy()
         rows = data if data else []
-        if len(rows) > ANSWER_MAX_ROWS:
+        total_rows = len(rows)
+        if total_rows > ANSWER_MAX_ROWS:
             rows = rows[:ANSWER_MAX_ROWS]
         answer_question.fields = orjson.dumps(fields if fields else []).decode()
         answer_question.data = orjson.dumps(prepare_for_orjson(rows)).decode()
+        answer_question.data_scope = build_data_scope_note(total_rows, len(rows))
         return answer_question.answer_sys_question(), answer_question.answer_user_question()
 
     def build_answer_fallback_prompts(self, _session: Session, reason: str) -> tuple[str, str]:
@@ -965,17 +1024,31 @@ class LLMService:
     def generate_sql(self, _session: Session, retry_reason: Optional[str] = None):
         """Sinh SQL, yield từng chunk. `retry_reason` khác None nghĩa là đang sinh lại trong cùng lượt.
 
-        Lần retry chỉ append một message ngắn nêu lý do hỏng chứ không dựng lại prompt đầy đủ: câu
-        hỏi gốc và câu trả lời hỏng của LLM vẫn nằm trong `self.sql_message` từ lần trước, nên model
-        có đủ ngữ cảnh để tự sửa. Dựng lại từ đầu vừa tốn token vừa khiến model lặp lại đúng lỗi cũ.
+        Lần retry chỉ thêm một message ngắn nêu lý do hỏng chứ không dựng lại prompt đầy đủ: câu hỏi
+        gốc vẫn nằm trong `self.sql_message`, nên model có đủ ngữ cảnh để tự sửa. Dựng lại từ đầu vừa
+        tốn token vừa khiến model lặp lại đúng lỗi cũ.
+
+        Câu trả lời hỏng và lời nhắc sửa CHỈ nằm trong danh sách `messages` tạm của lần gọi này,
+        không nhập vào `self.sql_message`. Nhờ vậy mỗi lượt hỏi luôn để lại đúng một cặp (câu hỏi,
+        đáp án dùng được) cho các lượt sau — trước đây một lượt có retry để lại bốn message, trong
+        đó có cả lời khiển trách "câu trả lời vừa rồi KHÔNG dùng được" mà lượt sau đọc thấy sẽ hiểu
+        sai là đang nói về chính nó.
         """
         # append current question
         if retry_reason:
-            self.sql_message.append(HumanMessage(self.chat_question.sql_retry_question(retry_reason)))
+            # Chỉ nhấc ra khi phần tử cuối đúng là câu trả lời của model: nếu lần trước chết giữa
+            # stream thì cuối danh sách là câu hỏi, nhấc đi là mất luôn đề bài.
+            failed_answer = self.sql_message.pop() if self.sql_message and isinstance(
+                self.sql_message[-1], AIMessage) else None
+            messages = list(self.sql_message)
+            if failed_answer is not None:
+                messages.append(failed_answer)
+            messages.append(HumanMessage(self.chat_question.sql_retry_question(retry_reason)))
         else:
             self.sql_message.append(HumanMessage(
                 self.chat_question.sql_user_question(current_time=datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
                                                      change_title=self.change_title)))
+            messages = self.sql_message
 
         self.current_logs[OperationEnum.GENERATE_SQL] = start_log(session=_session,
                                                                   ai_modal_id=self.chat_question.ai_modal_id,
@@ -987,11 +1060,11 @@ class LLMService:
                                                                        'sqlbot_system': getattr(msg, 'sqlbot_system',
                                                                                                 False) is True,
                                                                        'content': msg.content} for msg
-                                                                      in self.sql_message])
+                                                                      in messages])
         full_thinking_text = ''
         full_sql_text = ''
         token_usage = {}
-        res = process_stream(self.llm.stream(self.sql_message), token_usage)
+        res = process_stream(self.llm.stream(messages), token_usage)
         for chunk in res:
             if chunk.get('content'):
                 full_sql_text += chunk.get('content')
@@ -999,7 +1072,10 @@ class LLMService:
                 full_thinking_text += chunk.get('reasoning_content')
             yield chunk
 
-        self.sql_message.append(AIMessage(full_sql_text))
+        # Lịch sử chỉ nhận bản đã rút gọn. `end_log` bên dưới cũng lưu `self.sql_message` chứ không
+        # lưu `messages`: chính field này là thứ `init_messages` của lượt sau đọc để phát lại, nên
+        # nó phải là lịch sử sạch. Prompt thật của lần gọi (kèm lần thử hỏng) đã nằm ở `start_log`.
+        self.sql_message.append(AIMessage(_cap_history_answer(full_sql_text)))
 
         self.current_logs[OperationEnum.GENERATE_SQL] = end_log(session=_session,
                                                                 log=self.current_logs[OperationEnum.GENERATE_SQL],
@@ -2251,6 +2327,30 @@ def get_lang_name(lang: str):
     if normalized.startswith('ko'):
         return 'Tiếng Hàn'
     return 'Tiếng Trung giản thể'
+
+
+def trim_history_by_size(messages: List[dict], max_chars: int) -> List[dict]:
+    """Cắt bớt lịch sử từ CŨ tới MỚI cho tới khi tổng số ký tự nằm dưới `max_chars`.
+
+    Đếm theo lượt (`rounds`) là không đủ để chặn vỡ context: một lượt hỏi có thể to bất thường (LLM
+    lặp phần suy luận, hoặc câu hỏi kèm dữ liệu dài), mà m-schema trong system prompt đã ăn sẵn
+    khoảng 24K ký tự. Đây là lớp chặn cuối, chạy sau `get_last_conversation_rounds`.
+
+    Bỏ từ đầu danh sách vì message mới luôn quan trọng hơn message cũ. Luôn giữ lại ít nhất phần tử
+    cuối: mất nốt nó thì lượt hiện tại chẳng còn ngữ cảnh nào, mà một message đơn lẻ vượt trần đã
+    được `_cap_history_answer` chặn từ lúc ghi vào lịch sử.
+    """
+    if not messages or max_chars <= 0:
+        return messages
+    total = sum(len(m.get('content') or '') for m in messages)
+    start = 0
+    while total > max_chars and start < len(messages) - 1:
+        total -= len(messages[start].get('content') or '')
+        start += 1
+    if start > 0:
+        SQLBotLogUtil.warning(
+            f'History trimmed: dropped {start} oldest message(s), {total} chars left (cap {max_chars})')
+    return messages[start:]
 
 
 def get_last_conversation_rounds(messages, rounds=settings.GENERATE_SQL_QUERY_HISTORY_ROUND_COUNT):
