@@ -55,25 +55,16 @@ dependencies = [
     "sqlglot>=28.6.0",
     "numpy==2.3.5",
     "pyhive[hive_pure_sasl]>=0.7.0",
-    "thrift-sasl"
-]
-
-[project.optional-dependencies]
-cpu = [
-    "torch>=2.7.0",
-]
-cu128 = [
+    "thrift-sasl",
+    # torch là dependency bắc cầu của sentence-transformers. Khai báo trực tiếp ở đây
+    # để [tool.uv.sources] ép lấy bản CPU, tránh kéo về wheel mặc định trên PyPI
+    # (bundle sẵn CUDA runtime + hàng loạt package nvidia-*, ~3GB).
     "torch>=2.7.0",
 ]
 
 [[tool.uv.index]]
 name = "pytorch-cpu"
 url = "https://download.pytorch.org/whl/cpu"
-explicit = true
-
-[[tool.uv.index]]
-name = "pytorch-cu128"
-url = "https://download.pytorch.org/whl/cu128"
 explicit = true
 
 [[tool.uv.index]]
@@ -88,18 +79,9 @@ explicit = true
 
 [tool.uv.sources]
 sqlbot-xpack = { index = "testpypi" }
-torch = [
-    { index = "pytorch-cpu", extra = "cpu" },
-    { index = "pytorch-cu128", extra = "cu128" },
-]
+torch = { index = "pytorch-cpu" }
 
 [tool.uv]
-conflicts = [
-    [
-        { extra = "cpu" },
-        { extra = "cu128" },
-    ],
-]
 dev-dependencies = [
     "pytest<8.0.0,>=7.4.3",
     "mypy<2.0.0,>=1.8.0",
