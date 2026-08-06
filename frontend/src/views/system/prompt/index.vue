@@ -55,6 +55,7 @@ onMounted(() => {
   })
   getAdvancedApplicationList().then((res: any) => {
     adv_options.value = res || []
+    filterOption.value[1].option = [...adv_options.value]
   })
   search()
 })
@@ -134,7 +135,7 @@ const exportExcel = () => {
   }).then(() => {
     searchLoading.value = true
     promptApi
-      .export2Excel(currentType.value, keywords.value ? { name: keywords.value } : {})
+      .export2Excel(currentType.value, configParams())
       .then((res) => {
         const blob = new Blob([res], {
           type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
@@ -389,30 +390,35 @@ const typeChange = (val: any) => {
 }
 
 const configParams = () => {
-  let str = ''
+  let _data: any = {}
   if (keywords.value) {
-    str += `name=${keywords.value}`
+    _data['name'] = keywords.value
   }
+
+  console.log(state.conditions)
 
   state.conditions.forEach((ele: any) => {
-    ele.value.forEach((itx: any) => {
-      str += str ? `_${itx}` : `${ele.field}=${itx}`
-    })
+    _data[ele.field] = ele.value
   })
 
-  if (str.length) {
-    str = `?${str}`
-  }
-  return str
+  return _data
 }
 const filterOption = ref<any[]>([
   {
     type: 'select',
     option: [],
-    field: 'dslist',
+    field: 'ds_list',
     title: t('ds.title'),
     operate: 'in',
     property: { placeholder: t('common.empty') + t('ds.title') },
+  },
+  {
+    type: 'select',
+    option: [],
+    field: 'adv_list',
+    title: t('embedded.advanced_application'),
+    operate: 'in',
+    property: { placeholder: t('common.empty') + t('embedded.advanced_application') },
   },
 ])
 

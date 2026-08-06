@@ -82,6 +82,10 @@ def extract_tables_from_sql(sql: str, ds_type: str = None) -> set:
     loại ra, bước kiểm tra an toàn sẽ coi tên CTE là "bảng chưa được cấp phép" và từ chối MỌI câu
     SQL có WITH. Bảng thật nằm trong thân CTE là các node exp.Table riêng biệt nên vẫn được trích
     xuất — kể cả khi một CTE được build từ bảng chưa cấp phép, bảng đó vẫn bị kiểm tra.
+
+    Dùng ``cte.alias_or_name`` chứ không phải ``cte.alias``: bản vá upstream 7118b401a sửa cùng lỗi này
+    nhưng lọc bằng ``if cte.alias``, nên CTE nào sqlglot không gán được alias sẽ lọt qua và lại bị coi
+    là bảng.
     """
     tables = set()
     dialect = get_sqlglot_dialect(ds_type)

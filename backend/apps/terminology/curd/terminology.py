@@ -1,10 +1,8 @@
 import datetime
-import logging
 import traceback
 from typing import List, Optional, Any
 from xml.dom.minidom import parseString
 
-import dicttoxml
 from sqlalchemy import and_, or_, select, func, delete, update, union, text, BigInteger
 from sqlalchemy.orm import aliased
 
@@ -15,6 +13,7 @@ from apps.template.generate_chart.generator import get_base_terminology_template
 from apps.terminology.models.terminology_model import Terminology, TerminologyInfo, TerminologyInfoResult
 from common.core.config import settings
 from common.core.deps import SessionDep, Trans
+from common.utils.dict_to_xml import dict_to_xml
 from common.utils.embedding_threads import run_save_terminology_embeddings
 
 
@@ -57,30 +56,42 @@ def get_terminology_base_query(oid: int, name: Optional[str] = None):
 
 def build_terminology_query(session: SessionDep, oid: int, name: Optional[str] = None,
                             paginate: bool = True, current_page: int = 1, page_size: int = 10,
-                            dslist: Optional[list[int]] = None):
+                            ds_list: Optional[list[int]] = None, adv_list: Optional[list[int]] = None):
     """
     构建术语查询的通用方法
     """
     parent_ids_subquery, child = get_terminology_base_query(oid, name)
 
-    # 添加数据源筛选条件
-    if dslist is not None and len(dslist) > 0:
+    # 添加数据源/高级应用筛选条件（ds_list 与 adv_list 为或的关系）
+    ds_filter_condition = None
+    adv_filter_condition = None
+
+    if ds_list is not None and len(ds_list) > 0:
         datasource_conditions = []
-        # datasource_ids 与 dslist 中的任一元素有交集
-        for ds_id in dslist:
-            # 使用 JSONB 包含操作符，但需要确保类型正确
+        for ds_id in ds_list:
             datasource_conditions.append(
                 Terminology.datasource_ids.contains([ds_id])
             )
 
-        # datasource_ids 为空数组
-        empty_array_condition = Terminology.datasource_ids == []
-
         ds_filter_condition = or_(
-            *datasource_conditions,
-            empty_array_condition
+            Terminology.specific_ds == False,
+            and_(
+                Terminology.specific_ds == True,
+                *datasource_conditions
+            )
         )
+
+    if adv_list is not None and len(adv_list) > 0:
+        adv_filter_condition = Terminology.advanced_application.in_(adv_list)
+
+    if ds_filter_condition is not None and adv_filter_condition is not None:
+        parent_ids_subquery = parent_ids_subquery.where(
+            or_(ds_filter_condition, adv_filter_condition)
+        )
+    elif ds_filter_condition is not None:
         parent_ids_subquery = parent_ids_subquery.where(ds_filter_condition)
+    elif adv_filter_condition is not None:
+        parent_ids_subquery = parent_ids_subquery.where(adv_filter_condition)
 
     # 计算总数
     count_stmt = select(func.count()).select_from(parent_ids_subquery.subquery())
@@ -205,24 +216,26 @@ def execute_terminology_query(session: SessionDep, stmt) -> List[TerminologyInfo
 
 
 def page_terminology(session: SessionDep, current_page: int = 1, page_size: int = 10,
-                     name: Optional[str] = None, oid: Optional[int] = 1, dslist: Optional[list[int]] = None):
+                     name: Optional[str] = None, oid: Optional[int] = 1, ds_list: Optional[list[int]] = None,
+                     adv_list: Optional[list[int]] = None):
     """
     分页查询术语（原方法保持不变）
     """
     stmt, total_count, total_pages, current_page, page_size = build_terminology_query(
-        session, oid, name, True, current_page, page_size, dslist
+        session, oid, name, True, current_page, page_size, ds_list, adv_list
     )
     _list = execute_terminology_query(session, stmt)
 
     return current_page, page_size, total_count, total_pages, _list
 
 
-def get_all_terminology(session: SessionDep, name: Optional[str] = None, oid: Optional[int] = 1):
+def get_all_terminology(session: SessionDep, name: Optional[str] = None, oid: Optional[int] = 1,
+                        ds_list: Optional[list[int]] = None, adv_list: Optional[list[int]] = None):
     """
     获取所有术语（不分页）
     """
     stmt, total_count, total_pages, current_page, page_size = build_terminology_query(
-        session, oid, name, False
+        session, oid, name, False, ds_list=ds_list, adv_list=adv_list
     )
     _list = execute_terminology_query(session, stmt)
 
@@ -935,14 +948,7 @@ def get_example():
 
 def to_xml_string(_dict: list[dict] | dict, root: str = 'terminologies') -> str:
     item_name_func = lambda x: 'terminology' if x == 'terminologies' else 'word' if x == 'words' else 'item'
-    dicttoxml.LOG.setLevel(logging.ERROR)
-    xml = dicttoxml.dicttoxml(_dict,
-                              cdata=['word', 'description'],
-                              custom_root=root,
-                              item_func=item_name_func,
-                              xml_declaration=False,
-                              encoding='utf-8',
-                              attr_type=False).decode('utf-8')
+    xml = dict_to_xml(_dict, root_name=root, item_func=item_name_func)
     pretty_xml = parseString(xml).toprettyxml()
 
     if pretty_xml.startswith('<?xml'):

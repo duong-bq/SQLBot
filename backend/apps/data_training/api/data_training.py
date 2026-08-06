@@ -29,16 +29,19 @@ router = APIRouter(tags=["SQL Examples"], prefix="/system/data-training")
 @router.get("/page/{current_page}/{page_size}", summary=f"{PLACEHOLDER_PREFIX}get_dt_page")
 @require_permissions(permission=SqlbotPermission(role=['ws_admin']))
 async def pager(session: SessionDep, current_user: CurrentUser, current_page: int, page_size: int,
-                question: Optional[str] = Query(None, description="搜索问题(可选)")):
+                question: Optional[str] = Query(None, description="搜索问题(可选)"),
+                ds_list: Optional[list[int]] = Query(None, description="数据集ID集合(可选)"),
+                adv_list: Optional[list[int]] = Query(None, description="高级应用ID集合(可选)")):
     """
     Danh sách mẫu dữ liệu huấn luyện (SQL examples: câu hỏi ↔ SQL mẫu) có phân trang (quyền ws_admin).
 
-    Phân trang theo ``current_page``/``page_size``, lọc theo ``question`` (từ khóa). Chỉ trong workspace
-    hiện tại. Các cặp câu hỏi–SQL mẫu này được RAG dùng làm few-shot ví dụ khi sinh SQL.
+    Phân trang theo ``current_page``/``page_size``, lọc theo ``question`` (từ khóa), ``ds_list``
+    (id nguồn dữ liệu) và ``adv_list`` (id ứng dụng nâng cao). Chỉ trong workspace hiện tại.
+    Các cặp câu hỏi–SQL mẫu này được RAG dùng làm few-shot ví dụ khi sinh SQL.
     """
     current_page, page_size, total_count, total_pages, _list = page_data_training(session, current_page, page_size,
                                                                                   question,
-                                                                                  current_user.oid)
+                                                                                  current_user.oid, ds_list, adv_list)
 
     return {
         "current_page": current_page,
@@ -94,14 +97,18 @@ async def enable(session: SessionDep, id: int, enabled: bool, trans: Trans):
 @router.get("/export", summary=f"{PLACEHOLDER_PREFIX}export_dt")
 @system_log(LogConfig(operation_type=OperationType.EXPORT, module=OperationModules.DATA_TRAINING))
 async def export_excel(session: SessionDep, trans: Trans, current_user: CurrentUser,
-                       question: Optional[str] = Query(None, description="搜索术语(可选)")):
+                       question: Optional[str] = Query(None, description="搜索术语(可选)"),
+                       ds_list: Optional[list[int]] = Query(None, description="数据集ID集合(可选)"),
+                       adv_list: Optional[list[int]] = Query(None, description="高级应用ID集合(可选)")):
     """
-    Xuất toàn bộ mẫu dữ liệu huấn luyện ra file Excel (có thể lọc theo ``question``).
+    Xuất mẫu dữ liệu huấn luyện ra file Excel, lọc theo ``question``/``ds_list``/``adv_list``.
 
-    Trả về file .xlsx dạng stream, tiêu đề cột theo ngôn ngữ hiện tại. Có ghi log thao tác export.
+    Bộ lọc phải khớp với bộ lọc đang hiển thị trên lưới: người dùng bấm "export" khi đang lọc mà
+    nhận về toàn bộ dữ liệu là sai kỳ vọng. Trả về .xlsx dạng stream, tiêu đề cột theo ngôn ngữ
+    hiện tại. Có ghi log thao tác export.
     """
     def inner():
-        _list = get_all_data_training(session, question, oid=current_user.oid)
+        _list = get_all_data_training(session, question, oid=current_user.oid, ds_list=ds_list, adv_list=adv_list)
 
         data_list = []
         for obj in _list:
