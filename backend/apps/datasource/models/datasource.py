@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import List, Optional
+from typing import List, Optional, Union
 
 from pydantic import BaseModel
 from sqlalchemy import Column, Text, BigInteger, DateTime, Identity
@@ -62,11 +62,21 @@ class CoreField(SQLModel, table=True):
 
 # datasource create obj
 class CreateDatasource(BaseModel):
+    """Body của ``POST /datasource/add``.
+
+    ``configuration`` khai là ``Union[dict, str]`` chứ không phải ``DatasourceConf``: dạng chính thức
+    là object lồng, nhưng nhánh chuỗi phải giữ lại cho giao diện web dev vốn tự mã hóa trước khi gửi.
+    Khai thẳng ``DatasourceConf`` sẽ làm mọi request của giao diện đó thành 422. Việc kiểm tra tên
+    field và ép kiểu của nhánh object nằm ở ``normalize_configuration``, chạy ngay đầu endpoint.
+
+    Thứ tự trong Union có ý nghĩa: pydantic thử ``dict`` trước nên object giữ nguyên là dict, chuỗi
+    rơi xuống nhánh sau — đảo lại sẽ khiến object bị ép thành chuỗi và mất kiểm tra.
+    """
     id: int = None
     name: str = ''
     description: str = ''
     type: str = ''
-    configuration: str = ''
+    configuration: Union[dict, str] = ''
     create_time: Optional[datetime] = None
     create_by: int = 0
     status: str = ''

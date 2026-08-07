@@ -32,9 +32,27 @@ from ..crud.table import get_tables_by_ds_id
 from ..models.datasource import CoreDatasource, CreateDatasource, TableObj, CoreTable, CoreField, FieldObj, \
     TableSchemaResponse, ColumnSchemaResponse, PreviewResponse, ImportRequest
 from ..utils.excel import parse_excel_preview, USER_TYPE_TO_PANDAS
+from ..utils.utils import normalize_configuration
 
 router = APIRouter(tags=["Datasource"], prefix="/datasource")
 path = settings.EXCEL_PATH
+
+
+def _normalize_ds_configuration(ds) -> None:
+    """Chuẩn hóa ``configuration`` tại chỗ trên body client gửi lên, CHỈ gán khi giá trị thật sự đổi.
+
+    Không gán vô điều kiện: ``update_ds`` ghi DB theo ``model_dump(exclude_unset=True)``, mà chạm
+    vào thuộc tính của model pydantic sẽ đánh dấu field đó là "đã set". Một request chỉ đổi tên
+    (không kèm ``configuration``) sẽ vì thế ghi đè ``configuration`` bằng ``None`` và xóa mất cấu
+    hình kết nối của nguồn dữ liệu. Đã kiểm chứng: ``model_fields_set`` nở thêm ngay sau phép gán.
+
+    Phải gọi ở MỌI endpoint nhận cấu hình từ client. Với ``CoreDatasource`` (SQLModel ``table=True``)
+    FastAPI không validate body, nên một ``configuration`` dạng object đi thẳng vào hàm dưới dạng
+    dict và sẽ nổ ở ``aes_decrypt`` nếu thiếu bước này — không có 422 nào chặn hộ.
+    """
+    normalized = normalize_configuration(ds.configuration)
+    if normalized != ds.configuration:
+        ds.configuration = normalized
 
 
 @router.get("/ws/{oid}", include_in_schema=False)
@@ -77,7 +95,12 @@ async def check(session: SessionDep, trans: Trans, ds: CoreDatasource):
 
     Body ``CoreDatasource`` chứa thông tin kết nối. Trả về true/false cho biết có kết nối được không.
     Dùng khi thêm/sửa nguồn dữ liệu để thử kết nối trước khi lưu.
+
+    ``configuration`` là object lồng; nhánh chuỗi cũ vẫn nhận để không vỡ giao diện dev — xem
+    ``normalize_configuration``.
     """
+    _normalize_ds_configuration(ds)
+
     def inner():
         return check_status(session, trans, ds, True)
 
@@ -108,7 +131,15 @@ async def add(session: SessionDep, trans: Trans, user: CurrentUser, ds: CreateDa
 
     Body ``CreateDatasource`` gồm loại DB, cấu hình kết nối và danh sách bảng chọn đồng bộ. Sau khi tạo sẽ
     đồng bộ metadata (bảng/cột) và sinh embedding phục vụ RAG. Trả về ``CoreDatasource`` vừa tạo. Có ghi log.
+
+    ``configuration`` là object lồng; nhánh chuỗi cũ vẫn nhận để không vỡ giao diện dev — xem
+    ``normalize_configuration``.
+
+    Endpoint này KHÔNG tự kiểm tra kết nối (``status`` gán cứng "Success"), và đã commit bản ghi
+    nguồn dữ liệu TRƯỚC khi đồng bộ bảng — sync hỏng thì còn lại một nguồn rỗng, không tự dọn.
+    Client phải gọi ``/check`` trước, và gọi ``/delete`` dọn khi endpoint này ném lỗi.
     """
+    _normalize_ds_configuration(ds)
     return await create_ds(session, trans, user, ds)
 
 
@@ -138,7 +169,14 @@ async def update(session: SessionDep, trans: Trans, user: CurrentUser, ds: CoreD
 
     Body ``CoreDatasource`` chứa id và các trường cần sửa (tên, kết nối...). Trả về bản ghi sau cập nhật.
     Có ghi log thao tác.
+
+    Chỉ sửa cấu hình/tên, KHÔNG đồng bộ lại bảng — đổi tập bảng phải dùng ``/chooseTables/{id}``.
+
+    ``configuration`` là object lồng; nhánh chuỗi cũ vẫn nhận để không vỡ giao diện dev — xem
+    ``normalize_configuration``.
     """
+    _normalize_ds_configuration(ds)
+
     def inner():
         return update_ds(session, trans, user, ds)
 
@@ -177,7 +215,14 @@ async def get_tables_by_conf(session: SessionDep, trans: Trans, ds: CoreDatasour
 
     Body ``CoreDatasource`` chứa thông tin kết nối. Nếu lấy bảng lỗi mà kết nối vẫn OK thì trả 500 kèm chi
     tiết. Dùng ở bước thêm nguồn: sau khi nhập kết nối, xem trước các bảng có thể đồng bộ.
+
+    Danh sách bảng lọc theo ``dbSchema`` trong ``configuration`` (với MySQL/Doris/StarRocks là
+    ``database``), nên phải chọn schema trước mới gọi được endpoint này.
+
+    ``configuration`` là object lồng; nhánh chuỗi cũ vẫn nhận để không vỡ giao diện dev — xem
+    ``normalize_configuration``.
     """
+    _normalize_ds_configuration(ds)
     try:
         def inner():
             return getTablesByDs(session, ds)
@@ -202,7 +247,14 @@ async def get_schema_by_conf(session: SessionDep, trans: Trans, ds: CoreDatasour
 
     Body ``CoreDatasource`` chứa thông tin kết nối. Trả về danh sách tên schema để người dùng chọn trước
     khi lấy bảng (với các DB hỗ trợ nhiều schema như PostgreSQL). Lỗi mà kết nối vẫn OK thì trả 500.
+
+    Chỉ cài đặt cho pg, sqlServer, oracle, dm, redshift, kingbase. MySQL và nhóm Doris/StarRocks/
+    ClickHouse/Hive không có khái niệm schema tách rời — ``database`` đã là namespace, bỏ qua bước này.
+
+    ``configuration`` là object lồng; nhánh chuỗi cũ vẫn nhận để không vỡ giao diện dev — xem
+    ``normalize_configuration``.
     """
+    _normalize_ds_configuration(ds)
     try:
         def inner():
             return get_schema(ds)
