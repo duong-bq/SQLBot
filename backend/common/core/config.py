@@ -167,6 +167,13 @@ class Settings(BaseSettings):
     LLM_ANSWER_FALLBACK_ROUNDS: int = 3
     # Số dòng dữ liệu tối đa của MỖI lượt cũ đưa vào prompt fallback.
     LLM_ANSWER_FALLBACK_ROWS: int = 20
+    # Đưa lịch sử hỏi-đáp vào cả nhánh answer BÌNH THƯỜNG (lượt có dữ liệu mới), không chỉ nhánh
+    # fallback. Không dùng chung LLM_ANSWER_FALLBACK_* vì hai nhánh có ngân sách token khác hẳn
+    # nhau — nhánh này còn phải chứa `<data>` của chính lượt hiện tại — và vì cần bật/tắt độc lập
+    # để đo A/B bằng scripts/eval_text2sql.
+    LLM_ANSWER_HISTORY_ENABLED: bool = True
+    LLM_ANSWER_HISTORY_ROUNDS: int = 3
+    LLM_ANSWER_HISTORY_ROWS: int = 20
 
     PG_POOL_SIZE: int = 20
     PG_MAX_OVERFLOW: int = 30
@@ -187,6 +194,7 @@ class Settings(BaseSettings):
                      'TABLE_EMBEDDING_ENABLED',
                      'LLM_DISABLE_THINKING',
                      'LLM_ANSWER_ON_FAILURE',
+                     'LLM_ANSWER_HISTORY_ENABLED',
                      'LLM_SQL_HISTORY_JSON_ONLY',
                      mode='before')
     @classmethod

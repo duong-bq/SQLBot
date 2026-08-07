@@ -599,18 +599,30 @@ class LLMService:
         self.record = save_analysis_answer(session=_session, record_id=self.record.id,
                                            answer=orjson.dumps({'content': full_analysis_text}).decode())
 
-    def build_answer_prompts(self, fields: Any, data: Optional[List[Dict[str, Any]]]) -> tuple[str, str]:
+    def build_answer_prompts(self, _session: Session, fields: Any,
+                             data: Optional[List[Dict[str, Any]]]) -> tuple[str, str]:
         """Dựng sẵn cặp (system, user) prompt cho pha answer, chạy TRONG luồng chính.
 
         Phải dựng trước khi spawn thread: pha answer chạy song song với pha sinh chart mà cả hai
         cùng đọc self.chat_question. Dựng trên một bản model_copy() rồi chỉ đưa hai chuỗi đã render
-        sang thread, nên thread không còn chạm vào state dùng chung — hết đường tranh chấp.
+        sang thread, nên thread không còn chạm vào state dùng chung — hết đường tranh chấp. Việc đọc
+        lịch sử từ DB cũng phải nằm ở đây vì lý do đó: `_session` không được đi qua thread.
 
         Lấy fields/data từ kết quả thực thi SQL chứ không từ chart config như generate_analysis:
         lúc này chart chưa sinh xong, và chính việc bỏ phụ thuộc vào chart mới cho phép chạy song song.
 
         Tổng số dòng phải đếm TRƯỚC khi cắt và truyền riêng qua `data_scope` — xem
         `build_data_scope_note` về lý do.
+
+        Lịch sử hỏi-đáp dùng chung `get_recent_qa_history` với nhánh fallback, tức là mang theo cả
+        SQL lẫn dữ liệu cũ. Đây là ngữ cảnh đầy đủ nhưng cũng là rủi ro: prompt answer vốn cấm bịa
+        số, giờ trong prompt lại có sẵn những con số KHÔNG thuộc lượt này. Bộ rule ở
+        `answer.system` phải giữ được ranh giới đó, và mức độ nhiễm phải đo bằng chỉ số
+        "Câu trả lời không bịa số" của `scripts/eval_text2sql/run_eval_http.py` chứ không đoán bằng
+        cảm giác. Tắt bằng `LLM_ANSWER_HISTORY_ENABLED=false` để đối chứng.
+
+        Bọc sẵn cặp thẻ `<history>` tại đây thay vì để trong template: lượt đầu hội thoại không có
+        lịch sử, để template tự bọc thì mọi lượt đầu đều dính một khối XML rỗng vô nghĩa.
         """
         answer_question = self.chat_question.model_copy()
         rows = data if data else []
@@ -620,6 +632,17 @@ class LLMService:
         answer_question.fields = orjson.dumps(fields if fields else []).decode()
         answer_question.data = orjson.dumps(prepare_for_orjson(rows)).decode()
         answer_question.data_scope = build_data_scope_note(total_rows, len(rows))
+        answer_question.answer_history = ''
+        if settings.LLM_ANSWER_HISTORY_ENABLED:
+            _history = get_recent_qa_history(
+                session=_session,
+                chat_id=self.record.chat_id,
+                exclude_record_id=self.record.id,
+                rounds=settings.LLM_ANSWER_HISTORY_ROUNDS,
+                max_rows=settings.LLM_ANSWER_HISTORY_ROWS,
+            )
+            if _history:
+                answer_question.answer_history = f'<history>\n{_history}\n</history>\n'
         return answer_question.answer_sys_question(), answer_question.answer_user_question()
 
     def build_answer_fallback_prompts(self, _session: Session, reason: str) -> tuple[str, str]:
@@ -1786,7 +1809,8 @@ class LLMService:
                     answer_sys_prompt, answer_user_prompt = self.build_answer_fallback_prompts(_session,
                                                                                                degraded_reason)
                 else:
-                    answer_sys_prompt, answer_user_prompt = self.build_answer_prompts(result.get('fields'),
+                    answer_sys_prompt, answer_user_prompt = self.build_answer_prompts(_session,
+                                                                                      result.get('fields'),
                                                                                       result.get('data'))
                 answer_queue = queue.Queue()
                 executor.submit(self.run_answer_worker, answer_sys_prompt, answer_user_prompt, answer_queue)

@@ -247,6 +247,10 @@ class AiModelQuestion(BaseModel):
     # Mô tả phạm vi của `data` cho pha answer: tổng số dòng thật và việc `data` có bị cắt hay không.
     # Bắt buộc phải có vì `data` chỉ là 100 dòng đầu; thiếu nó thì LLM tự đếm dòng và báo sai tổng.
     data_scope: str = ""
+    # Lịch sử hỏi-đáp cho nhánh answer BÌNH THƯỜNG. Tách khỏi `fallback_history` dù nội dung sinh ra
+    # từ cùng một hàm: hai nhánh dùng hai template với bộ rule khác nhau, dùng chung một field thì
+    # sửa rule bên này sẽ vỡ bên kia mà không có gì báo.
+    answer_history: str = ""
     lang: str = "简体中文"
     filter: str = []
     sub_query: Optional[list[dict]] = None
@@ -357,15 +361,20 @@ class AiModelQuestion(BaseModel):
                                                       sqlbot_name=self.sqlbot_name)
 
     def answer_user_question(self):
-        """Dựng user prompt cho pha answer: câu hỏi gốc + SQL đã chạy + fields + data + data_scope.
+        """Dựng user prompt cho pha answer: lịch sử + câu hỏi gốc + SQL đã chạy + fields + data + data_scope.
 
         Khác analysis ở chỗ có `question` và `sql`: thiếu câu hỏi thì LLM chỉ mô tả chung chung
         bảng số chứ không trả lời đúng thứ được hỏi.
 
         `data_scope` đặt SAU `<data>` trong template, cố ý: nó là lời cảnh báo về khối vừa đọc, và
-        đứng cuối prompt thì có trọng số cao nhất khi LLM quyết định lấy con số tổng từ đâu.
+        đứng cuối prompt thì có trọng số cao nhất khi LLM quyết định lấy con số tổng từ đâu. Vì vậy
+        `answer_history` phải đứng ĐẦU prompt chứ không phải cuối: lịch sử mang theo số liệu cũ, đặt
+        nó sau `<data-scope>` là cướp mất đúng cái chốt chống bịa số đó.
+
+        `answer_history` đã bao gồm sẵn cặp thẻ `<history>` (hoặc rỗng hẳn) — xem build_answer_prompts.
         """
-        return get_answer_template()['user'].format(question=self.question, sql=self.sql,
+        return get_answer_template()['user'].format(history=self.answer_history,
+                                                    question=self.question, sql=self.sql,
                                                     fields=self.fields, data=self.data,
                                                     data_scope=self.data_scope)
 
