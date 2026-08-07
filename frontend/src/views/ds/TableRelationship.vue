@@ -39,7 +39,7 @@ const edgeOPtion = {
   ],
   attrs: {
     line: {
-      stroke: '#DEE0E3',
+      stroke: '#8C8C8C',
       strokeWidth: 2,
     },
   },

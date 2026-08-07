@@ -41,6 +41,9 @@ const curSelectChange = (value: boolean) => {
     position: absolute;
     top: 26px;
     right: 20px;
+    :deep(.el-checkbox__inner) {
+      border-color: #8c8c8c;
+    }
   }
   ::v-deep(.chart-show-area) {
     height: calc(100% - 46px);
