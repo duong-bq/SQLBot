@@ -154,6 +154,7 @@ export class ChatRecord {
 export class Chat {
   id?: number
   create_time?: Date | string
+  latest_record_time?: Date | string
   create_by?: number
   brief?: string
   chat_type?: string
@@ -167,6 +168,7 @@ export class Chat {
   constructor(
     id: number,
     create_time: Date | string,
+    latest_record_time: Date | string,
     create_by: number,
     brief: string,
     chat_type: string,
@@ -176,6 +178,7 @@ export class Chat {
   constructor(
     id?: number,
     create_time?: Date | string,
+    latest_record_time?: Date | string,
     create_by?: number,
     brief?: string,
     chat_type?: string,
@@ -184,6 +187,7 @@ export class Chat {
   ) {
     this.id = id
     this.create_time = getDate(create_time)
+    this.latest_record_time = getDate(latest_record_time ?? create_time)
     this.create_by = create_by
     this.brief = brief
     this.chat_type = chat_type
@@ -202,6 +206,7 @@ export class ChatInfo extends Chat {
   constructor(
     id: number,
     create_time: Date | string,
+    latest_record_time: Date | string,
     create_by: number,
     brief: string,
     chat_type: string,
@@ -217,6 +222,7 @@ export class ChatInfo extends Chat {
   constructor(
     param1?: number | Chat,
     create_time?: Date | string,
+    latest_record_time?: Date | string,
     create_by?: number,
     brief?: string,
     chat_type?: string,
@@ -234,6 +240,7 @@ export class ChatInfo extends Chat {
       if (param1 instanceof Chat) {
         this.id = param1.id
         this.create_time = getDate(param1.create_time)
+        this.latest_record_time = getDate(param1.latest_record_time ?? param1.create_time)
         this.create_by = param1.create_by
         this.brief = param1.brief
         this.chat_type = param1.chat_type
@@ -245,6 +252,7 @@ export class ChatInfo extends Chat {
       } else {
         this.id = param1
         this.create_time = getDate(create_time)
+        this.latest_record_time = getDate(latest_record_time ?? create_time)
         this.create_by = create_by
         this.brief = brief
         this.chat_type = chat_type
@@ -415,6 +423,7 @@ export const chatApi = {
     return new ChatInfo(
       data.id,
       data.create_time,
+      data.latest_record_time,
       data.create_by,
       data.brief,
       data.chat_type,

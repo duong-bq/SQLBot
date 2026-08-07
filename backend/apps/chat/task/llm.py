@@ -108,10 +108,19 @@ def extract_tables_from_sql(sql: str, ds_type: str = None) -> set:
     SQL có WITH. Bảng thật nằm trong thân CTE là các node exp.Table riêng biệt nên vẫn được trích
     xuất — kể cả khi một CTE được build từ bảng chưa cấp phép, bảng đó vẫn bị kiểm tra.
 
+    Dùng ``cte.alias_or_name`` chứ không phải ``cte.alias``: bản vá upstream 7118b401a sửa cùng lỗi này
+    nhưng lọc bằng ``if cte.alias``, nên CTE nào sqlglot không gán được alias sẽ lọt qua và lại bị coi
+    là bảng.
+
     **NÉM exception khi không parse được**, thay vì nuốt lỗi rồi trả set rỗng như trước. Set rỗng
     phải mang đúng một nghĩa: "câu SQL này không tham chiếu bảng nào". Nếu gộp cả ca parse hỏng vào
     đó thì phía gọi buộc phải coi set rỗng là đáng ngờ, và mọi câu SQL hợp lệ nhưng không đọc bảng
     (vd `SELECT COUNT(*) FROM (SELECT 'a' UNION ALL SELECT 'b') t`) đều bị từ chối oan.
+
+    Cố ý GIỮ nhánh này khi merge từ upstream: bản upstream bọc toàn bộ thân hàm trong
+    ``try/except Exception: pass``. Nuốt lỗi parse ở đây là lỗ hổng — set rỗng được phía gọi hiểu là
+    "không tham chiếu bảng nào" và cho chạy, nên mọi câu SQL không parse được sẽ đi vòng qua bước
+    kiểm tra danh sách bảng được phép.
     """
     dialect = get_sqlglot_dialect(ds_type)
     statements = [stmt for stmt in sqlglot.parse(sql, dialect=dialect) if stmt]

@@ -29,16 +29,21 @@ router = APIRouter(tags=["Terminology"], prefix="/system/terminology")
 @require_permissions(permission=SqlbotPermission(role=['ws_admin']))
 async def pager(session: SessionDep, current_user: CurrentUser, current_page: int, page_size: int,
                 word: Optional[str] = Query(None, description="搜索术语(可选)"),
-                dslist: Optional[list[int]] = Query(None, description="数据集ID集合(可选)")):
+                ds_list: Optional[list[int]] = Query(None, description="数据集ID集合(可选)"),
+                adv_list: Optional[list[int]] = Query(None, description="高级应用ID集合(可选)")):
     """
     Danh sách thuật ngữ (terminology) có phân trang (quyền ws_admin).
 
-    Phân trang theo ``current_page``/``page_size``; có thể lọc theo ``word`` (từ khóa) và ``dslist``
-    (danh sách id nguồn dữ liệu). Chỉ trả về thuật ngữ trong workspace hiện tại (``current_user.oid``).
-    Thuật ngữ dùng để đưa giải thích/đồng nghĩa vào ngữ cảnh RAG khi sinh SQL.
+    Phân trang theo ``current_page``/``page_size``; có thể lọc theo ``word`` (từ khóa), ``ds_list``
+    (danh sách id nguồn dữ liệu) và ``adv_list`` (id ứng dụng nâng cao). Chỉ trả về thuật ngữ trong
+    workspace hiện tại (``current_user.oid``). Thuật ngữ dùng để đưa giải thích/đồng nghĩa vào ngữ
+    cảnh RAG khi sinh SQL.
+
+    Lưu ý tương thích: tham số lọc theo nguồn dữ liệu trước đây tên là ``dslist``, nay là ``ds_list``.
+    Client cũ gửi ``dslist`` sẽ không báo lỗi mà lặng lẽ bỏ qua bộ lọc và trả về toàn bộ thuật ngữ.
     """
     current_page, page_size, total_count, total_pages, _list = page_terminology(session, current_page, page_size, word,
-                                                                                current_user.oid, dslist)
+                                                                                current_user.oid, ds_list, adv_list)
 
     return {
         "current_page": current_page,
@@ -91,14 +96,18 @@ async def enable(session: SessionDep, id: int, enabled: bool, trans: Trans):
 @router.get("/export", summary=f"{PLACEHOLDER_PREFIX}export_term")
 @system_log(LogConfig(operation_type=OperationType.EXPORT, module=OperationModules.TERMINOLOGY))
 async def export_excel(session: SessionDep, trans: Trans, current_user: CurrentUser,
-                       word: Optional[str] = Query(None, description="搜索术语(可选)")):
+                       word: Optional[str] = Query(None, description="搜索术语(可选)"),
+                       ds_list: Optional[list[int]] = Query(None, description="数据集ID集合(可选)"),
+                       adv_list: Optional[list[int]] = Query(None, description="高级应用ID集合(可选)")):
     """
-    Xuất toàn bộ thuật ngữ ra file Excel (có thể lọc theo ``word``).
+    Xuất thuật ngữ ra file Excel, lọc theo ``word``/``ds_list``/``adv_list``.
 
-    Trả về file .xlsx dạng stream, tiêu đề cột theo ngôn ngữ hiện tại. Có ghi log thao tác export.
+    Bộ lọc phải khớp với bộ lọc đang hiển thị trên lưới: người dùng bấm "export" khi đang lọc mà
+    nhận về toàn bộ dữ liệu là sai kỳ vọng. Trả về .xlsx dạng stream, tiêu đề cột theo ngôn ngữ
+    hiện tại. Có ghi log thao tác export.
     """
     def inner():
-        _list = get_all_terminology(session, word, oid=current_user.oid)
+        _list = get_all_terminology(session, word, oid=current_user.oid, ds_list=ds_list, adv_list=adv_list)
 
         data_list = []
         for obj in _list:
@@ -216,9 +225,15 @@ async def upload_excel(trans: Trans, current_user: CurrentUser, file: UploadFile
         raise HTTPException(400, "Only support .xlsx/.xls")
 
     os.makedirs(path, exist_ok=True)
-    base_filename = f"{file.filename.split('.')[0]}_{hashlib.sha256(uuid.uuid4().bytes).hexdigest()[:10]}"
-    filename = f"{base_filename}.{file.filename.split('.')[1]}"
-    save_path = os.path.join(path, filename)
+    # Strip any directory components from the client-supplied filename to
+    # prevent path traversal (CWE-22).
+    safe_name = os.path.basename(file.filename)
+    name_root, name_ext = os.path.splitext(safe_name)
+    base_filename = f"{name_root}_{hashlib.sha256(uuid.uuid4().bytes).hexdigest()[:10]}"
+    filename = f"{base_filename}{name_ext}"
+    save_path = os.path.realpath(os.path.join(path, filename))
+    if os.path.commonpath([save_path, os.path.realpath(path)]) != os.path.realpath(path):
+        raise HTTPException(400, "Invalid filename")
     with open(save_path, "wb") as f:
         f.write(await file.read())
 
@@ -301,7 +316,9 @@ async def upload_excel(trans: Trans, current_user: CurrentUser, file: UploadFile
 
             df = pd.DataFrame(md_data, columns=_fields_list)
             error_excel_filename = f"{base_filename}_error.xlsx"
-            save_error_path = os.path.join(path, error_excel_filename)
+            save_error_path = os.path.realpath(os.path.join(path, error_excel_filename))
+            if os.path.commonpath([save_error_path, os.path.realpath(path)]) != os.path.realpath(path):
+                raise Exception("Invalid filename")
             # 保存 DataFrame 到 Excel
             df.to_excel(save_error_path, index=False)
 

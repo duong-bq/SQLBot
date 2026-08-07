@@ -8,4 +8,7 @@ htmlcov
 .venv
 *.egg
 *.lock
+# uv.lock phải được commit: Dockerfile.backend chạy `uv sync --frozen`, thiếu file này thì
+# build trên server chết ngay ở bước COPY. Đây cũng là thứ duy nhất giữ cho image build ra
+# cùng bộ phiên bản với máy dev.
 !uv.lock

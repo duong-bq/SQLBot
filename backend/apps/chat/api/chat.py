@@ -16,7 +16,7 @@ from apps.chat.curd.chat import delete_chat_with_user, get_chart_data_with_user,
     format_json_data, format_json_list_data, get_chart_config, list_recent_questions, rename_chat_with_user, \
     get_chat_log_history, get_chart_data_with_user_live, resolve_chat_id
 from apps.chat.models.chat_model import CreateChat, ChatRecord, RenameChat, ChatQuestion, AxisObj, QuickCommand, \
-    ChatInfo, Chat, ChatFinishStep, ChatQuestionBase, SimpleChat
+    ChatInfo, Chat, ChatFinishStep, ChatQuestionBase, SimpleChat, ChatItem
 from apps.chat.task.llm import LLMService
 from apps.swagger.i18n import PLACEHOLDER_PREFIX
 from apps.system.schemas.permission import SqlbotPermission, require_permissions
@@ -30,13 +30,18 @@ router = APIRouter(tags=["Data Q&A"], prefix="/chat")
 
 
 @router.get(
-    "/list", response_model=List[Chat], summary=f"{PLACEHOLDER_PREFIX}get_chat_list"
+    "/list", response_model=List[ChatItem], summary=f"{PLACEHOLDER_PREFIX}get_chat_list"
 )
 async def chats(session: SessionDep, current_user: CurrentUser):
     """
     Lấy danh sách toàn bộ hội thoại (chat) của người dùng hiện tại trong workspace.
 
     Chỉ trả về hội thoại thuộc về ``current_user``. Dùng để hiển thị sidebar lịch sử hội thoại.
+
+    Sắp xếp theo thời điểm hỏi đáp gần nhất (``latest_record_time``), không phải theo thời điểm tạo
+    hội thoại: hội thoại cũ vừa được hỏi tiếp phải nổi lên đầu sidebar. Hội thoại chưa có lượt hỏi
+    nào thì lấy chính ``create_time`` làm mốc. Vì thế response là ``ChatItem`` (có thêm trường
+    ``latest_record_time``) chứ không phải ``Chat`` thuần.
     """
     return list_chats(session, current_user)
 
@@ -337,6 +342,10 @@ async def ask_recommend_questions(
 
     Dựa vào câu hỏi/ngữ cảnh của ``chat_record_id``, LLM đề xuất tối đa ``articles_number`` câu hỏi
     người dùng có thể hỏi kế tiếp. Trả về ``text/event-stream``; nếu record không tồn tại trả về mảng rỗng.
+
+    Phải tự kiểm tra quyền sở hữu bằng tay (``chat.oid``/``chat.create_by``): route này không có
+    ``require_permissions``, mà ``chat_record_id`` là số nguyên tuần tự nên chỉ cần đoán id là đọc
+    được câu hỏi của workspace khác. Không đủ nếu chỉ kiểm tra record tồn tại.
     """
 
     def _return_empty():
@@ -351,6 +360,18 @@ async def ask_recommend_questions(
 
         if not record:
             return StreamingResponse(_return_empty(), media_type="text/event-stream")
+
+        chat = session.get(Chat, record.chat_id)
+        if not chat:
+            return StreamingResponse(_return_empty(), media_type="text/event-stream")
+        if chat.oid != current_user.oid:
+            raise Exception(
+                f"Chat Record with id {chat_record_id} does not belong to current workspace"
+            )
+        if chat.create_by != current_user.id:
+            raise Exception(
+                f"Chat Record with id {chat_record_id} not Owned by the current user"
+            )
 
         request_question = ChatQuestion(
             chat_id=record.chat_id, question=record.question if record.question else ""
@@ -820,6 +841,14 @@ async def analysis_or_predict(
 
         if not record:
             raise Exception(f"Chat record with id {chat_record_id} not found")
+
+        chat = session.get(Chat, record.chat_id)
+        if not chat:
+            raise Exception(f"Chat with id {chat.id} not found")
+        if chat.oid != current_user.oid:
+            raise Exception(f"Chat Record with id {chat_record_id} does not belong to current workspace")
+        if chat.create_by != current_user.id:
+            raise Exception(f"Chat Record with id {chat_record_id} not Owned by the current user")
 
         if not record.chart:
             raise Exception(
