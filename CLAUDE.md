@@ -2,6 +2,10 @@
 
 Hướng dẫn cho Claude Code khi làm việc trong repo này.
 
+> **Bắt đầu session mới thì đọc [docs/AI_ONBOARDING.md](docs/AI_ONBOARDING.md) trước.** File đó nói
+> hệ thống này là gì, nó khác SQLBot upstream ở đâu, và cần biết thêm thì mở tài liệu nào — tránh
+> phải khám phá lại codebase từ đầu.
+
 ## Quy ước viết code
 
 ### Docstring bắt buộc bằng tiếng Việt
@@ -26,3 +30,25 @@ Mặc định là **chỉ một dòng tiêu đề**, tiếng Việt, có tiền 
   nhỏ, không kể quá trình. Những thứ đó thuộc về câu trả lời trong hội thoại hoặc file tài liệu
   riêng — commit chỉ cần đủ để người đọc `git log` sau này hiểu chuyện gì đã xảy ra.
 - Nội dung dài thuộc về docstring hoặc chú thích ngay tại code, nơi nó nằm cạnh thứ nó giải thích.
+
+## Quy ước giữ tài liệu sống
+
+Xong một task **có sửa code** thì ngay lập tức đề xuất với user cập nhật tài liệu, nếu user đồng ý thì bắt đầu rà soát bộ tài liệu trong `docs/` và cập nhật. Tài liệu lệch code còn tệ hơn không có tài liệu: session sau đọc phải sẽ suy luận sai mà không biết mình sai.
+
+- Rà rồi thấy không phải sửa gì thì nói thẳng "tài liệu không bị ảnh hưởng", đừng im lặng bỏ qua —
+  user cần biết bước này đã chạy.
+- **Đề xuất, không tự sửa.** Nêu file nào, mục nào, sửa thành gì, rồi chờ user quyết.
+- Đổi các thứ dưới đây thì gần như chắc chắn phải cập nhật tài liệu:
+
+  | Đổi gì | Kéo theo |
+  |---|---|
+  | Pha trong pipeline, `ChatFinishStep`, vòng retry/hạ cấp | `docs/TEXT2SQL_PIPELINE.md` |
+  | Prompt trong `templates/` | `docs/TEXT2SQL_PIPELINE.md` |
+  | Event SSE (thêm/bỏ/đổi schema) | `docs/TEXT2SQL_PIPELINE.md` **và** `backend/scripts/chat_stream_demo/API_SPEC.md` |
+  | Endpoint datasource | `backend/scripts/chat_stream_demo/DATASOURCE_API_SPEC.md` |
+  | Biến trong `common/core/config.py` | `docs/OPERATIONS.md` |
+  | Cấu trúc thư mục, model DB, migration, cách chạy/deploy | `docs/BACKEND_ARCHITECTURE.md` / `docs/OPERATIONS.md` |
+  | Phát hiện một bẫy mới (hành vi im lặng, lỗi khó đoán) | mục "Bẫy đã biết" của `docs/OPERATIONS.md` |
+
+- Tài liệu trỏ tới code bằng `file:line`. Sửa code làm lệch số dòng thì trong lúc rà nhớ kiểm lại
+  các anchor của đúng file vừa sửa.
