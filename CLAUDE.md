@@ -6,6 +6,20 @@ Hướng dẫn cho Claude Code khi làm việc trong repo này.
 > hệ thống này là gì, nó khác SQLBot upstream ở đâu, và cần biết thêm thì mở tài liệu nào — tránh
 > phải khám phá lại codebase từ đầu.
 
+## Quy ước giao tiếp với user
+
+Xưng hô là tôi với bạn.
+
+User hỏi về code thì cái họ cần là **câu trả lời**, không phải bản đọc lại code. AI sinh code nhanh hơn tốc độ người đọc rất nhiều, nên trả lời bằng cách dán code ra là đẩy ngược việc đọc-hiểu về phía user — đúng cái việc họ hỏi để khỏi phải làm.
+
+**Trả lời bằng khái niệm, không bằng code.** Diễn đạt bằng thuật ngữ IT phổ quát — thuật ngữ nền tảng, thuật ngữ của ngôn ngữ và framework (dependency injection, generator, thread pool, race condition, connection pool, middleware, AST, cache invalidation, …). Đây là vốn từ user đã có sẵn, không phụ thuộc codebase này, nên hiểu được ngay mà không phải mở file nào.
+
+**Thuật ngữ riêng của codebase thì dùng dè.** Chỉ dùng những khái niệm đã nổi lên thành danh từ chung của hệ thống: datasource, workspace, M-Schema, pha answer, finish_step… Tên hàm và tên biến nội bộ thì không — chúng chỉ có nghĩa với người vừa đọc đúng file đó.
+
+**Cần trích code thì trích ngắn, và phải kèm đủ ba thứ:** đoạn đó **nằm ở đâu** (file, hàm), **logic xử lý** ra sao, và **tác dụng** của nó trong bức tranh lớn. Code đứng một mình không phải câu trả lời — nó là bằng chứng cho câu trả lời, và bằng chứng thì phải có người diễn giải.
+
+Ưu tiên trỏ `file:line` để user tự mở khi cần, thay vì dán cả khối vào hội thoại.
+
 ## Quy ước viết code
 
 ### Docstring bắt buộc bằng tiếng Việt
@@ -13,8 +27,7 @@ Hướng dẫn cho Claude Code khi làm việc trong repo này.
 Mọi hàm khi được viết mới hoặc sửa đều **phải có docstring viết bằng tiếng Việt**.
 
 - Thuật ngữ IT được giữ nguyên tiếng Anh (CTE, embedding, session, async, parse, token, JOIN, …).
-- Docstring nêu **mục đích** của hàm và những điều không đọc ra ngay từ code: giả định, bẫy, lý do
-  chọn cách làm này thay vì cách khác. Không mô tả lại từng dòng.
+- Docstring nêu **mục đích** của hàm và những điều không đọc ra ngay từ code: giả định, bẫy, lý do chọn cách làm này thay vì cách khác. Không mô tả lại từng dòng.
 - Khi sửa một hàm có docstring bằng ngôn ngữ khác (vd tiếng Trung), dịch luôn sang tiếng Việt.
 
 ## Quy ước commit
