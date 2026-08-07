@@ -15,6 +15,7 @@
   "ds_sync_fields": "同步表字段",
   "ds_table_id": "表 ID",
   "ds_table_name": "表名",
+  "ds_field_name": "字段名过滤",
   "ds_table_list": "获取表列表",
   "ds_field_list": "获取字段列表",
   "ds_edit_table": "编辑表信息",

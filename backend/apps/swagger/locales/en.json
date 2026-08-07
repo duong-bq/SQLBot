@@ -15,6 +15,7 @@
   "ds_sync_fields": "Sync Fields",
   "ds_table_id": "Table ID",
   "ds_table_name": "Table Name",
+  "ds_field_name": "Field Name Filter",
   "ds_table_list": "Get Table List",
   "ds_field_list": "Get Field List",
   "ds_edit_table": "Edit Table Info",

@@ -6,11 +6,11 @@ import traceback
 import uuid
 import re
 from io import StringIO
-from typing import List
+from typing import List, Optional
 from urllib.parse import quote
 
 import pandas as pd
-from fastapi import APIRouter, File, UploadFile, HTTPException, Path
+from fastapi import APIRouter, File, UploadFile, HTTPException, Path, Query
 from fastapi.responses import StreamingResponse
 from psycopg2 import sql
 from sqlalchemy import and_
@@ -76,7 +76,7 @@ async def datasource_list(session: SessionDep, user: CurrentUser):
     return get_datasource_list(session=session, user=user)
 
 
-@router.post("/get/{id}", response_model=CoreDatasource, summary=f"{PLACEHOLDER_PREFIX}ds_get")
+@router.get("/get/{id}", response_model=CoreDatasource, summary=f"{PLACEHOLDER_PREFIX}ds_get")
 @require_permissions(permission=SqlbotPermission(role=['ws_admin'], keyExpression="id", type='ds'))
 async def get_datasource(session: SessionDep, id: int = Path(..., description=f"{PLACEHOLDER_PREFIX}ds_id")):
     """
@@ -196,7 +196,7 @@ async def delete(session: SessionDep, id: int = Path(..., description=f"{PLACEHO
     return await delete_ds(session, id)
 
 
-@router.post("/getTables/{id}", response_model=List[TableSchemaResponse], summary=f"{PLACEHOLDER_PREFIX}ds_get_tables")
+@router.get("/getTables/{id}", response_model=List[TableSchemaResponse], summary=f"{PLACEHOLDER_PREFIX}ds_get_tables")
 @require_permissions(permission=SqlbotPermission(type='ds', keyExpression="id"))
 async def get_tables(session: SessionDep, id: int = Path(..., description=f"{PLACEHOLDER_PREFIX}ds_id")):
     """
@@ -271,8 +271,8 @@ async def get_schema_by_conf(session: SessionDep, trans: Trans, ds: CoreDatasour
             raise HTTPException(status_code=500, detail=f'Get table Failed: {e.args}')
 
 
-@router.post("/getFields/{id}/{table_name}", response_model=List[ColumnSchemaResponse],
-             summary=f"{PLACEHOLDER_PREFIX}ds_get_fields")
+@router.get("/getFields/{id}/{table_name}", response_model=List[ColumnSchemaResponse],
+            summary=f"{PLACEHOLDER_PREFIX}ds_get_fields")
 @require_permissions(permission=SqlbotPermission(role=['ws_admin'], type='ds', keyExpression="id"))
 async def get_fields(session: SessionDep,
                      id: int = Path(..., description=f"{PLACEHOLDER_PREFIX}ds_id"),
@@ -321,7 +321,7 @@ async def exec_sql(session: SessionDep, id: int, obj: TestObj):
     return await asyncio.to_thread(inner) """
 
 
-@router.post("/tableList/{id}", response_model=List[CoreTable], summary=f"{PLACEHOLDER_PREFIX}ds_table_list")
+@router.get("/tableList/{id}", response_model=List[CoreTable], summary=f"{PLACEHOLDER_PREFIX}ds_table_list")
 @require_permissions(permission=SqlbotPermission(role=['ws_admin'], type='ds', keyExpression="id"))
 async def table_list(session: SessionDep, id: int = Path(..., description=f"{PLACEHOLDER_PREFIX}ds_id")):
     """
@@ -333,16 +333,20 @@ async def table_list(session: SessionDep, id: int = Path(..., description=f"{PLA
     return get_tables_by_ds_id(session, id)
 
 
-@router.post("/fieldList/{id}", response_model=List[CoreField], summary=f"{PLACEHOLDER_PREFIX}ds_field_list")
+@router.get("/fieldList/{id}", response_model=List[CoreField], summary=f"{PLACEHOLDER_PREFIX}ds_field_list")
 @require_permissions(permission=SqlbotPermission(role=['ws_admin']))
-async def field_list(session: SessionDep, field: FieldObj,
-                     id: int = Path(..., description=f"{PLACEHOLDER_PREFIX}ds_table_id")):
+async def field_list(session: SessionDep,
+                     id: int = Path(..., description=f"{PLACEHOLDER_PREFIX}ds_table_id"),
+                     fieldName: Optional[str] = Query(None,
+                                                      description=f"{PLACEHOLDER_PREFIX}ds_field_name")):
     """
     Lấy danh sách cột ĐÃ đồng bộ của một bảng (``id`` là id bảng) — quyền ws_admin.
 
-    Body ``FieldObj`` dùng làm điều kiện lọc. Trả về ``CoreField`` đã lưu (kèm chú thích tùy chỉnh).
+    ``fieldName`` là query param không bắt buộc, lọc theo tên cột kiểu chứa. Trước đây điều kiện lọc
+    nằm trong body và pydantic bắt buộc phải có, nên client không lọc vẫn phải gửi ``fieldName: null``
+    — bỏ trống là 422. Chuyển sang GET nên không còn cái bẫy đó.
     """
-    return get_fields_by_table_id(session, id, field)
+    return get_fields_by_table_id(session, id, FieldObj(fieldName=fieldName))
 
 
 @router.post("/editLocalComment", include_in_schema=False)
@@ -379,19 +383,21 @@ async def edit_field(session: SessionDep, field: CoreField):
     updateField(session, field)
 
 
-@router.post("/previewData/{id}", response_model=PreviewResponse, summary=f"{PLACEHOLDER_PREFIX}ds_preview_data")
+@router.get("/previewData/{id}", response_model=PreviewResponse, summary=f"{PLACEHOLDER_PREFIX}ds_preview_data")
 @require_permissions(permission=SqlbotPermission(type='ds', keyExpression="id"))
-async def preview_data(session: SessionDep, trans: Trans, current_user: CurrentUser, data: TableObj,
-                       id: int = Path(..., description=f"{PLACEHOLDER_PREFIX}ds_id")):
+async def preview_data(session: SessionDep, trans: Trans, current_user: CurrentUser,
+                       id: int = Path(..., description=f"{PLACEHOLDER_PREFIX}ds_id"),
+                       table_id: int = Query(..., description=f"{PLACEHOLDER_PREFIX}ds_table_id")):
     """
-    Xem trước dữ liệu của một bảng thuộc nguồn dữ liệu ``id`` (yêu cầu quyền trên nguồn đó).
+    Xem trước 100 dòng dữ liệu của một bảng thuộc nguồn dữ liệu ``id`` (yêu cầu quyền trên nguồn đó).
 
-    Body ``TableObj`` xác định bảng và điều kiện. Trả về ``PreviewResponse`` (một số dòng dữ liệu mẫu).
-    Nếu truy vấn lỗi mà kết nối vẫn OK thì trả 500. Dùng để người dùng xem nhanh nội dung bảng.
+    ``table_id`` là query param bắt buộc. Trước đây bảng được xác định bằng cả một object ``TableObj``
+    trong body, nhưng chỉ ``table.id`` được dùng thật — phần còn lại (kể cả ``fields``) bị bỏ qua.
+    Nếu truy vấn lỗi mà kết nối vẫn OK thì trả 500.
     """
     def inner():
         try:
-            return preview(session, current_user, id, data)
+            return preview(session, current_user, id, table_id)
         except Exception as e:
             ds = session.query(CoreDatasource).filter(CoreDatasource.id == id).first()
             # check ds status

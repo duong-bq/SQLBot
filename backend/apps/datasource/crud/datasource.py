@@ -405,15 +405,24 @@ def updateField(session: SessionDep, field: CoreField):
     run_save_ds_embeddings([field.ds_id])
 
 
-def preview(session: SessionDep, current_user: CurrentUser, id: int, data: TableObj):
+def preview(session: SessionDep, current_user: CurrentUser, id: int, table_id: int):
+    """Lấy 100 dòng dữ liệu đầu của một bảng để xem trước.
+
+    Nhận ``table_id`` thay vì cả object bảng do client gửi: bảng luôn được nạp lại từ DB, nên phân
+    quyền dòng/cột không còn phụ thuộc vào dữ liệu client tự khai. Hai hàm phân quyền chỉ đọc
+    ``table.id`` nên hành vi không đổi.
+
+    Bảng không tồn tại, không còn cột nào, hoặc bị phân quyền cắt hết cột đều trả kết quả rỗng chứ
+    không ném lỗi — đây là màn hình xem trước, không phải nơi báo lỗi cấu hình.
+    """
     ds = session.query(CoreDatasource).filter(CoreDatasource.id == id).first()
     # check_status(session, ds, True)
 
-    # ignore data's fields param, query fields from database
-    if not data.table.id:
+    table = session.query(CoreTable).filter(CoreTable.id == table_id).first()
+    if table is None:
         return {"fields": [], "data": [], "sql": ''}
 
-    fields = session.query(CoreField).filter(CoreField.table_id == data.table.id).order_by(
+    fields = session.query(CoreField).filter(CoreField.table_id == table_id).order_by(
         CoreField.field_index.asc()).all()
 
     if fields is None or len(fields) == 0:
@@ -424,13 +433,13 @@ def preview(session: SessionDep, current_user: CurrentUser, id: int, data: Table
     if is_normal_user(current_user):
         # column is checked, and, column permission for data.fields
         contain_rules = session.query(DsRules).all()
-        f_list = get_column_permission_fields(session=session, current_user=current_user, table=data.table,
+        f_list = get_column_permission_fields(session=session, current_user=current_user, table=table,
                                               fields=f_list, contain_rules=contain_rules)
 
         # row permission tree
         where_str = ''
         filter_mapping = get_row_permission_filters(session=session, current_user=current_user, ds=ds, tables=None,
-                                                    single_table=data.table)
+                                                    single_table=table)
         if filter_mapping:
             mapping_dict = filter_mapping[0]
             where_str = mapping_dict.get('filter')
@@ -440,7 +449,6 @@ def preview(session: SessionDep, current_user: CurrentUser, id: int, data: Table
     if fields is None or len(fields) == 0:
         return {"fields": [], "data": [], "sql": ''}
 
-    table = session.query(CoreTable).filter(CoreTable.id == data.table.id).first()
     conf = DatasourceConf(**json.loads(aes_decrypt(ds.configuration))) if ds.type != "excel" else get_engine_config()
     sql: str = ""
     if ds.type == "mysql" or ds.type == "doris" or ds.type == "starrocks" or ds.type == "hive":
