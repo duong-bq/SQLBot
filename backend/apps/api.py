@@ -2,6 +2,7 @@ from fastapi import APIRouter
 
 from apps.chat.api import chat
 from apps.dashboard.api import dashboard_api
+from apps.hooks.api import ai_sync
 from apps.data_training.api import data_training
 from apps.datasource.api import datasource, table_relation, recommended_problem
 from apps.mcp import mcp
@@ -31,5 +32,7 @@ api_router.include_router(apikey.router)
 api_router.include_router(recommended_problem.router)
 
 api_router.include_router(variable_api.router)
+
+api_router.include_router(ai_sync.router)
 
 #api_router.include_router(audit_api.router)
