@@ -6,7 +6,7 @@ nghiệp vụ rollback.
 """
 
 from datetime import datetime, timezone
-from typing import Any, Optional
+from typing import Any
 
 from sqlalchemy import func, select
 from sqlmodel import Session
@@ -15,7 +15,7 @@ from apps.hooks.constants import SyncStatus
 from apps.hooks.models.ai_sync_model import AiSyncHookLog
 
 
-def get_log_by_idempotency_key(session: Session, idempotency_key: str) -> Optional[AiSyncHookLog]:
+def get_log_by_idempotency_key(session: Session, idempotency_key: str) -> AiSyncHookLog | None:
     """Tìm dòng log đã ghi cho một idempotency key, None nếu chưa có."""
     statement = select(AiSyncHookLog).where(AiSyncHookLog.idempotency_key == idempotency_key)
     return session.execute(statement).scalars().first()
@@ -24,11 +24,11 @@ def get_log_by_idempotency_key(session: Session, idempotency_key: str) -> Option
 def create_received_log(
     session: Session,
     *,
-    request_id: Optional[str],
-    idempotency_key: Optional[str],
+    request_id: str | None,
+    idempotency_key: str | None,
     action_type: int,
-    schema_version: Optional[str],
-    user_id: Optional[str],
+    schema_version: str | None,
+    user_id: str | None,
     request_payload: dict[str, Any],
     source: str = "SW",
 ) -> AiSyncHookLog:
@@ -59,9 +59,9 @@ def finish_log(
     log: AiSyncHookLog,
     *,
     status: str,
-    sync_version: Optional[int] = None,
-    error_code: Optional[str] = None,
-    error_message: Optional[str] = None,
+    sync_version: int | None = None,
+    error_code: str | None = None,
+    error_message: str | None = None,
 ) -> AiSyncHookLog:
     """Chốt kết quả xử lý vào dòng audit và commit.
 

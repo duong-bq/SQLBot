@@ -5,7 +5,6 @@ không biết gì về HTTP — route lo hai việc đó. Nhờ vậy handler te
 """
 
 from dataclasses import dataclass
-from typing import Optional
 
 from pydantic import ValidationError
 from sqlmodel import Session
@@ -25,7 +24,7 @@ from apps.hooks.schemas.ai_sync_schema import (
 class HandlerResult:
     """Kết quả một lần xử lý bản tin, để route dựng response và chốt audit log."""
 
-    user_id: Optional[str]
+    user_id: str | None
     status: SyncStatus
     upserted: int = 0
     deleted: int = 0

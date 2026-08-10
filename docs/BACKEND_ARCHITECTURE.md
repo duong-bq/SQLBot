@@ -51,6 +51,7 @@ backend/
 | `apps/template/` | Nạp prompt từ YAML (có `@cache`) | `template.py` |
 | `apps/system/` | User, workspace, auth, model config, assistant, apikey | `middleware/auth.py`, `schemas/permission.py`, `api/login.py` |
 | `apps/mcp/` | MCP server | `mcp.py` |
+| `apps/hooks/` | Cổng nhận bản tin đồng bộ từ hệ ngoài (SW) | `api/ai_sync.py`, `handlers/authorization.py`, `crud/ai_user_permission.py` |
 | `apps/dashboard/`, `apps/settings/`, `apps/swagger/` | Dashboard, tham số hệ thống, i18n cho OpenAPI | |
 | `common/core/` | Config, session DB, response middleware, cache | `config.py`, `db.py`, `response_middleware/` |
 | `common/utils/` | Tiện ích: crypto, log, lock phân tán, embedding thread | `crypto.py`, `distributed_lock.py`, `embedding_threads.py` |
@@ -89,8 +90,9 @@ theo thứ tự **ngược** với thứ tự thêm, nên `RequestContextMiddlew
    `SingleWorkerGuard.once` để nhiều worker uvicorn không cùng chạy.
 4. `async_model_info()` — mã hóa lại key/địa chỉ của model đã lưu.
 
-Migration mới nhất: `073_merge_heads_071.py` (gộp hai head `071` phát sinh khi merge nhánh). Trước
-đó: `072_add_chat_external_id.py`, `071_add_chat_record_answer.py`, `070_add_table_column_comments.py`.
+Migration mới nhất: `074_ai_sync_hook.py` (tạo `ai_sync_hook_logs` + `ai_user_permissions`). Trước
+đó: `073_merge_heads_071.py` (gộp hai head `071` phát sinh khi merge nhánh), `072_add_chat_external_id.py`,
+`071_add_chat_record_answer.py`, `070_add_table_column_comments.py`.
 
 ---
 
@@ -166,6 +168,20 @@ cần đụng code.
 `terminology` và `data_training`, mỗi bảng có cột `embedding` kiểu vector của pgvector, truy vấn
 bằng toán tử `<=>`.
 
+### Cụm AI Sync Hook — [ai_sync_model.py](../backend/apps/hooks/models/ai_sync_model.py)
+
+| Bảng | Vai trò |
+|---|---|
+| `ai_sync_hook_logs` | Audit toàn bộ request SW gửi vào `/hooks/ai-sync`: raw payload, trạng thái xử lý, `sync_version` |
+| `ai_user_permissions` | Trạng thái quyền **hiện tại** của user theo form, ghi từ bản tin `AUTHORIZATION_SYNC` (full snapshot — xem `AI_SYNC_HOOK_API_SPEC.md` §5) |
+
+Quan hệ: hai bảng liên kết lỏng qua `user_id` (không FK) — `ai_sync_hook_logs` là audit trail,
+`ai_user_permissions` là state hiện tại được `replace_user_permissions` ghi đè theo snapshot mỗi
+lần đồng bộ thành công. Khoá chính hai bảng này là UUID sinh phía DB (`gen_random_uuid()`), khác
+quy ước snowflake BigInt của phần còn lại trong repo, vì chúng do hệ ngoài ghi vào.
+
+Phase hiện tại **chưa** đọc `ai_user_permissions` trong pipeline Text2SQL — đó là việc của spec sau.
+
 ---
 
 ## 6. Tầng DB đa engine — `apps/db/db.py`
@@ -209,6 +225,10 @@ Pool của **DB metadata** thì cấu hình bằng `PG_POOL_SIZE` / `PG_MAX_OVER
 
 `TokenMiddleware` ([auth.py:26](../backend/apps/system/middleware/auth.py#L26)) chặn mọi request trừ
 danh sách trắng và preflight OPTIONS.
+
+`/hooks/*` nằm trong danh sách trắng này ([whitelist.py](../backend/common/utils/whitelist.py)):
+`POST /hooks/ai-sync` tự xác thực bằng static token riêng (`Authorization: Bearer
+<AI_SYNC_HOOK_TOKEN>`), không dùng JWT `X-SQLBOT-TOKEN`.
 
 ### Ba lớp phân quyền
 
@@ -305,7 +325,7 @@ Router đăng ký ở [apps/api.py](../backend/apps/api.py), prefix `settings.AP
 
 `login` · `user` · `workspace` · `assistant` · `aimodel` · `base` (settings) · `terminology` ·
 `data_training` · `datasource` · `chat` · `dashboard` · `mcp` · `table_relation` · `parameter` ·
-`apikey` · `recommended_problem` · `variable_api`
+`apikey` · `recommended_problem` · `variable_api` · `hooks`
 
 Đặc tả chi tiết đã có, **đừng viết lại**:
 
@@ -313,5 +333,7 @@ Router đăng ký ở [apps/api.py](../backend/apps/api.py), prefix `settings.AP
   datasource list, `POST /chat/question` SSE).
 - [DATASOURCE_API_SPEC.md](../backend/scripts/chat_stream_demo/DATASOURCE_API_SPEC.md) — 23 endpoint
   quản trị datasource, cho cả database quan hệ (§3–§7) lẫn file Excel/CSV (§8).
+- [AI_SYNC_HOOK_API_SPEC.md](../backend/scripts/ai_sync_hook/AI_SYNC_HOOK_API_SPEC.md) — cổng nhận
+  bản tin đồng bộ từ hệ thống SW (`POST /hooks/ai-sync`).
 
 Swagger: `GET /docs` (bật/tắt bằng `SQLBOT_DOC_ENABLED`), có i18n qua `?lang=zh|en`.

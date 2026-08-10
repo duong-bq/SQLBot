@@ -1,7 +1,6 @@
 """Truy cập bảng `ai_user_permissions` — trạng thái quyền hiện tại của user."""
 
 from datetime import datetime, timezone
-from typing import Optional
 
 from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
@@ -15,7 +14,7 @@ def replace_user_permissions(
     session: Session,
     *,
     user_id: str,
-    full_name: Optional[str],
+    full_name: str | None,
     is_admin: bool,
     form_queries: list[FormQuery],
     sync_version: int,

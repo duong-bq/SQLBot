@@ -128,6 +128,8 @@ vector cũ và mới không cùng không gian.
 | `CORS_ALLOW_ALL_ORIGINS` | `False` | Không khai được bằng `BACKEND_CORS_ORIGINS='*'` vì kiểu là `AnyUrl`. Bật cờ này thì `main.py` dùng `allow_origin_regex='.*'`, vẫn hoạt động với credentials |
 | `BACKEND_CORS_ORIGINS` | `[]` | Danh sách origin, ngăn bằng dấu phẩy. Starlette so khớp **chuỗi chính xác** — khác scheme/host/port là bị chặn, không có wildcard theo domain |
 | `SQLBOT_DOC_ENABLED` | `True` | Bật `/docs` và `/openapi.json` |
+| `AI_SYNC_HOOK_ENABLED` | `False` | Bật cổng `POST /hooks/ai-sync` (xem `AI_SYNC_HOOK_API_SPEC.md`) |
+| `AI_SYNC_HOOK_TOKEN` | `""` | Static token của hook. **Rỗng thì hook trả 503**, không chấp nhận request không token dù `ENABLED=True` |
 
 ### 2.7. Khác
 
@@ -327,6 +329,21 @@ Bản `end_log` chính là thứ lượt sau đọc để phát lại. Muốn bi
 Kết quả cuối của lượt: `sql`, `data`, `answer`, `error`, `finish`. Lượt **hạ cấp** có `answer` khác
 rỗng nhưng `sql` và `data` rỗng, và `error` **cũng rỗng** — đó là dấu nhận biết.
 
+### Debug một lần đồng bộ của AI Sync Hook
+
+Dựng lại một lần gọi `POST /hooks/ai-sync` bằng cách truy vấn `ai_sync_hook_logs` theo
+`idempotency_key` (client gửi trong header, log lại phía SW) hoặc theo `user_id`:
+
+```sql
+SELECT status, action_type, sync_version, error_code, error_message, received_at, processed_at
+FROM ai_sync_hook_logs
+WHERE idempotency_key = '...' OR user_id = '...'
+ORDER BY received_at DESC;
+```
+
+`request_payload` (JSONB) là body thô SW đã gửi — dùng để tái hiện request khi cần. Trạng thái quyền
+hiện tại (sau khi đã áp snapshot) nằm ở `ai_user_permissions`, lọc theo `user_id`.
+
 ---
 
 ## 7. Bẫy đã biết
@@ -373,3 +390,11 @@ kỳ tài liệu, log hay issue nào; nếu cần xoay vòng mật khẩu thì p
 | Cắt dòng dữ liệu mà không kèm `build_data_scope_note` → LLM bịa số tổng | Xem [TEXT2SQL_PIPELINE.md §6](TEXT2SQL_PIPELINE.md) |
 | Không có cơ chế hủy | `AbortController` phía client chỉ ngắt kết nối; backend vẫn chạy tới hết và vẫn tính token |
 | Không chạy song song nhiều câu hỏi trên cùng `chat_id` | Xem `API_SPEC.md` §7.4 |
+
+### 7.5. AI Sync Hook
+
+| Bẫy | Chi tiết |
+|---|---|
+| Bản tin bị coi là `STALE` mà SW vẫn thấy **HTTP 200** | Chống lùi dựa trên `timestamp` của SW, không phải sequence phía DB. Đồng hồ SW lệch về quá khứ (hoặc lệch múi giờ, thiếu offset) khiến bản tin mới bị bỏ qua trong khi request vẫn "thành công" theo status code — phải đọc trường `status` trong body, không chỉ HTTP status |
+| `AUTHORIZATION_SYNC` là **full snapshot**, không phải patch | Gửi thiếu một `formUuid` đang có quyền là **thu hồi** form đó, không phải "giữ nguyên". `formQueries: []` thu hồi hết. Xem `AI_SYNC_HOOK_API_SPEC.md` §5 |
+| `AI_SYNC_HOOK_TOKEN` rỗng thì hook trả 503 dù `AI_SYNC_HOOK_ENABLED=True` | Mặc định an toàn có chủ ý, không phải bug |

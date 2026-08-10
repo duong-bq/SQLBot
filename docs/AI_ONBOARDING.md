@@ -37,6 +37,9 @@ Hệ quả cụ thể: `ChatFinishStep` đã bị **đánh số lại** để ch
   ([mcp.py:258](../backend/apps/mcp/mcp.py#L258)).
 - Số lần gọi LLM cho một lượt hỏi bình thường: **2** (sinh SQL + sinh answer).
 - Backend Python 3.11 + FastAPI, quản lý dependency bằng `uv`; frontend Vue 3 + TypeScript.
+- Có cổng `POST /hooks/ai-sync` (`apps/hooks/`) nhận bản tin đồng bộ quyền user từ hệ thống SW, ghi
+  vào `ai_user_permissions`. **Chưa** nối vào pipeline Text2SQL — LLM chưa dùng dữ liệu này để giới
+  hạn quyền truy vấn.
 
 ## 4. Bản đồ tài liệu — hỏi gì thì đọc file nào
 
@@ -56,6 +59,7 @@ Hệ quả cụ thể: `ChatFinishStep` đã bị **đánh số lại** để ch
 |---|---|
 | [backend/scripts/chat_stream_demo/API_SPEC.md](../backend/scripts/chat_stream_demo/API_SPEC.md) | Hợp đồng tích hợp chat: login, list datasource, `POST /chat/question` (SSE) — đủ catalog event, bảng lỗi, giới hạn hệ thống |
 | [backend/scripts/chat_stream_demo/DATASOURCE_API_SPEC.md](../backend/scripts/chat_stream_demo/DATASOURCE_API_SPEC.md) | 23 endpoint quản trị datasource — tạo/sync/chọn bảng/sửa chú thích/quan hệ bảng, cho cả database quan hệ lẫn file Excel/CSV |
+| [backend/scripts/ai_sync_hook/AI_SYNC_HOOK_API_SPEC.md](../backend/scripts/ai_sync_hook/AI_SYNC_HOOK_API_SPEC.md) | Cổng `POST /hooks/ai-sync` nhận bản tin đồng bộ quyền từ SW — actionType, full-snapshot, idempotency, bảng lỗi |
 | [backend/scripts/eval_text2sql/README.md](../backend/scripts/eval_text2sql/README.md) | Cách dùng harness đánh giá chất lượng |
 
 ### Tài liệu ở repo root — biết để **khỏi mở nhầm**

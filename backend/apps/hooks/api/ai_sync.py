@@ -16,7 +16,7 @@ Ba điều dễ hỏng nếu sửa file này:
 """
 
 import secrets
-from typing import Any, Optional
+from typing import Any
 
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
@@ -76,14 +76,14 @@ def _respond(
     http_status: int,
     action_type: int,
     status: SyncStatus,
-    request_id: Optional[str] = None,
-    idempotency_key: Optional[str] = None,
-    log_id: Optional[str] = None,
-    user_id: Optional[str] = None,
+    request_id: str | None = None,
+    idempotency_key: str | None = None,
+    log_id: str | None = None,
+    user_id: str | None = None,
     upserted: int = 0,
     deleted: int = 0,
-    error_code: Optional[SyncErrorCode] = None,
-    error_message: Optional[str] = None,
+    error_code: SyncErrorCode | None = None,
+    error_message: str | None = None,
 ) -> JSONResponse:
     """Dựng JSONResponse thống nhất cho mọi nhánh trả về của hook."""
     body = SyncHookResponse(
@@ -101,7 +101,7 @@ def _respond(
 
 
 def _duplicate_response(
-    log: AiSyncHookLog, *, request_id: Optional[str], idempotency_key: str
+    log: AiSyncHookLog, *, request_id: str | None, idempotency_key: str
 ) -> JSONResponse:
     """Trả kết quả của lần xử lý đầu tiên cho request trùng idempotency key.
 

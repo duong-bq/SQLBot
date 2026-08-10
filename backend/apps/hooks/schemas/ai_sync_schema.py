@@ -5,7 +5,7 @@ chú ý: alias là `clickHouseQuery` (chữ H hoa) — viết sai alias thì que
 """
 
 from datetime import datetime, timezone
-from typing import Any, Optional
+from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -34,8 +34,8 @@ class FieldItem(BaseModel):
     model_config = ConfigDict(populate_by_name=True, extra="ignore")
 
     id: str = Field(min_length=1)
-    name: Optional[str] = None
-    description: Optional[str] = None
+    name: str | None = None
+    description: str | None = None
 
 
 class TableInfo(BaseModel):
@@ -51,8 +51,8 @@ class TableInfo(BaseModel):
     model_config = ConfigDict(populate_by_name=True, extra="ignore")
 
     database_table_name: str = Field(alias="databaseTableName", min_length=1)
-    table_display_name: Optional[str] = Field(default=None, alias="tableDisplayName")
-    table_description: Optional[str] = Field(default=None, alias="tableDescription")
+    table_display_name: str | None = Field(default=None, alias="tableDisplayName")
+    table_description: str | None = Field(default=None, alias="tableDescription")
     field_list: list[FieldItem] = Field(alias="fields")
 
 
@@ -63,8 +63,8 @@ class FormQuery(BaseModel):
 
     form_uuid: str = Field(alias="formUuid", min_length=1)
     table_info: TableInfo = Field(alias="tableInfo")
-    postgres_query: Optional[str] = Field(default=None, alias="postgresQuery")
-    clickhouse_query: Optional[str] = Field(default=None, alias="clickHouseQuery")
+    postgres_query: str | None = Field(default=None, alias="postgresQuery")
+    clickhouse_query: str | None = Field(default=None, alias="clickHouseQuery")
 
 
 class AuthorizationSyncData(BaseModel):
@@ -77,7 +77,7 @@ class AuthorizationSyncData(BaseModel):
     model_config = ConfigDict(populate_by_name=True, extra="ignore")
 
     user_id: str = Field(alias="userId", min_length=1)
-    full_name: Optional[str] = Field(default=None, alias="fullName")
+    full_name: str | None = Field(default=None, alias="fullName")
     is_admin: bool = Field(alias="isAdmin")
     form_queries: list[FormQuery] = Field(alias="formQueries")
 
@@ -94,15 +94,15 @@ class SyncHookResponse(BaseModel):
 
     model_config = ConfigDict(populate_by_name=True)
 
-    requestId: Optional[str] = None
-    idempotencyKey: Optional[str] = None
+    requestId: str | None = None
+    idempotencyKey: str | None = None
     actionType: int
     status: str
-    logId: Optional[str] = None
-    userId: Optional[str] = None
+    logId: str | None = None
+    userId: str | None = None
     applied: SyncAppliedCounts = Field(default_factory=SyncAppliedCounts)
-    errorCode: Optional[str] = None
-    errorMessage: Optional[str] = None
+    errorCode: str | None = None
+    errorMessage: str | None = None
 
 
 def to_sync_version(ts: datetime) -> int:
@@ -125,7 +125,7 @@ def normalize_fields(items: list[FieldItem]) -> list[dict[str, Any]]:
     return [{"id": item.id, "name": item.name, "description": item.description} for item in items]
 
 
-def find_duplicate_form_uuid(form_queries: list[FormQuery]) -> Optional[str]:
+def find_duplicate_form_uuid(form_queries: list[FormQuery]) -> str | None:
     """Trả `formUuid` đầu tiên bị lặp trong payload, None nếu không có.
 
     Kiểm tường minh thay vì để `UNIQUE(user_id, form_uuid)` xử lý: nếu để DB lo thì hành vi thành
