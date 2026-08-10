@@ -1,0 +1,208 @@
+template:
+  process_check: |
+    <SQL-Generation-Process>
+      <step>1. Phân tích câu hỏi của người dùng, xác định nhu cầu truy vấn</step>
+      <step>2. Sinh SQL cơ bản dựa trên cấu trúc bảng</step>
+      <step>3. <strong>Kiểm tra bắt buộc: xác minh từng ký tự rằng tên bảng và tên trường được dùng trong SQL có được định nghĩa trong <m-schema> hay không, và các ký tự phải khớp hoàn toàn (bao gồm phồn/giản thể, hoa/thường, ký tự đặc biệt), không được có bất kỳ chuyển đổi nào. Nếu phát hiện bất kỳ điểm không nhất quán nào, bắt buộc phải sinh lại SQL.</strong></step>
+      <step>4. <strong>Kiểm tra bắt buộc: áp dụng quy tắc giới hạn số lượng dữ liệu (giới hạn mặc định hoặc số lượng người dùng chỉ định)</strong></step>
+      <step>5. Áp dụng các quy tắc khác (dấu ngoặc, bí danh, định dạng, v.v.)</step>
+      <step>6. <strong>Xác minh cuối cùng: vị trí ROWNUM của truy vấn GROUP BY có đúng không?</strong></step>
+      <step>7. <strong>Kiểm tra bắt buộc: xác minh cú pháp SQL có tuân thủ chuẩn của <db-engine> hay không</strong></step>
+      <step>8. Xác định loại biểu đồ (theo quy tắc chọn table/column/bar/line/pie)</step>
+      <step>9. Xác định tiêu đề hội thoại</step>
+      <step>10. Sinh kết quả JSON</step>
+      <step>11. <strong>Kiểm tra bắt buộc: định dạng JSON có đúng không</strong></step>
+      <step>12. Trả về kết quả JSON</step>
+    </SQL-Generation-Process>
+
+  quot_rule: |
+    <rule>
+      Bắt buộc thêm dấu nháy kép (") bao quanh tên cơ sở dữ liệu, tên bảng, tên trường, bí danh.
+      <note>
+        1. Dấu chấm (.) không được nằm trong dấu nháy, phải viết thành "schema"."table"
+        2. Ngay cả khi định danh không chứa ký tự đặc biệt hoặc không phải từ khóa, vẫn bắt buộc thêm dấu nháy kép
+        3. Tên đối tượng Oracle mặc định viết hoa, nếu cần viết thường phải thêm dấu nháy kép
+      </note>
+    </rule>
+
+  limit_rule: |
+    <rule priority="critical" id="oracle-version-handling">
+      <title>Thích ứng cú pháp theo phiên bản Oracle</title>
+      <decision-flow>
+        <condition>Nếu số phiên bản db-engine nhỏ hơn 12</condition>
+        <then>Bắt buộc dùng cú pháp ROWNUM</then>
+        <condition>Nếu số phiên bản db-engine lớn hơn hoặc bằng 12</condition>
+        <then>Khuyến nghị dùng cú pháp FETCH FIRST</then>
+      </decision-flow>
+    </rule>
+    <rule priority="critical" id="oracle-FETCH-FIRST-syntax-rule">
+      <title>Chuẩn cú pháp FETCH FIRST của cơ sở dữ liệu Oracle</title>
+      <description>Nếu dùng cú pháp FETCH FIRST thì bắt buộc tuân theo chuẩn này</description>
+      <syntax-rule>
+        <template>SELECT ... FROM table WHERE conditions FETCH FIRST N ROWS ONLY</template>
+      </syntax-rule>
+    </rule>
+    <rule priority="critical" id="oracle-ROWNUM-syntax-rule">
+      <title>Chuẩn cú pháp ROWNUM của cơ sở dữ liệu Oracle</title>
+      <description>Nếu dùng cú pháp ROWNUM thì bắt buộc tuân theo chuẩn này</description>
+      <syntax-rules>
+        <syntax-rule>
+          <rule-category>Truy vấn đơn giản</rule-category>
+          <template>SELECT ... FROM table WHERE conditions AND ROWNUM <= N</template>
+        </syntax-rule>
+        <syntax-rule>
+          <rule-category>Vùng cấm cú pháp</rule-category>
+          <prohibited>
+            - Cấm nhiều mệnh đề WHERE
+            - Cấm ROWNUM nằm bên trong GROUP BY (ảnh hưởng kết quả nhóm)
+            - Cấm dấu ngoặc không đầy đủ
+          </prohibited>
+        </syntax-rule>
+      </syntax-rules>
+    </rule>
+    <rule priority="critical" id="oracle-groupby-rownum">
+      <title>Chuẩn bắt buộc về ROWNUM cho truy vấn GROUP BY (bắt buộc tuân thủ nghiêm ngặt)</title>
+      <requirement level="must">Mọi truy vấn có chứa GROUP BY hoặc hàm tổng hợp phải dùng cấu trúc truy vấn lồng ngoài</requirement>
+      <requirement level="must">ROWNUM phải đặt trong mệnh đề WHERE của truy vấn ngoài cùng</requirement>
+
+      <decision-flow>
+        <condition>Nếu SQL chứa GROUP BY, COUNT, SUM hoặc các hàm tổng hợp khác</condition>
+        <action>Bắt buộc dùng: SELECT ... FROM (truy vấn hoàn chỉnh bên trong) WHERE ROWNUM <= N</action>
+        <condition>Ngược lại (truy vấn đơn giản)</condition>
+        <action>Có thể dùng: SELECT ... FROM table WHERE conditions AND ROWNUM <= N</action>
+      </decision-flow>
+
+      <error-example>
+        -- Lỗi: ROWNUM ở lớp trong làm ảnh hưởng kết quả nhóm
+        SELECT ... GROUP BY ... WHERE ROWNUM <= N
+      </error-example>
+
+      <correct-example>
+        -- Đúng: ROWNUM ở lớp ngoài
+        SELECT ... FROM (SELECT ... GROUP BY ...) WHERE ROWNUM <= N
+      </correct-example>
+    </rule>
+
+  other_rule: |
+    <rule>Phải sinh bí danh cho mỗi bảng (không thêm AS)</rule>
+    {multi_table_condition}
+    <rule>Cấm dùng dấu sao (*), phải nêu rõ tên trường</rule>
+    <rule>Trường tiếng Việt/ký tự đặc biệt cần giữ nguyên tên gốc và thêm bí danh tiếng Anh</rule>
+    <rule>Trường hàm phải thêm bí danh</rule>
+    <rule>Trường phần trăm giữ hai chữ số thập phân và kết thúc bằng %</rule>
+    <rule>Tránh xung đột với từ khóa Oracle (như DATE/LEVEL/ORDER, v.v.)</rule>
+
+  basic_example: |
+    <basic-examples>
+      <intro>
+        📌 Các ví dụ sau tuân thủ nghiêm ngặt chuẩn Oracle trong <Rules>, minh họa cách viết SQL đúng yêu cầu và các trường hợp lỗi điển hình.
+        ⚠️ Lưu ý: tên bảng, tên trường trong ví dụ đều là hư cấu để minh họa, khi dùng thực tế cần thay bằng định danh thật do người dùng cung cấp.
+        🔍 Điểm cần quan sát kỹ:
+          1. Cách dùng chuẩn dấu nháy kép bao quanh mọi đối tượng cơ sở dữ liệu
+          2. Cách xử lý các trường đặc biệt như bí danh Việt-Anh/phần trăm/hàm
+          3. Cách tránh xung đột từ khóa
+      </intro>
+      <example>
+        <input>Truy vấn 100 đơn hàng đầu của bảng TEST.ORDERS (có trường tiếng Việt và phần trăm)</input>
+        <output-bad>
+          SELECT * FROM TEST.ORDERS WHERE ROWNUM <= 100  -- Lỗi: chưa thêm dấu nháy, dùng dấu sao
+          SELECT "Mã đơn hàng", "Số tiền" FROM "TEST"."ORDERS" "t1" WHERE ROWNUM <= 100  -- Lỗi: thiếu bí danh tiếng Anh
+          SELECT COUNT("Mã đơn hàng") FROM "TEST"."ORDERS" "t1"  -- Lỗi: hàm chưa thêm bí danh
+        </output-bad>
+        <output-good version="12c-below">
+          SELECT
+            "t1"."Mã đơn hàng" AS "order_id",
+            "t1"."Số tiền" AS "amount",
+            COUNT("t1"."Mã đơn hàng") AS "total_orders",
+            TO_CHAR("t1"."Tỷ lệ chiết khấu" * 100, '990.99') || '%' AS "discount_percent"
+          FROM "TEST"."ORDERS" "t1"
+          GROUP BY "t1"."Mã đơn hàng", "t1"."Số tiền", "t1"."Tỷ lệ chiết khấu"
+          WHERE ROWNUM <= 100
+        </output-good>
+      </example>
+
+      <example>
+        <input>Thống kê tỷ lệ hoạt động của bảng người dùng PUBLIC.USERS (có trường từ khóa DATE)</input>
+        <output-bad>
+          SELECT DATE, status FROM PUBLIC.USERS  -- Lỗi: chưa xử lý từ khóa và dấu nháy
+          SELECT "DATE", ROUND(active_ratio) FROM "PUBLIC"."USERS"  -- Lỗi: định dạng phần trăm sai
+        </output-bad>
+        <output-good version="12c-below">
+          SELECT
+            "u"."DATE" AS "create_date",
+            TO_CHAR("u"."active_ratio" * 100, '990.99') || '%' AS "active_percent"
+          FROM "PUBLIC"."USERS" "u"
+          WHERE "u"."status" = 1
+          AND ROWNUM <= 1000
+        </output-good>
+        <output-good version="12c+">
+          SELECT
+            "u"."DATE" AS "create_date",
+            TO_CHAR("u"."active_ratio" * 100, '990.99') || '%' AS "active_percent"
+          FROM "PUBLIC"."USERS" "u"
+          WHERE "u"."status" = 1
+          FETCH FIRST 1000 ROWS ONLY
+        </output-good>
+      </example>
+
+      <example>
+        <input>Thống kê số người theo từng phòng ban của bảng người dùng PUBLIC.USERS</input>
+        <output-bad>
+          SELECT
+            "u"."DEPARTMENT" AS "department_name",
+            count(*) AS "user_count"
+          FROM "PUBLIC"."USERS" "u"
+          WHERE "u"."status" = 1
+          AND ROWNUM <= 100             -- Lỗi nghiêm trọng: ảnh hưởng kết quả nhóm!
+          GROUP BY "u"."DEPARTMENT"
+          ORDER BY "department_name"
+        </output-bad>
+        <output-bad>
+          SELECT "department_name", "user_count" FROM
+          SELECT
+            "u"."DEPARTMENT" AS "department_name",
+            count(*) AS "user_count"
+          FROM "PUBLIC"."USERS" "u"
+          WHERE "u"."status" = 1
+          GROUP BY "u"."DEPARTMENT"
+          ORDER BY "department_name"
+          WHERE ROWNUM <= 100     -- Lỗi: sai cú pháp, cùng một cấp chỉ được có một WHERE
+        </output-bad>
+        <output-good version="12c-below">
+          SELECT "department_name", "user_count" FROM (
+            SELECT
+              "u"."DEPARTMENT" AS "department_name",
+              count(*) AS "user_count"
+            FROM "PUBLIC"."USERS" "u"
+            WHERE "u"."status" = 1
+            GROUP BY "u"."DEPARTMENT"
+            ORDER BY "department_name"
+          )
+          WHERE ROWNUM <= 100     -- Đúng, giới hạn số lượng ở lớp ngoài (đảm bảo kết quả cuối cùng kiểm soát được)
+        </output-good>
+        <output-good version="12c+">
+          SELECT
+            "u"."DEPARTMENT" AS "department_name",
+            count(*) AS "user_count"
+          FROM "PUBLIC"."USERS" "u"
+          WHERE "u"."status" = 1
+          GROUP BY "u"."DEPARTMENT"
+          ORDER BY "department_name"
+          FETCH FIRST 100 ROWS ONLY
+        </output-good>
+      </example>
+    </basic-examples>
+
+  example_engine: Oracle 11g
+  example_answer_1: |
+    {"success":true,"sql":"SELECT \"country\" AS \"country_name\", \"continent\" AS \"continent_name\", \"year\" AS \"year\", \"gdp\" AS \"gdp\" FROM \"Sample_Database\".\"sample_country_gdp\" ORDER BY \"country\", \"year\"","tables":["sample_country_gdp"],"chart-type":"line"}
+  example_answer_1_with_limit: |
+    {"success":true,"sql":"SELECT \"country\" AS \"country_name\", \"continent\" AS \"continent_name\", \"year\" AS \"year\", \"gdp\" AS \"gdp\" FROM \"Sample_Database\".\"sample_country_gdp\" WHERE ROWNUM <= 1000 ORDER BY \"country\", \"year\"","tables":["sample_country_gdp"],"chart-type":"line"}
+  example_answer_2: |
+    {"success":true,"sql":"SELECT \"country\" AS \"country_name\", \"gdp\" AS \"gdp\" FROM \"Sample_Database\".\"sample_country_gdp\" WHERE \"year\" = '2024' ORDER BY \"gdp\" DESC","tables":["sample_country_gdp"],"chart-type":"pie"}
+  example_answer_2_with_limit: |
+    {"success":true,"sql":"SELECT \"country\" AS \"country_name\", \"gdp\" AS \"gdp\" FROM \"Sample_Database\".\"sample_country_gdp\" WHERE \"year\" = '2024' AND ROWNUM <= 1000 ORDER BY \"gdp\" DESC","tables":["sample_country_gdp"],"chart-type":"pie"}
+  example_answer_3: |
+    {"success":true,"sql":"SELECT \"country\" AS \"country_name\", \"gdp\" AS \"gdp\" FROM \"Sample_Database\".\"sample_country_gdp\" WHERE \"year\" = '2025' AND \"country\" = 'Việt Nam'","tables":["sample_country_gdp"],"chart-type":"table"}
+  example_answer_3_with_limit: |
+    {"success":true,"sql":"SELECT \"country\" AS \"country_name\", \"gdp\" AS \"gdp\" FROM \"Sample_Database\".\"sample_country_gdp\" WHERE \"year\" = '2025' AND \"country\" = 'Việt Nam' AND ROWNUM <= 1000","tables":["sample_country_gdp"],"chart-type":"table"}

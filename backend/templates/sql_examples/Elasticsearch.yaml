@@ -1,0 +1,105 @@
+template:
+  quot_rule: |
+    <rule>
+      Bắt buộc thêm dấu nháy kép (") bao quanh tên chỉ mục (tên bảng), tên trường, bí danh.
+      <note>
+        1. Chỉ mục có ký tự đại diện cần thêm dấu nháy toàn bộ: `"logs-*"`
+        2. Trường lồng nhau dùng dấu chấm để nối: `"user.name"`
+        3. Trường thời gian phải chuyển đổi tường minh: `CAST("@timestamp" AS TIMESTAMP)`
+      </note>
+    </rule>
+
+  limit_rule: |
+    <rule>
+      Khi cần giới hạn số dòng, phải dùng cú pháp LIMIT chuẩn
+      <note>
+        1. Ưu tiên: `LIMIT [count]`
+        2. Phân trang: `LIMIT [count] OFFSET [start]`
+        3. Cấm dùng tham số gốc `size/from` của Elasticsearch
+      </note>
+    </rule>
+
+  other_rule: |
+    <rule>Phải sinh bí danh cho mỗi chỉ mục (không thêm AS)</rule>
+    <rule>
+      <title>Quy tắc giới hạn trường khi truy vấn nhiều bảng trong Elasticsearch SQL</title>
+      <requirements>
+        <requirement>Khi dùng JOIN liên quan nhiều chỉ mục, mọi tham chiếu trường phải chỉ rõ bí danh chỉ mục</requirement>
+        <requirement>Áp dụng cho mọi tham chiếu trường trong các mệnh đề SELECT, WHERE, GROUP BY, HAVING, ORDER BY, ON, v.v.</requirement>
+        <requirement>Truy vấn một chỉ mục không cần tiền tố tên bảng</requirement>
+      </requirements>
+      <notes>
+        <note>Hiệu năng JOIN của Elasticsearch có hạn, chỉ phù hợp liên kết lượng dữ liệu nhỏ</note>
+        <note>Tham chiếu định danh dùng dấu nháy kép (")</note>
+        <note>Phần lớn truy vấn Elasticsearch là truy vấn một chỉ mục, không cần giới hạn trường</note>
+        <note>Trường lồng nhau truy cập qua dấu chấm, như "customer.name", không cần tiền tố tên bảng</note>
+      </notes>
+    </rule>
+    <rule>Cấm dùng dấu sao (*), phải nêu rõ tên trường</rule>
+    <rule>Trường tiếng Việt/ký tự đặc biệt cần giữ nguyên tên gốc và thêm bí danh tiếng Anh</rule>
+    <rule>Trường hàm phải thêm bí danh</rule>
+    <rule>Phần trăm hiển thị dạng: `ROUND(x*100,2) || '%'`</rule>
+    <rule>Tránh xung đột với từ khóa Elasticsearch (như `score`/`type`)</rule>
+
+  basic_example: |
+    <basic-examples>
+      <intro>
+        📌 Các ví dụ sau tuân thủ nghiêm ngặt chuẩn Elasticsearch trong <Rules>, minh họa cách viết SQL đúng yêu cầu và các trường hợp lỗi điển hình.
+        ⚠️ Lưu ý: tên bảng, tên trường trong ví dụ đều là hư cấu để minh họa, khi dùng thực tế cần thay bằng định danh thật do người dùng cung cấp.
+        🔍 Điểm cần quan sát kỹ:
+          1. Cách dùng chuẩn dấu nháy kép bao quanh mọi đối tượng cơ sở dữ liệu
+          2. Cách xử lý các trường đặc biệt như bí danh Việt-Anh/phần trăm/hàm
+          3. Cách tránh xung đột từ khóa
+      </intro>
+      <example>
+        <input>Truy vấn 100 log lỗi đầu của chỉ mục logs-* (có lọc thời gian)</input>
+        <output-bad>
+          SELECT * FROM logs-* WHERE level = 'error' LIMIT 100  -- Lỗi 1: dùng dấu sao
+          SELECT message FROM "logs-*" WHERE @timestamp > NOW() - 1d  -- Lỗi 2: chưa chuyển đổi thời gian
+          SELECT "message", "@timestamp" FROM "logs-*" LIMIT 100  -- Lỗi 3: chưa xử lý trường thời gian
+        </output-bad>
+        <output-good>
+          SELECT
+            "l"."message" AS "log_content",
+            "l"."host.ip" AS "client_ip",
+            CAST("l"."@timestamp" AS TIMESTAMP) AS "log_time"
+          FROM "logs-*" "l"
+          WHERE "l"."level" = 'error'
+          AND CAST("l"."@timestamp" AS TIMESTAMP) > DATE_SUB(NOW(), INTERVAL 1 DAY)
+          LIMIT 100
+        </output-good>
+      </example>
+
+      <example>
+        <input>Thống kê tỷ trọng log lỗi theo khu vực (Top 5)</input>
+        <output-bad>
+          SELECT region, COUNT(*) FROM "logs-*" GROUP BY region  -- Lỗi 1: dùng COUNT(*)
+          SELECT "region", MAX("count") FROM "logs-*" GROUP BY 1  -- Lỗi 2: nhóm bằng số thứ tự
+        </output-bad>
+        <output-good>
+          SELECT
+            "l"."region" AS "area",
+            COUNT("l"."message") AS "error_count",
+            ROUND(COUNT("l"."message") * 100.0 / SUM(COUNT("l"."message")) OVER (), 2) || '%' AS "error_percent"
+          FROM "logs-*" "l"
+          WHERE "l"."level" = 'error'
+          GROUP BY "l"."region"
+          ORDER BY "error_count" DESC
+          LIMIT 5
+        </output-good>
+      </example>
+    </basic-examples>
+
+  example_engine: Elasticsearch SQL 8.9
+  example_answer_1: |
+    {"success":true,"sql":"SELECT \"country\" AS \"country_name\", \"continent\" AS \"continent_name\", \"year\" AS \"year\", \"gdp\" AS \"gdp_usd\" FROM \"Sample_Database\".\"sample_country_gdp\" ORDER BY \"country\", \"year\"","tables":["sample_country_gdp"],"chart-type":"line"}
+  example_answer_1_with_limit: |
+    {"success":true,"sql":"SELECT \"country\" AS \"country_name\", \"continent\" AS \"continent_name\", \"year\" AS \"year\", \"gdp\" AS \"gdp_usd\" FROM \"Sample_Database\".\"sample_country_gdp\" ORDER BY \"country\", \"year\" LIMIT 1000","tables":["sample_country_gdp"],"chart-type":"line"}
+  example_answer_2: |
+    {"success":true,"sql":"SELECT \"country\" AS \"country_name\", \"gdp\" AS \"gdp_usd\" FROM \"Sample_Database\".\"sample_country_gdp\" WHERE \"year\" = '2024' ORDER BY \"gdp\" DESC","tables":["sample_country_gdp"],"chart-type":"pie"}
+  example_answer_2_with_limit: |
+    {"success":true,"sql":"SELECT \"country\" AS \"country_name\", \"gdp\" AS \"gdp_usd\" FROM \"Sample_Database\".\"sample_country_gdp\" WHERE \"year\" = '2024' ORDER BY \"gdp\" DESC LIMIT 1000","tables":["sample_country_gdp"],"chart-type":"pie"}
+  example_answer_3: |
+    {"success":true,"sql":"SELECT \"country\" AS \"country_name\", \"gdp\" AS \"gdp_usd\" FROM \"Sample_Database\".\"sample_country_gdp\" WHERE \"year\" = '2025' AND \"country\" = 'Việt Nam'","tables":["sample_country_gdp"],"chart-type":"table"}
+  example_answer_3_with_limit: |
+    {"success":true,"sql":"SELECT \"country\" AS \"country_name\", \"gdp\" AS \"gdp_usd\" FROM \"Sample_Database\".\"sample_country_gdp\" WHERE \"year\" = '2025' AND \"country\" = 'Việt Nam' LIMIT 1000","tables":["sample_country_gdp"],"chart-type":"table"}

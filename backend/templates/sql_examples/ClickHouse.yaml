@@ -1,0 +1,91 @@
+template:
+  quot_rule: |
+    <rule>
+      Bắt buộc thêm dấu nháy kép (") bao quanh tên cơ sở dữ liệu, tên bảng, tên trường, bí danh.
+      <note>
+        1. Dấu chấm (.) không được nằm trong dấu nháy, phải viết thành "database"."table"
+        2. ClickHouse phân biệt hoa/thường nghiêm ngặt, phải dùng dấu nháy để giữ nguyên hoa/thường gốc
+        3. Trường lồng nhau dùng dấu chấm để nối: `"json_column.field"`
+      </note>
+    </rule>
+
+  limit_rule: |
+    <rule>
+      Khi cần giới hạn số dòng, phải dùng cú pháp LIMIT chuẩn
+      <note>
+        1. Cách viết chuẩn: LIMIT [count]
+        2. Cách viết phân trang: LIMIT [count] OFFSET [start]
+        3. Cấm dùng các hàm gốc như `topk()` để thay thế
+      </note>
+    </rule>
+
+  other_rule: |
+    <rule>Phải sinh bí danh ngắn gọn cho mỗi bảng (như t1/t2)</rule>
+    {multi_table_condition}
+    <rule>Cấm dùng dấu sao (*), phải nêu rõ tên trường</rule>
+    <rule>Trường JSON cần truy cập bằng cú pháp dấu chấm: `"column.field"`</rule>
+    <rule>Trường hàm phải thêm bí danh</rule>
+    <rule>Phần trăm hiển thị dạng: `ROUND(x*100,2) || '%'`</rule>
+    <rule>Tránh xung đột với từ khóa ClickHouse (như `timestamp`/`default`)</rule>
+
+  basic_example: |
+    <basic-examples>
+      <intro>
+        📌 Các ví dụ sau tuân thủ nghiêm ngặt chuẩn ClickHouse trong <Rules>, minh họa cách viết SQL đúng yêu cầu và các trường hợp lỗi điển hình.
+        ⚠️ Lưu ý: tên bảng, tên trường trong ví dụ đều là hư cấu để minh họa, khi dùng thực tế cần thay bằng định danh thật do người dùng cung cấp.
+        🔍 Điểm cần quan sát kỹ:
+          1. Cách dùng chuẩn dấu nháy kép bao quanh mọi đối tượng cơ sở dữ liệu
+          2. Cách xử lý các trường đặc biệt như bí danh Việt-Anh/phần trăm/hàm
+          3. Cách tránh xung đột từ khóa
+      </intro>
+      <example>
+        <input>Truy vấn 100 log lỗi đầu của bảng events (có trường JSON)</input>
+        <output-bad>
+          SELECT * FROM default.events LIMIT 100  -- Lỗi 1: dùng dấu sao
+          SELECT message FROM "default"."events" WHERE level = 'error'  -- Lỗi 2: chưa xử lý trường JSON
+          SELECT "message", "extra.error_code" FROM events LIMIT 100  -- Lỗi 3: tên bảng chưa thêm dấu nháy
+        </output-bad>
+        <output-good>
+          SELECT
+            "e"."message" AS "log_content",
+            "e"."extra"."error_code" AS "error_id",
+            toDateTime("e"."timestamp") AS "log_time"
+          FROM "default"."events" "e"
+          WHERE "e"."level" = 'error'
+          LIMIT 100
+        </output-good>
+      </example>
+
+      <example>
+        <input>Thống kê Top 5 tỷ lệ lỗi theo khu vực (có phần trăm)</input>
+        <output-bad>
+          SELECT region, COUNT(*) FROM events GROUP BY region  -- Lỗi 1: dùng COUNT(*)
+          SELECT "region", MAX("count") FROM "events" GROUP BY 1  -- Lỗi 2: nhóm bằng số thứ tự
+        </output-bad>
+        <output-good>
+          SELECT
+            "e"."region" AS "area",
+            COUNT(*) AS "total",
+            COUNTIf("e"."level" = 'error') AS "error_count",
+            ROUND(error_count * 100.0 / total, 2) || '%' AS "error_rate"
+          FROM "default"."events" "e"
+          GROUP BY "e"."region"
+          ORDER BY "error_rate" DESC
+          LIMIT 5
+        </output-good>
+      </example>
+    </basic-examples>
+
+  example_engine: ClickHouse 23.3
+  example_answer_1: |
+    {"success":true,"sql":"SELECT \"country\" AS \"country_name\", \"continent\" AS \"continent_name\", \"year\" AS \"year\", \"gdp\" AS \"gdp_usd\" FROM \"Sample_Database\".\"sample_country_gdp\" ORDER BY \"country\", \"year\"","tables":["sample_country_gdp"],"chart-type":"line"}
+  example_answer_1_with_limit: |
+    {"success":true,"sql":"SELECT \"country\" AS \"country_name\", \"continent\" AS \"continent_name\", \"year\" AS \"year\", \"gdp\" AS \"gdp_usd\" FROM \"Sample_Database\".\"sample_country_gdp\" ORDER BY \"country\", \"year\" LIMIT 1000","tables":["sample_country_gdp"],"chart-type":"line"}
+  example_answer_2: |
+    {"success":true,"sql":"SELECT \"country\" AS \"country_name\", \"gdp\" AS \"gdp_usd\" FROM \"Sample_Database\".\"sample_country_gdp\" WHERE \"year\" = '2024' ORDER BY \"gdp\" DESC","tables":["sample_country_gdp"],"chart-type":"pie"}
+  example_answer_2_with_limit: |
+    {"success":true,"sql":"SELECT \"country\" AS \"country_name\", \"gdp\" AS \"gdp_usd\" FROM \"Sample_Database\".\"sample_country_gdp\" WHERE \"year\" = '2024' ORDER BY \"gdp\" DESC LIMIT 1000","tables":["sample_country_gdp"],"chart-type":"pie"}
+  example_answer_3: |
+    {"success":true,"sql":"SELECT \"country\" AS \"country_name\", \"gdp\" AS \"gdp_usd\" FROM \"Sample_Database\".\"sample_country_gdp\" WHERE \"year\" = '2025' AND \"country\" = 'Việt Nam'","tables":["sample_country_gdp"],"chart-type":"table"}
+  example_answer_3_with_limit: |
+    {"success":true,"sql":"SELECT \"country\" AS \"country_name\", \"gdp\" AS \"gdp_usd\" FROM \"Sample_Database\".\"sample_country_gdp\" WHERE \"year\" = '2025' AND \"country\" = 'Việt Nam' LIMIT 1000","tables":["sample_country_gdp"],"chart-type":"table"}

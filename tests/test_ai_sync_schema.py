@@ -1,0 +1,190 @@
+"""Test validation envelope/payload và 3 hàm thuần. Không cần DB."""
+
+from datetime import datetime, timedelta, timezone
+
+import pytest
+from pydantic import ValidationError
+
+from apps.hooks.schemas.ai_sync_schema import (
+    AuthorizationSyncData,
+    SyncEnvelope,
+    SyncHookResponse,
+    find_duplicate_form_uuid,
+    normalize_fields,
+    to_sync_version,
+)
+
+VALID_DATA = {
+    "userId": "usr-12345-67890",
+    "fullName": "Nguyễn Văn A",
+    "isAdmin": False,
+    "formQueries": [
+        {
+            "formUuid": "form-abcd-1234",
+            "tableInfo": {
+                "databaseTableName": "kdl_nhan_khau_row_values",
+                "tableDisplayName": "Dữ liệu Nhân khẩu",
+                "tableDescription": "Bảng lưu trữ thông tin cư trú của công dân",
+                "fields": [
+                    {"id": "province_id", "name": "Mã Tỉnh/Thành", "description": "Mã định danh của Tỉnh/Thành phố"},
+                    {"id": "full_name", "name": "Họ và tên", "description": "Tên đầy đủ của công dân"},
+                ],
+            },
+            "postgresQuery": "SELECT * FROM kdl_nhan_khau_row_values WHERE province_id = '01'",
+            "clickHouseQuery": "SELECT * FROM kdl_nhan_khau_row_values WHERE province_id = '01'",
+        }
+    ],
+}
+
+
+def test_envelope_hop_le():
+    env = SyncEnvelope.model_validate(
+        {"actionType": 1, "version": "1.0", "timestamp": "2026-08-10T10:00:00Z", "data": VALID_DATA}
+    )
+    assert env.action_type == 1
+    assert env.version == "1.0"
+    assert env.timestamp == datetime(2026, 8, 10, 10, 0, tzinfo=timezone.utc)
+    assert env.data["userId"] == "usr-12345-67890"
+
+
+@pytest.mark.parametrize("missing", ["version", "timestamp", "data"])
+def test_envelope_thieu_truong_bat_buoc(missing):
+    body = {"actionType": 1, "version": "1.0", "timestamp": "2026-08-10T10:00:00Z", "data": VALID_DATA}
+    body.pop(missing)
+    with pytest.raises(ValidationError):
+        SyncEnvelope.model_validate(body)
+
+
+def test_payload_hop_le_va_parse_dung_alias():
+    data = AuthorizationSyncData.model_validate(VALID_DATA)
+    assert data.user_id == "usr-12345-67890"
+    assert data.full_name == "Nguyễn Văn A"
+    assert data.is_admin is False
+    form = data.form_queries[0]
+    assert form.form_uuid == "form-abcd-1234"
+    assert form.table_info.database_table_name == "kdl_nhan_khau_row_values"
+    # alias "clickHouseQuery" viết hoa chữ H — sai alias là mất query
+    assert form.clickhouse_query.startswith("SELECT")
+    assert [f.id for f in form.table_info.field_list] == ["province_id", "full_name"]
+
+
+def test_payload_bo_trong_form_queries_la_hop_le():
+    data = AuthorizationSyncData.model_validate({"userId": "u1", "isAdmin": True, "formQueries": []})
+    assert data.form_queries == []
+    assert data.full_name is None
+
+
+@pytest.mark.parametrize("missing", ["userId", "isAdmin", "formQueries"])
+def test_payload_thieu_truong_bat_buoc(missing):
+    body = {"userId": "u1", "isAdmin": False, "formQueries": []}
+    body.pop(missing)
+    with pytest.raises(ValidationError):
+        AuthorizationSyncData.model_validate(body)
+
+
+def test_payload_user_id_rong_bi_loai():
+    with pytest.raises(ValidationError):
+        AuthorizationSyncData.model_validate({"userId": "", "isAdmin": False, "formQueries": []})
+
+
+def test_form_thieu_table_info_bi_loai():
+    with pytest.raises(ValidationError):
+        AuthorizationSyncData.model_validate(
+            {"userId": "u1", "isAdmin": False, "formQueries": [{"formUuid": "f1"}]}
+        )
+
+
+def test_table_info_thieu_fields_bi_loai():
+    with pytest.raises(ValidationError):
+        AuthorizationSyncData.model_validate(
+            {
+                "userId": "u1", "isAdmin": False,
+                "formQueries": [{"formUuid": "f1", "tableInfo": {"databaseTableName": "t"}}],
+            }
+        )
+
+
+def test_table_info_fields_rong_duoc_chap_nhan():
+    data = AuthorizationSyncData.model_validate(
+        {
+            "userId": "u1", "isAdmin": False,
+            "formQueries": [{"formUuid": "f1", "tableInfo": {"databaseTableName": "t", "fields": []}}],
+        }
+    )
+    assert data.form_queries[0].table_info.field_list == []
+    assert data.form_queries[0].table_info.table_display_name is None
+    assert data.form_queries[0].postgres_query is None
+
+
+def test_field_thieu_id_bi_loai():
+    with pytest.raises(ValidationError):
+        AuthorizationSyncData.model_validate(
+            {
+                "userId": "u1", "isAdmin": False,
+                "formQueries": [
+                    {"formUuid": "f1", "tableInfo": {"databaseTableName": "t", "fields": [{"name": "x"}]}}
+                ],
+            }
+        )
+
+
+def test_to_sync_version_doi_sang_epoch_millis():
+    assert to_sync_version(datetime(2026, 8, 10, 10, 0, tzinfo=timezone.utc)) == 1786356000000
+
+
+def test_to_sync_version_coi_datetime_naive_la_utc():
+    naive = datetime(2026, 8, 10, 10, 0)
+    aware = datetime(2026, 8, 10, 10, 0, tzinfo=timezone.utc)
+    assert to_sync_version(naive) == to_sync_version(aware)
+
+
+def test_to_sync_version_ton_trong_offset():
+    plus7 = datetime(2026, 8, 10, 17, 0, tzinfo=timezone(timedelta(hours=7)))
+    assert to_sync_version(plus7) == to_sync_version(datetime(2026, 8, 10, 10, 0, tzinfo=timezone.utc))
+
+
+def test_normalize_fields_giu_du_3_khoa_va_dien_none():
+    data = AuthorizationSyncData.model_validate(
+        {
+            "userId": "u1", "isAdmin": False,
+            "formQueries": [
+                {"formUuid": "f1", "tableInfo": {"databaseTableName": "t", "fields": [{"id": "a"}]}}
+            ],
+        }
+    )
+    assert normalize_fields(data.form_queries[0].table_info.field_list) == [
+        {"id": "a", "name": None, "description": None}
+    ]
+
+
+def test_find_duplicate_form_uuid():
+    body = {
+        "userId": "u1", "isAdmin": False,
+        "formQueries": [
+            {"formUuid": "f1", "tableInfo": {"databaseTableName": "t1", "fields": []}},
+            {"formUuid": "f1", "tableInfo": {"databaseTableName": "t2", "fields": []}},
+        ],
+    }
+    data = AuthorizationSyncData.model_validate(body)
+    assert find_duplicate_form_uuid(data.form_queries) == "f1"
+
+
+def test_find_duplicate_form_uuid_tra_none_khi_khong_trung():
+    data = AuthorizationSyncData.model_validate(
+        {
+            "userId": "u1", "isAdmin": False,
+            "formQueries": [
+                {"formUuid": "f1", "tableInfo": {"databaseTableName": "t1", "fields": []}},
+                {"formUuid": "f2", "tableInfo": {"databaseTableName": "t2", "fields": []}},
+            ],
+        }
+    )
+    assert find_duplicate_form_uuid(data.form_queries) is None
+
+
+def test_response_serialize_dung_ten_camel_case():
+    body = SyncHookResponse(actionType=1, status="SUCCESS").model_dump()
+    assert body["actionType"] == 1
+    assert body["status"] == "SUCCESS"
+    assert body["applied"] == {"upserted": 0, "deleted": 0}
+    assert body["errorCode"] is None

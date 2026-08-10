@@ -1,0 +1,88 @@
+template:
+  quot_rule: |
+    <rule>
+      Bắt buộc thêm dấu ngoặc ngược (`) bao quanh tên cơ sở dữ liệu, tên bảng, tên trường, bí danh.
+      <note>
+        1. Dấu chấm (.) không được nằm trong dấu nháy, phải viết thành `database`.`table`
+        2. Ngay cả khi định danh không chứa ký tự đặc biệt hoặc không phải từ khóa, vẫn bắt buộc thêm dấu ngoặc ngược
+        3. Trong SQL liên kết nhiều bảng (JOIN)/nhiều truy vấn con, chỉ cần nhiều bảng/truy vấn con có trường trùng tên, thì mọi vị trí tham chiếu trường đó đều phải chỉ rõ bí danh bảng
+      </note>
+    </rule>
+
+  limit_rule: |
+    <rule>
+      Khi cần giới hạn số dòng, phải dùng cú pháp LIMIT chuẩn
+    </rule>
+
+  other_rule: |
+    <rule>Phải sinh bí danh cho mỗi bảng (không thêm AS)</rule>
+    {multi_table_condition}
+    <rule>Cấm dùng dấu sao (*), phải nêu rõ tên trường</rule>
+    <rule>Trường tiếng Việt/ký tự đặc biệt cần giữ nguyên tên gốc và thêm bí danh tiếng Anh</rule>
+    <rule>Không được dùng + để nối chuỗi, chuỗi phải dùng dấu nháy đơn</rule>
+    <rule>Nhóm rất nghiêm ngặt: trường trong SELECT phải xuất hiện trong GROUP BY, hoặc là hàm tổng hợp</rule>
+    <rule>Trường hàm phải thêm bí danh</rule>
+    <rule>Trường phần trăm giữ hai chữ số thập phân và kết thúc bằng %</rule>
+    <rule>Trong điều kiện WHERE không được dùng các toán tử so sánh như >, <, >=, <=, phải dùng =</rule>
+    <rule>HIVE không có toán tử NOT IN, phải dùng LEFT JOIN hoặc EXISTS để thay thế</rule>
+    <rule>Kiểm tra rỗng dùng hàm NVL()</rule>
+    <rule>Tránh xung đột với từ khóa cơ sở dữ liệu</rule>
+
+  basic_example: |
+    <basic-examples>
+      <intro>
+        📌 Các ví dụ sau tuân thủ nghiêm ngặt chuẩn Hive trong <Rules>, minh họa cách viết SQL đúng yêu cầu và các trường hợp lỗi điển hình.
+        ⚠️ Lưu ý: tên bảng, tên trường trong ví dụ đều là hư cấu để minh họa, khi dùng thực tế cần thay bằng định danh thật do người dùng cung cấp.
+        🔍 Điểm cần quan sát kỹ:
+          1. Cách dùng chuẩn dấu ngoặc ngược bao quanh mọi đối tượng cơ sở dữ liệu
+          2. Cách xử lý các trường đặc biệt như bí danh Việt-Anh/phần trăm/hàm
+          3. Cách tránh xung đột từ khóa
+      </intro>
+      <example>
+        <input>Truy vấn 100 đơn hàng đầu của bảng ods.orders (có trường tiếng Việt và phần trăm)</input>
+        <output-bad>
+          SELECT * FROM ods.orders LIMIT 100  -- Lỗi: chưa thêm dấu nháy, dùng dấu sao
+          SELECT `Mã đơn hàng`, `Số tiền` FROM `ods`.`orders` `t1` LIMIT 100  -- Lỗi: thiếu bí danh tiếng Anh
+          SELECT COUNT(`Mã đơn hàng`) FROM `ods`.`orders` `t1`  -- Lỗi: hàm chưa thêm bí danh
+        </output-bad>
+        <output-good>
+          SELECT
+            `t1`.`Mã đơn hàng` AS `order_id`,
+            `t1`.`Số tiền` AS `amount`,
+            COUNT(`t1`.`Mã đơn hàng`) AS `total_orders`,
+            CONCAT(CAST(ROUND(`t1`.`Tỷ lệ chiết khấu` * 100, 2) AS STRING), '%') AS `discount_percent`
+          FROM `ods`.`orders` `t1`
+          GROUP BY `t1`.`Mã đơn hàng`, `t1`.`Số tiền`, `t1`.`Tỷ lệ chiết khấu`
+          LIMIT 100
+        </output-good>
+      </example>
+
+      <example>
+        <input>Thống kê tỷ lệ hoạt động của dim.users (có trường từ khóa user)</input>
+        <output-bad>
+          SELECT user, status FROM dim.users  -- Lỗi: chưa xử lý từ khóa và dấu nháy
+          SELECT `user`, ROUND(active_ratio) FROM `dim`.`users`  -- Lỗi: định dạng phần trăm sai
+        </output-bad>
+        <output-good>
+          SELECT
+            `u`.`user` AS `username`,
+            CONCAT(CAST(ROUND(`u`.`active_ratio` * 100, 2) AS STRING), '%') AS `active_percent`
+          FROM `dim`.`users` `u`
+          WHERE `u`.`status` = 1
+        </output-good>
+      </example>
+    </basic-examples>
+
+  example_engine: Apache Hive 2.X
+  example_answer_1: |
+    {"success":true,"sql":"SELECT `country` AS `country_name`, `continent` AS `continent_name`, `year` AS `year`, `gdp` AS `gdp` FROM `Sample_Database`.`sample_country_gdp` ORDER BY `country`, `year`","tables":["sample_country_gdp"],"chart-type":"line"}
+  example_answer_1_with_limit: |
+    {"success":true,"sql":"SELECT `country` AS `country_name`, `continent` AS `continent_name`, `year` AS `year`, `gdp` AS `gdp` FROM `Sample_Database`.`sample_country_gdp` ORDER BY `country`, `year` LIMIT 1000","tables":["sample_country_gdp"],"chart-type":"line"}
+  example_answer_2: |
+    {"success":true,"sql":"SELECT `country` AS `country_name`, `gdp` AS `gdp` FROM `Sample_Database`.`sample_country_gdp` WHERE `year` = '2024' ORDER BY `gdp` DESC","tables":["sample_country_gdp"],"chart-type":"pie"}
+  example_answer_2_with_limit: |
+    {"success":true,"sql":"SELECT `country` AS `country_name`, `gdp` AS `gdp` FROM `Sample_Database`.`sample_country_gdp` WHERE `year` = '2024' ORDER BY `gdp` DESC LIMIT 1000","tables":["sample_country_gdp"],"chart-type":"pie"}
+  example_answer_3: |
+    {"success":true,"sql":"SELECT `country` AS `country_name`, `gdp` AS `gdp` FROM `Sample_Database`.`sample_country_gdp` WHERE `year` = '2025' AND `country` = 'Việt Nam'","tables":["sample_country_gdp"],"chart-type":"table"}
+  example_answer_3_with_limit: |
+    {"success":true,"sql":"SELECT `country` AS `country_name`, `gdp` AS `gdp` FROM `Sample_Database`.`sample_country_gdp` WHERE `year` = '2025' AND `country` = 'Việt Nam' LIMIT 1000","tables":["sample_country_gdp"],"chart-type":"table"}
