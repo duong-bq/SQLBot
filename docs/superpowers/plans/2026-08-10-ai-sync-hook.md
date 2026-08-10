@@ -231,7 +231,7 @@ Không cần DB. Dùng một constant `VALID_DATA` đúng payload mẫu trong sp
 
 *Payload:* hợp lệ parse đúng alias, đặc biệt `clickHouseQuery` và thứ tự `field_list`; `formQueries: []` hợp lệ và `full_name is None`; parametrize thiếu `userId`/`isAdmin`/`formQueries` → lỗi; `userId: ""` → lỗi; form thiếu `tableInfo` → lỗi; `tableInfo` thiếu `fields` → lỗi; `fields: []` được chấp nhận và các trường optional ra `None`; field thiếu `id` → lỗi.
 
-*Hàm thuần:* `to_sync_version` ra `1786615200000` cho `2026-08-10T10:00:00Z`; naive == aware cùng giờ; tôn trọng offset `+07:00`; `normalize_fields` điền `None` đủ 3 khoá; `find_duplicate_form_uuid` bắt được `f1` lặp và trả `None` khi không lặp.
+*Hàm thuần:* `to_sync_version` ra `1786356000000` cho `2026-08-10T10:00:00Z`; naive == aware cùng giờ; tôn trọng offset `+07:00`; `normalize_fields` điền `None` đủ 3 khoá; `find_duplicate_form_uuid` bắt được `f1` lặp và trả `None` khi không lặp.
 
 *Response:* `model_dump()` ra khoá camelCase, `applied == {"upserted": 0, "deleted": 0}`, `errorCode is None`.
 
@@ -430,7 +430,7 @@ Trong file nên có 2 helper nhỏ: `_respond(...)` dựng `JSONResponse` từ `
 Không cần DB: fixture `client` dựng `FastAPI()` tối giản chỉ `include_router(ai_sync.router, prefix="/api/v1")`, override `get_session` bằng `MagicMock`, set `settings.AI_SYNC_HOOK_ENABLED=True` + `AI_SYNC_HOOK_TOKEN` (nhớ restore giá trị gốc khi teardown). Fixture `crud_patches` patch 3 hàm crud log **tại module route** (`apps.hooks.api.ai_sync.get_log_by_idempotency_key`, `.create_received_log`, `.finish_log`). Handler patch qua `patch.dict(ACTION_HANDLERS, {...})`.
 
 Các ca:
-- thành công: 200, `status=SUCCESS`, `applied` đúng, `requestId`/`idempotencyKey` vọng lại, `errorCode is None`, `sync_version` truyền vào handler đúng `1786615200000`, và body **không** có khoá `code`/`data` (chứng minh không bị bọc envelope);
+- thành công: 200, `status=SUCCESS`, `applied` đúng, `requestId`/`idempotencyKey` vọng lại, `errorCode is None`, `sync_version` truyền vào handler đúng `1786356000000`, và body **không** có khoá `code`/`data` (chứng minh không bị bọc envelope);
 - không có header `Authorization` → 401 `UNAUTHORIZED`, `create_received_log` **không** được gọi;
 - token sai → 401, không ghi log;
 - `AI_SYNC_HOOK_ENABLED=False` → 503 `HOOK_DISABLED`;
@@ -499,7 +499,7 @@ git commit -m "feat: endpoint POST /hooks/ai-sync nhận bản tin đồng bộ 
 HTTP thật + Postgres thật, **không patch gì**: fixture `e2e_client` dựng app tối giản như Task 7 nhưng override `get_session` trả đúng `db_session` của fixture. Đây là test duy nhất chứng minh cả chuỗi route → audit log → bảng quyền.
 
 Ca chính (một test, sáu bước tuần tự, mỗi bước một `idempotency_key` khác trừ bước retry):
-1. bản tin `10:00Z` cấp 2 form → 200 SUCCESS, `applied={2,0}`, bảng quyền có `{form-1, form-2}`, log có `status=SUCCESS`, `sync_version=1786615200000`, `processed_at` không None, `request_payload` round-trip đúng;
+1. bản tin `10:00Z` cấp 2 form → 200 SUCCESS, `applied={2,0}`, bảng quyền có `{form-1, form-2}`, log có `status=SUCCESS`, `sync_version=1786356000000`, `processed_at` không None, `request_payload` round-trip đúng;
 2. gửi lại y nguyên cùng key → `DUPLICATE`;
 3. bản tin `11:00Z` chỉ còn `form-2` → `applied={1,1}`, bảng quyền còn `{form-2}`;
 4. gửi lại bản **cũ** `09:00Z` với key khác → 200 `STALE`, bảng quyền không đổi;
