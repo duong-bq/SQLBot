@@ -66,6 +66,12 @@ class Settings(BaseSettings):
     SQLBOT_DB_URL: str = ''
     # SQLBOT_DB_URL: str = 'mysql+pymysql://root:Password123%40mysql@127.0.0.1:3306/sqlbot'
 
+    # AI Sync Hook — cổng nhận bản tin đồng bộ từ hệ thống SW (apps/hooks).
+    # Mặc định TẮT và token rỗng: token rỗng thì hook trả 503 chứ không chấp nhận request không
+    # token, để ca deploy quên đặt biến không biến cổng thành lỗ hổng.
+    AI_SYNC_HOOK_ENABLED: bool = False
+    AI_SYNC_HOOK_TOKEN: str = ""
+
     TOKEN_KEY: str = "X-SQLBOT-TOKEN"
     DEFAULT_PWD: str = "SQLBot@123456"
     ASSISTANT_TOKEN_KEY: str = "X-SQLBOT-ASSISTANT-TOKEN"
