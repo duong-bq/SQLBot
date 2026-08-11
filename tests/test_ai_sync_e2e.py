@@ -5,15 +5,23 @@ hoặc chỉ kiểm giao thức (patch crud), hoặc chỉ kiểm nghiệp vụ 
 """
 
 import uuid
+from types import SimpleNamespace
 
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from starlette.middleware.base import BaseHTTPMiddleware
 
 from apps.hooks.crud.ai_sync_log import get_log_by_idempotency_key
 from apps.hooks.crud.ai_user_permission import get_user_permissions
 
-TOKEN = "token-e2e"
+
+class _FakeAuthMiddleware(BaseHTTPMiddleware):
+    """Gán `request.state.current_user`, mô phỏng việc TokenMiddleware thật làm sau khi giải mã JWT."""
+
+    async def dispatch(self, request, call_next):
+        request.state.current_user = SimpleNamespace(isAdmin=False, weight=1, oid=1)
+        return await call_next(request)
 
 
 def _body(user_id: str, timestamp: str, form_uuids: list[str]) -> dict:
@@ -47,25 +55,25 @@ def _body(user_id: str, timestamp: str, form_uuids: list[str]) -> dict:
 
 @pytest.fixture()
 def e2e_client(db_session):
-    """App thật (router hook) nối vào đúng session Postgres của fixture db_session."""
+    """App thật (router hook) nối vào đúng session Postgres của fixture db_session.
+
+    Có đủ `RequestContextMiddleware` + middleware giả lập user đã đăng nhập (`ws_admin`) để
+    `require_permissions` trên route hoạt động đúng như trên app thật.
+    """
     from apps.hooks.api import ai_sync
-    from common.core.config import settings
+    from apps.system.schemas.permission import RequestContextMiddleware
     from common.core.db import get_session
 
     app = FastAPI()
     app.include_router(ai_sync.router, prefix="/api/v1")
     app.dependency_overrides[get_session] = lambda: db_session
-
-    original_enabled, original_token = settings.AI_SYNC_HOOK_ENABLED, settings.AI_SYNC_HOOK_TOKEN
-    settings.AI_SYNC_HOOK_ENABLED = True
-    settings.AI_SYNC_HOOK_TOKEN = TOKEN
-    yield TestClient(app)
-    settings.AI_SYNC_HOOK_ENABLED = original_enabled
-    settings.AI_SYNC_HOOK_TOKEN = original_token
+    app.add_middleware(RequestContextMiddleware)
+    app.add_middleware(_FakeAuthMiddleware)
+    return TestClient(app)
 
 
 def _headers(key: str) -> dict:
-    return {"Authorization": f"Bearer {TOKEN}", "X-Request-ID": str(uuid.uuid4()), "X-Idempotency-Key": key}
+    return {"X-Request-ID": str(uuid.uuid4()), "X-Idempotency-Key": key}
 
 
 def test_e2e_dong_bo_roi_thu_hoi_va_retry(e2e_client, db_session):

@@ -128,8 +128,6 @@ vector cũ và mới không cùng không gian.
 | `CORS_ALLOW_ALL_ORIGINS` | `False` | Không khai được bằng `BACKEND_CORS_ORIGINS='*'` vì kiểu là `AnyUrl`. Bật cờ này thì `main.py` dùng `allow_origin_regex='.*'`, vẫn hoạt động với credentials |
 | `BACKEND_CORS_ORIGINS` | `[]` | Danh sách origin, ngăn bằng dấu phẩy. Starlette so khớp **chuỗi chính xác** — khác scheme/host/port là bị chặn, không có wildcard theo domain |
 | `SQLBOT_DOC_ENABLED` | `True` | Bật `/docs` và `/openapi.json` |
-| `AI_SYNC_HOOK_ENABLED` | `False` | Bật cổng `POST /hooks/ai-sync` (xem `AI_SYNC_HOOK_API_SPEC.md`) |
-| `AI_SYNC_HOOK_TOKEN` | `""` | Static token của hook. **Rỗng thì hook trả 503**, không chấp nhận request không token dù `ENABLED=True` |
 
 ### 2.7. Khác
 
@@ -397,4 +395,5 @@ kỳ tài liệu, log hay issue nào; nếu cần xoay vòng mật khẩu thì p
 |---|---|
 | Bản tin bị coi là `STALE` mà SW vẫn thấy **HTTP 200** | Chống lùi dựa trên `timestamp` của SW, không phải sequence phía DB. Đồng hồ SW lệch về quá khứ (hoặc lệch múi giờ, thiếu offset) khiến bản tin mới bị bỏ qua trong khi request vẫn "thành công" theo status code — phải đọc trường `status` trong body, không chỉ HTTP status |
 | `AUTHORIZATION_SYNC` là **full snapshot**, không phải patch | Gửi thiếu một `formUuid` đang có quyền là **thu hồi** form đó, không phải "giữ nguyên". `formQueries: []` thu hồi hết. Xem `AI_SYNC_HOOK_API_SPEC.md` §5 |
-| `AI_SYNC_HOOK_TOKEN` rỗng thì hook trả 503 dù `AI_SYNC_HOOK_ENABLED=True` | Mặc định an toàn có chủ ý, không phải bug |
+| Gọi hook mà không đăng nhập trước | Không có static token riêng — SW phải `POST /login/access-token` lấy `X-SQLBOT-TOKEN` như mọi client khác, và tài khoản đó phải có quyền `ws_admin` |
+| Thiếu quyền `ws_admin` trả **500**, không phải 403 | Quy ước chung của `require_permissions` toàn hệ thống (xem §7.4 / `BACKEND_ARCHITECTURE.md` §7), không riêng gì hook |

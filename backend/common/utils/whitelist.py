@@ -40,8 +40,6 @@ wlist = [
     "/system/platform/sso/*",
     "/system/platform/client/*",
     "/system/parameter/login",
-    # AI Sync Hook tự xác thực bằng static token riêng, không dùng JWT X-SQLBOT-TOKEN
-    "/hooks/*",
 ]
 
 class WhitelistChecker:

@@ -1,26 +1,34 @@
 """Route duy nhất của AI Sync Hook: `POST /api/v1/hooks/ai-sync`.
 
-Route chỉ lo giao thức: xác thực bằng static token, đọc body thô, ghi audit, tra handler theo
-actionType, dịch lỗi thành HTTP status. Nghiệp vụ nằm trong `apps/hooks/handlers/`.
+Route chỉ lo giao thức: đọc body thô, ghi audit, tra handler theo actionType, dịch lỗi thành HTTP
+status. Nghiệp vụ nằm trong `apps/hooks/handlers/`.
+
+Xác thực dùng chung cơ chế JWT của SQLBot (`X-SQLBOT-TOKEN`, cấp bởi `POST /login/access-token`)
+và yêu cầu quyền `ws_admin` qua `require_permissions` — giống mọi API quản trị khác trong repo
+(terminology, datasource…), không có static token riêng. Vì vậy `/hooks/*` **không** nằm trong
+whitelist của `TokenMiddleware`.
 
 Ba điều dễ hỏng nếu sửa file này:
 
 1. **Luôn trả `JSONResponse`.** `ResponseMiddleware` bỏ qua JSONResponse (response_middleware.py:42)
    nên body không bị bọc envelope `{code,data,msg}` — đó là hợp đồng đã thống nhất với SW.
 2. **Thứ tự các bước.** Ghi audit log TRƯỚC khi báo lỗi actionType/envelope, để mọi request đã xác
-   thực đều để lại vết; nhưng KHÔNG ghi log cho request 401/503/thiếu idempotency key/JSON hỏng —
-   không được để caller chưa xác thực bơm dữ liệu vào bảng audit.
+   thực đều để lại vết; nhưng KHÔNG ghi log cho request thiếu idempotency key/JSON hỏng — không
+   được để những request chưa đọc được nội dung bơm dữ liệu rác vào bảng audit.
 3. **Body được đọc thô bằng `request.json()`,** không khai Pydantic model ở signature: FastAPI sẽ
    tự trả 422 với format riêng của nó, mất quyền phân biệt 400 (envelope sai) với 422 (actionType
    chưa hỗ trợ) và mất luôn dòng audit.
+
+Lưu ý: lỗi xác thực (401, thiếu/sai JWT) và lỗi thiếu quyền (`ws_admin`) xảy ra ở tầng
+`TokenMiddleware`/`require_permissions` **trước khi vào hàm route**, nên không theo format
+`SyncHookResponse` — chúng trả theo đúng quy ước lỗi chung của SQLBot (xem
+`BACKEND_ARCHITECTURE.md` §7), không phải hợp đồng riêng của hook.
 """
 
-import secrets
 from typing import Any
 
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
-from fastapi.security.utils import get_authorization_scheme_param
 from pydantic import ValidationError
 from sqlalchemy.exc import IntegrityError
 
@@ -45,30 +53,11 @@ from apps.hooks.schemas.ai_sync_schema import (
     SyncHookResponse,
     to_sync_version,
 )
-from common.core.config import settings
+from apps.system.schemas.permission import SqlbotPermission, require_permissions
 from common.core.deps import SessionDep
 from common.utils.utils import SQLBotLogUtil
 
 router = APIRouter(tags=["AI Sync Hook"], prefix="/hooks")
-
-
-def authenticate_hook_request(request: Request) -> None:
-    """Xác thực request bằng `Authorization: Bearer <AI_SYNC_HOOK_TOKEN>`.
-
-    Hook không dùng JWT của SQLBot (header `X-SQLBOT-TOKEN`) mà dùng static token riêng, nên path
-    `/hooks/*` phải nằm trong whitelist của `TokenMiddleware`.
-
-    So sánh bằng `secrets.compare_digest` để thời gian so sánh không phụ thuộc nội dung token
-    (chống timing attack). Hook tắt hoặc token cấu hình rỗng thì trả 503 chứ KHÔNG cho qua.
-    """
-    if not settings.AI_SYNC_HOOK_ENABLED or not settings.AI_SYNC_HOOK_TOKEN:
-        raise SyncHookError(503, SyncErrorCode.HOOK_DISABLED, "AI Sync Hook đang tắt")
-
-    scheme, token = get_authorization_scheme_param(request.headers.get("Authorization", ""))
-    if scheme.lower() != "bearer" or not token:
-        raise SyncHookError(401, SyncErrorCode.UNAUTHORIZED, "Thiếu Authorization: Bearer <token>")
-    if not secrets.compare_digest(token, settings.AI_SYNC_HOOK_TOKEN):
-        raise SyncHookError(401, SyncErrorCode.UNAUTHORIZED, "Token không hợp lệ")
 
 
 def _respond(
@@ -122,30 +111,19 @@ def _duplicate_response(
 
 
 @router.post("/ai-sync", summary="Nhận bản tin đồng bộ từ hệ thống SW")
+@require_permissions(permission=SqlbotPermission(role=['ws_admin']))
 async def ai_sync(request: Request, session: SessionDep) -> JSONResponse:
     """Cổng tiếp nhận bản tin đồng bộ, hiện chỉ xử lý `actionType = 1` (AUTHORIZATION_SYNC).
 
-    Trình tự: xác thực → kiểm idempotency key → parse JSON thô → ghi audit RECEIVED (commit) →
-    kiểm actionType → validate envelope → gọi handler → chốt audit (commit). Ba lần commit là có
-    chủ ý: dòng audit phải sống sót khi pha nghiệp vụ rollback.
+    Xác thực (JWT `X-SQLBOT-TOKEN`) và phân quyền (`ws_admin`) đã được `TokenMiddleware` +
+    `require_permissions` xử lý trước khi vào đây — hàm này chỉ chạy khi request đã hợp lệ.
+
+    Trình tự: kiểm idempotency key → parse JSON thô → ghi audit RECEIVED (commit) → kiểm
+    actionType → validate envelope → gọi handler → chốt audit (commit). Ba lần commit là có chủ
+    ý: dòng audit phải sống sót khi pha nghiệp vụ rollback.
     """
     request_id = request.headers.get("X-Request-ID")
     idempotency_key = request.headers.get("X-Idempotency-Key")
-
-    try:
-        authenticate_hook_request(request)
-    except SyncHookError as e:
-        # Không ghi audit: request chưa xác thực không được phép ghi vào bảng log.
-        SQLBotLogUtil.warning(f"[ai-sync] từ chối request: {e.error_code.value} - {e.message}")
-        return _respond(
-            http_status=e.http_status,
-            action_type=int(SyncActionType.UNKNOWN),
-            status=SyncStatus.FAILED,
-            request_id=request_id,
-            idempotency_key=idempotency_key,
-            error_code=e.error_code,
-            error_message=e.message,
-        )
 
     if not idempotency_key:
         return _respond(

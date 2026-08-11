@@ -96,11 +96,20 @@ audit sống sót cả khi pha nghiệp vụ rollback:
 
 ## 6. Bảo mật
 
-- So sánh token bằng `secrets.compare_digest` (chống timing attack).
-- `AI_SYNC_HOOK_TOKEN` rỗng → hook trả 503, **không** chấp nhận request không token. Mặc định an
-  toàn cho ca deploy quên đặt biến.
-- `AI_SYNC_HOOK_ENABLED` mặc định `False`.
-- Path `/hooks/*` vào whitelist của `TokenMiddleware` (hook tự xác thực, không dùng JWT của SQLBot).
+> **Cập nhật sau khi triển khai (2026-08-11):** phần xác thực bằng static token trong mục này đã
+> bị thay thế. Quyết định cuối cùng: hook dùng chung JWT `X-SQLBOT-TOKEN` của SQLBot (cấp bởi
+> `POST /login/access-token`) và yêu cầu quyền `ws_admin` qua `require_permissions`, giống mọi API
+> quản trị khác trong repo — không có `AI_SYNC_HOOK_TOKEN`/`AI_SYNC_HOOK_ENABLED`, và `/hooks/*`
+> **không** nằm trong whitelist của `TokenMiddleware`. Lý do đổi: tránh phải quản lý một cơ chế xác
+> thực riêng chỉ cho một endpoint, trong khi SW đã có sẵn tài khoản đăng nhập SQLBot. Nội dung gốc
+> bên dưới giữ lại để biết bối cảnh quyết định ban đầu, **không còn đúng với code hiện tại** — xem
+> `AI_SYNC_HOOK_API_SPEC.md` §1 để biết hợp đồng xác thực thật.
+>
+> ~~So sánh token bằng `secrets.compare_digest` (chống timing attack).~~
+> ~~`AI_SYNC_HOOK_TOKEN` rỗng → hook trả 503, không chấp nhận request không token.~~
+> ~~`AI_SYNC_HOOK_ENABLED` mặc định `False`.~~
+> ~~Path `/hooks/*` vào whitelist của `TokenMiddleware` (hook tự xác thực, không dùng JWT của SQLBot).~~
+
 - `postgresQuery` / `clickHouseQuery` được lưu **nguyên văn dạng text**, phase này không parse,
   không chạy, không kiểm tra an toàn SQL. Việc kiểm tra là của phase tích hợp pipeline.
 

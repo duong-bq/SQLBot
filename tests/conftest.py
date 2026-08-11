@@ -15,6 +15,14 @@ BACKEND_DIR = Path(__file__).resolve().parents[1] / "backend"
 if str(BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(BACKEND_DIR))
 
+# `main.py` import `sqlbot_xpack` độc lập TRƯỚC bất kỳ module `apps.*` nào. Nếu bỏ dòng này, module
+# đầu tiên import `apps.system.schemas.permission` (vd `apps.hooks.api.ai_sync`) sẽ kích hoạt vòng
+# lặp: permission.py -> apps.datasource.crud.datasource -> sqlbot_xpack -> ... -> apps.system.api.user
+# -> quay lại permission.py trong lúc nó CHƯA thực thi xong, khiến `SqlbotPermission`/
+# `require_permissions` chưa tồn tại → ImportError. Import trước ở đây để nạp sqlbot_xpack một lần,
+# độc lập, y hệt thứ tự main.py.
+import sqlbot_xpack  # noqa: E402,F401
+
 
 @pytest.fixture(scope="session")
 def pg_url() -> str:

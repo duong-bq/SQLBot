@@ -226,9 +226,8 @@ Pool của **DB metadata** thì cấu hình bằng `PG_POOL_SIZE` / `PG_MAX_OVER
 `TokenMiddleware` ([auth.py:26](../backend/apps/system/middleware/auth.py#L26)) chặn mọi request trừ
 danh sách trắng và preflight OPTIONS.
 
-`/hooks/*` nằm trong danh sách trắng này ([whitelist.py](../backend/common/utils/whitelist.py)):
-`POST /hooks/ai-sync` tự xác thực bằng static token riêng (`Authorization: Bearer
-<AI_SYNC_HOOK_TOKEN>`), không dùng JWT `X-SQLBOT-TOKEN`.
+`POST /hooks/ai-sync` **không** nằm trong danh sách trắng — dùng chung JWT `X-SQLBOT-TOKEN` và
+`require_permissions(role=['ws_admin'])` như các API quản trị khác, không có static token riêng.
 
 ### Ba lớp phân quyền
 

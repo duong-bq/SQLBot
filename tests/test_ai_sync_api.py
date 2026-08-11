@@ -1,16 +1,24 @@
-"""Test tầng giao thức của route hook: xác thực, idempotency, bảng lỗi, dịch status.
+"""Test tầng giao thức của route hook: xác thực JWT + quyền ws_admin, idempotency, bảng lỗi.
 
 Patch tầng crud và handler nên KHÔNG cần DB — test này chỉ kiểm hợp đồng HTTP. Nghiệp vụ đã có
 test riêng chạy trên Postgres thật.
+
+Hook dùng chung cơ chế xác thực của SQLBot (`require_permissions` đọc `request.state.current_user`
+qua contextvar của `RequestContextMiddleware`), không có static token riêng. App test dựng một
+middleware giả lập để gán `current_user` — mô phỏng đúng việc `TokenMiddleware` thật làm sau khi
+giải mã JWT.
 """
 
 import uuid
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from sqlalchemy.exc import IntegrityError
+from starlette.exceptions import HTTPException as StarletteHTTPException
+from starlette.middleware.base import BaseHTTPMiddleware
 
 from apps.hooks.constants import SyncActionType, SyncStatus
 from apps.hooks.handlers.authorization import HandlerResult
@@ -21,32 +29,52 @@ VALID_BODY = {
     "timestamp": "2026-08-10T10:00:00Z",
     "data": {"userId": "usr-1", "fullName": "A", "isAdmin": False, "formQueries": []},
 }
-TOKEN = "token-test-123"
-HEADERS = {
-    "Authorization": f"Bearer {TOKEN}",
-    "X-Request-ID": "req-1",
-    "X-Idempotency-Key": "idem-1",
-}
+HEADERS = {"X-Request-ID": "req-1", "X-Idempotency-Key": "idem-1"}
 
 
-@pytest.fixture()
-def client():
-    """App tối giản chỉ mount router hook, session là MagicMock."""
+def _user(*, is_admin: bool = False, weight: int = 1, oid: int = 1):
+    """Đối tượng tối giản đủ 3 thuộc tính `require_permissions` cần đọc."""
+    return SimpleNamespace(isAdmin=is_admin, weight=weight, oid=oid)
+
+
+class _FakeAuthMiddleware(BaseHTTPMiddleware):
+    """Gán `request.state.current_user`, mô phỏng việc TokenMiddleware thật làm sau khi giải mã JWT.
+
+    `user=None` mô phỏng request chưa xác thực (không có `X-SQLBOT-TOKEN` hợp lệ).
+    """
+
+    def __init__(self, app, user):
+        super().__init__(app)
+        self.user = user
+
+    async def dispatch(self, request, call_next):
+        if self.user is not None:
+            request.state.current_user = self.user
+        return await call_next(request)
+
+
+def _build_app(user) -> FastAPI:
+    """App tối giản: router hook + đúng 2 middleware mà `require_permissions` cần, + exception
+    handler giống `main.py` để lỗi thiếu quyền (Exception thường) trả 500 như trên app thật."""
     from apps.hooks.api import ai_sync
-    from common.core.config import settings
+    from apps.system.schemas.permission import RequestContextMiddleware
     from common.core.db import get_session
+    from common.core.response_middleware import exception_handler
 
     app = FastAPI()
     app.include_router(ai_sync.router, prefix="/api/v1")
     app.dependency_overrides[get_session] = lambda: MagicMock()
+    app.add_middleware(RequestContextMiddleware)
+    app.add_middleware(_FakeAuthMiddleware, user=user)
+    app.add_exception_handler(StarletteHTTPException, exception_handler.http_exception_handler)
+    app.add_exception_handler(Exception, exception_handler.global_exception_handler)
+    return app
 
-    original_enabled = settings.AI_SYNC_HOOK_ENABLED
-    original_token = settings.AI_SYNC_HOOK_TOKEN
-    settings.AI_SYNC_HOOK_ENABLED = True
-    settings.AI_SYNC_HOOK_TOKEN = TOKEN
-    yield TestClient(app)
-    settings.AI_SYNC_HOOK_ENABLED = original_enabled
-    settings.AI_SYNC_HOOK_TOKEN = original_token
+
+@pytest.fixture()
+def client():
+    """Client với user đã đăng nhập và có quyền ws_admin — ca mặc định cho các test nghiệp vụ."""
+    return TestClient(_build_app(_user(weight=1)), raise_server_exceptions=False)
 
 
 def _fake_log(status=SyncStatus.RECEIVED.value, error_code=None, error_message=None):
@@ -101,44 +129,38 @@ def test_thanh_cong_tra_200_va_dem_dung(client, crud_patches):
     assert "code" not in body and "data" not in body
 
 
-def test_khong_co_token_tra_401_va_khong_ghi_log(client, crud_patches):
-    resp = client.post("/api/v1/hooks/ai-sync", json=VALID_BODY,
-                       headers={"X-Idempotency-Key": "idem-1"})
-    assert resp.status_code == 401
-    assert resp.json()["errorCode"] == "UNAUTHORIZED"
-    crud_patches["create_log"].assert_not_called()
-
-
-def test_token_sai_tra_401(client, crud_patches):
-    headers = dict(HEADERS, Authorization="Bearer sai-token")
-    resp = client.post("/api/v1/hooks/ai-sync", json=VALID_BODY, headers=headers)
+def test_chua_dang_nhap_tra_401_va_khong_ghi_log(crud_patches):
+    """`request.state.current_user` không tồn tại — đúng ca TokenMiddleware chưa xác thực được."""
+    client = TestClient(_build_app(user=None), raise_server_exceptions=False)
+    resp = client.post("/api/v1/hooks/ai-sync", json=VALID_BODY, headers=HEADERS)
     assert resp.status_code == 401
     crud_patches["create_log"].assert_not_called()
 
 
-def test_hook_tat_tra_503(client, crud_patches):
-    from common.core.config import settings
+def test_user_thuong_khong_du_quyen_tra_loi(crud_patches):
+    """`weight=0` và không phải admin: `require_permissions` raise Exception thường → 500.
 
-    settings.AI_SYNC_HOOK_ENABLED = False
+    Đây là quy ước chung của SQLBot (không có 403 riêng cho thiếu quyền), không phải hành vi
+    riêng của hook — xem `BACKEND_ARCHITECTURE.md` §7 và "bẫy" ở `OPERATIONS.md`.
+    """
+    client = TestClient(_build_app(_user(weight=0, is_admin=False)), raise_server_exceptions=False)
     resp = client.post("/api/v1/hooks/ai-sync", json=VALID_BODY, headers=HEADERS)
-    settings.AI_SYNC_HOOK_ENABLED = True
-    assert resp.status_code == 503
-    assert resp.json()["errorCode"] == "HOOK_DISABLED"
+    assert resp.status_code == 500
+    crud_patches["create_log"].assert_not_called()
 
 
-def test_token_cau_hinh_rong_tra_503(client, crud_patches):
-    from common.core.config import settings
-
-    settings.AI_SYNC_HOOK_TOKEN = ""
-    resp = client.post("/api/v1/hooks/ai-sync", json=VALID_BODY, headers=HEADERS)
-    settings.AI_SYNC_HOOK_TOKEN = TOKEN
-    assert resp.status_code == 503
-    assert resp.json()["errorCode"] == "HOOK_DISABLED"
+def test_admin_toan_cuc_van_goi_duoc_du_weight_0(client, crud_patches):
+    """`isAdmin=True` bỏ qua kiểm tra role — khớp hành vi `require_permissions` dùng chung toàn app."""
+    ctx, handler = _patch_handler()
+    admin_client = TestClient(_build_app(_user(weight=0, is_admin=True)), raise_server_exceptions=False)
+    with ctx:
+        resp = admin_client.post("/api/v1/hooks/ai-sync", json=VALID_BODY, headers=HEADERS)
+    assert resp.status_code == 200
+    handler.assert_called_once()
 
 
 def test_thieu_idempotency_key_tra_400(client, crud_patches):
-    headers = {"Authorization": f"Bearer {TOKEN}"}
-    resp = client.post("/api/v1/hooks/ai-sync", json=VALID_BODY, headers=headers)
+    resp = client.post("/api/v1/hooks/ai-sync", json=VALID_BODY, headers={"X-Request-ID": "req-1"})
     assert resp.status_code == 400
     assert resp.json()["errorCode"] == "MISSING_IDEMPOTENCY_KEY"
     crud_patches["create_log"].assert_not_called()
@@ -246,7 +268,8 @@ def test_ket_qua_stale_tra_200(client, crud_patches):
     assert resp.json()["applied"] == {"upserted": 0, "deleted": 0}
 
 
-def test_path_hooks_nam_trong_whitelist_cua_token_middleware():
+def test_path_hooks_khong_nam_trong_whitelist():
+    """`/hooks/*` phải đi qua TokenMiddleware như mọi endpoint khác — không có ngoại lệ riêng."""
     from common.utils.whitelist import whiteUtils
 
-    assert whiteUtils.is_whitelisted("/api/v1/hooks/ai-sync") is True
+    assert whiteUtils.is_whitelisted("/api/v1/hooks/ai-sync") is False
