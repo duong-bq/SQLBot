@@ -49,7 +49,9 @@ HTTP status phản ánh đúng kết quả (2xx thành công, 4xx lỗi phía SW
   "actionType": 1,
   "status": "SUCCESS",
   "logId": "b3f1c2a0-...-uuid",
-  "userId": "usr-12345-67890",
+  "results": [
+    {"userId": "usr-12345-67890", "status": "SUCCESS", "applied": {"upserted": 2, "deleted": 0}}
+  ],
   "applied": {"upserted": 2, "deleted": 0},
   "errorCode": null,
   "errorMessage": null
@@ -98,35 +100,39 @@ Một actionType đã release thì không được đổi ý nghĩa.
 
 ---
 
-## 4. Payload AUTHORIZATION_SYNC (`actionType = 1`)
+## 4. Payload AUTHORIZATION_SYNC (`actionType = 1`) — batch nhiều user
 
 ```json
 {
-  "userId": "usr-12345-67890",
-  "fullName": "Nguyễn Văn A",
-  "isAdmin": false,
-  "formQueries": [
+  "users": [
     {
-      "formUuid": "form-abcd-1234",
-      "tableInfo": {
-        "databaseTableName": "kdl_nhan_khau_row_values",
-        "tableDisplayName": "Dữ liệu Nhân khẩu",
-        "tableDescription": "Bảng lưu trữ thông tin cư trú của công dân",
-        "fields": [
-          {
-            "id": "province_id",
-            "name": "Mã Tỉnh/Thành",
-            "description": "Mã định danh của Tỉnh/Thành phố"
+      "userId": "usr-12345-67890",
+      "fullName": "Nguyễn Văn A",
+      "isAdmin": false,
+      "formQueries": [
+        {
+          "formUuid": "form-abcd-1234",
+          "tableInfo": {
+            "databaseTableName": "kdl_nhan_khau_row_values",
+            "tableDisplayName": "Dữ liệu Nhân khẩu",
+            "tableDescription": "Bảng lưu trữ thông tin cư trú của công dân",
+            "fields": [
+              {
+                "id": "province_id",
+                "name": "Mã Tỉnh/Thành",
+                "description": "Mã định danh của Tỉnh/Thành phố"
+              },
+              {
+                "id": "full_name",
+                "name": "Họ và tên",
+                "description": "Tên đầy đủ của công dân"
+              }
+            ]
           },
-          {
-            "id": "full_name",
-            "name": "Họ và tên",
-            "description": "Tên đầy đủ của công dân"
-          }
-        ]
-      },
-      "postgresQuery": "SELECT * FROM kdl_nhan_khau_row_values WHERE province_id = '01'",
-      "clickHouseQuery": "SELECT * FROM kdl_nhan_khau_row_values WHERE province_id = '01'"
+          "postgresQuery": "SELECT * FROM kdl_nhan_khau_row_values WHERE province_id = '01'",
+          "clickHouseQuery": "SELECT * FROM kdl_nhan_khau_row_values WHERE province_id = '01'"
+        }
+      ]
     }
   ]
 }
@@ -137,11 +143,12 @@ trường đó bị bỏ qua (coi như không có) chứ không báo lỗi.
 
 | Trường | Kiểu | Bắt buộc | Ghi chú |
 |---|---|---|---|
-| `userId` | string | Có | Không được rỗng |
-| `fullName` | string | Không | |
-| `isAdmin` | boolean | Có | |
-| `formQueries` | array | Có | **Có thể rỗng** — xem §5 |
-| `formQueries[].formUuid` | string | Có | Không được rỗng, không được lặp trong cùng request |
+| `users` | array | Có | **Không được rỗng** — xem §7 mã lỗi `EMPTY_USER_LIST` |
+| `users[].userId` | string | Có | Không được rỗng, không được lặp giữa các phần tử trong cùng `users` |
+| `users[].fullName` | string | Không | |
+| `users[].isAdmin` | boolean | Có | |
+| `users[].formQueries` | array | Có | **Có thể rỗng** — xem §5 |
+| `formQueries[].formUuid` | string | Có | Không được rỗng, không được lặp trong `formQueries` của CÙNG một user |
 | `formQueries[].tableInfo` | object | Có | |
 | `formQueries[].postgresQuery` | string | Không | |
 | `formQueries[].clickHouseQuery` | string | Không | |
@@ -153,16 +160,19 @@ trường đó bị bỏ qua (coi như không có) chứ không báo lỗi.
 | `fields[].name` | string | Không | |
 | `fields[].description` | string | Không | |
 
-Trùng `formUuid` trong cùng một request nhận **400 `DUPLICATE_FORM_UUID`**.
+`userId` trùng giữa các phần tử trong cùng `users` nhận **400 `DUPLICATE_USER_ID`**. `formUuid` trùng
+trong `formQueries` của cùng một user nhận **400 `DUPLICATE_FORM_UUID`** — không liên quan tới user
+khác trong cùng batch. `users` rỗng hoặc thiếu nhận **400 `EMPTY_USER_LIST`**.
 
 ---
 
 ## 5. Ngữ nghĩa FULL SNAPSHOT — đọc kỹ trước khi tích hợp
 
-**`formQueries` là toàn bộ quyền hiện tại của user, không phải phần thay đổi.**
+**`formQueries` là toàn bộ quyền hiện tại của TỪNG user trong `users`, không phải phần thay đổi.**
 
-- Mỗi lần gọi thành công, SQLBot **thay thế toàn bộ** danh sách quyền của `userId` bằng đúng những
-  gì có trong `formQueries`.
+- Với mỗi user trong `users`, SQLBot **thay thế toàn bộ** danh sách quyền của `userId` đó bằng đúng
+  những gì có trong `formQueries` của chính user đó — không liên quan tới `formQueries` của user
+  khác trong cùng batch.
 - Form nào **không có mặt** trong `formQueries` sẽ **bị xoá quyền** — kể cả khi trước đó user đã có
   quyền trên form đó. Đây không phải "giữ nguyên", mà là "thu hồi".
 - `formQueries: []` nghĩa là **thu hồi toàn bộ quyền** của user.
@@ -200,10 +210,17 @@ bản tin có thực sự được áp dụng hay không.
 | 400 | `FAILED` | `MISSING_IDEMPOTENCY_KEY` | Thiếu header `X-Idempotency-Key` |
 | 400 | `FAILED` | `INVALID_ENVELOPE` | Envelope thiếu trường hoặc sai kiểu |
 | 400 | `FAILED` | `INVALID_PAYLOAD` | `data` sai theo schema ở §4 |
-| 400 | `FAILED` | `DUPLICATE_FORM_UUID` | `formUuid` bị lặp trong cùng request |
+| 400 | `FAILED` | `DUPLICATE_FORM_UUID` | `formUuid` bị lặp trong `formQueries` của cùng một user |
+| 400 | `FAILED` | `DUPLICATE_USER_ID` | `userId` bị lặp giữa các phần tử trong `users` |
+| 400 | `FAILED` | `EMPTY_USER_LIST` | `data.users` rỗng hoặc thiếu |
 | 422 | `FAILED` | `UNSUPPORTED_ACTION_TYPE` | actionType đã đặt tên nhưng chưa triển khai (2–6) |
 | 422 | `FAILED` | `UNKNOWN_ACTION_TYPE` | actionType không hợp lệ hoặc ngoài phạm vi |
 | 500 | `FAILED` | `INTERNAL_ERROR` | Lỗi phía SQLBot |
+
+Lỗi cấu trúc ở BẤT KỲ user nào trong `users` (kể cả `INVALID_PAYLOAD`, `DUPLICATE_FORM_UUID`,
+`DUPLICATE_USER_ID`, `EMPTY_USER_LIST`) làm **cả request FAILED** — không user nào trong batch được
+áp dụng. Ngược lại, `STALE` được tính RIÊNG theo từng user: xem `results[].status` trong response,
+không phải `status` cấp request (§1).
 
 Ngoài bảng trên, hai lỗi xảy ra **trước khi vào hook** (không có `errorCode` theo format này — xem
 cảnh báo ở §1): **401** khi thiếu/sai/hết hạn `X-SQLBOT-TOKEN`; **500** kèm thông điệp riêng khi tài
@@ -230,17 +247,21 @@ curl -X POST "https://<host>/api/v1/hooks/ai-sync" \
     "version": "1.0",
     "timestamp": "2026-08-10T10:00:00Z",
     "data": {
-      "userId": "usr-12345-67890",
-      "fullName": "Nguyễn Văn A",
-      "isAdmin": false,
-      "formQueries": [
+      "users": [
         {
-          "formUuid": "form-abcd-1234",
-          "tableInfo": {
-            "databaseTableName": "kdl_nhan_khau_row_values",
-            "fields": [{"id": "province_id", "name": "Mã Tỉnh/Thành"}]
-          },
-          "postgresQuery": "SELECT * FROM kdl_nhan_khau_row_values WHERE province_id = '\''01'\''"
+          "userId": "usr-12345-67890",
+          "fullName": "Nguyễn Văn A",
+          "isAdmin": false,
+          "formQueries": [
+            {
+              "formUuid": "form-abcd-1234",
+              "tableInfo": {
+                "databaseTableName": "kdl_nhan_khau_row_values",
+                "fields": [{"id": "province_id", "name": "Mã Tỉnh/Thành"}]
+              },
+              "postgresQuery": "SELECT * FROM kdl_nhan_khau_row_values WHERE province_id = '\''01'\''"
+            }
+          ]
         }
       ]
     }
@@ -256,7 +277,9 @@ Response mong đợi:
   "actionType": 1,
   "status": "SUCCESS",
   "logId": "...",
-  "userId": "usr-12345-67890",
+  "results": [
+    {"userId": "usr-12345-67890", "status": "SUCCESS", "applied": {"upserted": 1, "deleted": 0}}
+  ],
   "applied": {"upserted": 1, "deleted": 0},
   "errorCode": null,
   "errorMessage": null
