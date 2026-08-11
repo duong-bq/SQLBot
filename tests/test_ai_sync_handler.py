@@ -1,4 +1,4 @@
-"""Test handler actionType=1: validate payload, chống bản tin lùi, áp snapshot."""
+"""Test handler actionType=1: validate batch, chống bản tin lùi theo từng user, áp snapshot."""
 
 import pytest
 
@@ -17,7 +17,7 @@ def _envelope(data: dict) -> SyncEnvelope:
     )
 
 
-def _data(user_id="u1", forms=(("f1", "t1"),)):
+def _user(user_id="u1", forms=(("f1", "t1"),)):
     return {
         "userId": user_id,
         "fullName": "Nguyễn Văn A",
@@ -31,6 +31,10 @@ def _data(user_id="u1", forms=(("f1", "t1"),)):
             for form_uuid, table in forms
         ],
     }
+
+
+def _batch(*users) -> dict:
+    return {"users": list(users) if users else [_user()]}
 
 
 def _mark_applied(session, user_id: str, version: int) -> None:
@@ -47,56 +51,114 @@ def test_dispatch_chi_co_authorization_sync(db_session):
     assert set(ACTION_HANDLERS) == {SyncActionType.AUTHORIZATION_SYNC}
 
 
-def test_ap_snapshot_thanh_cong(db_session):
-    result = handle_authorization_sync(db_session, _envelope(_data()), 1000)
+def test_ap_snapshot_1_user_thanh_cong(db_session):
+    result = handle_authorization_sync(db_session, _envelope(_batch(_user())), 1000)
     assert result.status is SyncStatus.SUCCESS
-    assert result.user_id == "u1"
-    assert (result.upserted, result.deleted) == (1, 0)
+    assert len(result.results) == 1
+    assert result.results[0].userId == "u1"
+    assert result.results[0].status == "SUCCESS"
+    assert (result.results[0].applied.upserted, result.results[0].applied.deleted) == (1, 0)
     assert len(get_user_permissions(db_session, "u1")) == 1
 
 
-def test_payload_sai_raise_invalid_payload(db_session):
+def test_ap_snapshot_2_user_deu_thanh_cong(db_session):
+    batch = _batch(_user("u1", (("f1", "t1"),)), _user("u2", (("f2", "t2"),)))
+    result = handle_authorization_sync(db_session, _envelope(batch), 1000)
+    assert result.status is SyncStatus.SUCCESS
+    statuses = {r.userId: r.status for r in result.results}
+    assert statuses == {"u1": "SUCCESS", "u2": "SUCCESS"}
+    assert len(get_user_permissions(db_session, "u1")) == 1
+    assert len(get_user_permissions(db_session, "u2")) == 1
+
+
+def test_users_rong_raise_empty_user_list(db_session):
     with pytest.raises(SyncHookError) as exc:
-        handle_authorization_sync(db_session, _envelope({"userId": "u1"}), 1000)
+        handle_authorization_sync(db_session, _envelope({"users": []}), 1000)
+    assert exc.value.http_status == 400
+    assert exc.value.error_code is SyncErrorCode.EMPTY_USER_LIST
+
+
+def test_thieu_truong_users_raise_invalid_payload(db_session):
+    with pytest.raises(SyncHookError) as exc:
+        handle_authorization_sync(db_session, _envelope({}), 1000)
     assert exc.value.http_status == 400
     assert exc.value.error_code is SyncErrorCode.INVALID_PAYLOAD
 
 
-def test_trung_form_uuid_raise_duplicate_form_uuid(db_session):
-    data = _data(forms=(("f1", "t1"), ("f1", "t2")))
+def test_user_payload_sai_raise_invalid_payload(db_session):
     with pytest.raises(SyncHookError) as exc:
-        handle_authorization_sync(db_session, _envelope(data), 1000)
+        handle_authorization_sync(db_session, _envelope({"users": [{"userId": "u1"}]}), 1000)
+    assert exc.value.http_status == 400
+    assert exc.value.error_code is SyncErrorCode.INVALID_PAYLOAD
+
+
+def test_trung_user_id_raise_duplicate_user_id_khong_ai_duoc_ap_dung(db_session):
+    batch = _batch(_user("u1"), _user("u1"))
+    with pytest.raises(SyncHookError) as exc:
+        handle_authorization_sync(db_session, _envelope(batch), 1000)
+    assert exc.value.http_status == 400
+    assert exc.value.error_code is SyncErrorCode.DUPLICATE_USER_ID
+    assert "u1" in exc.value.message
+    assert get_user_permissions(db_session, "u1") == []
+
+
+def test_trung_form_uuid_trong_1_user_raise_duplicate_form_uuid(db_session):
+    data = _user(forms=(("f1", "t1"), ("f1", "t2")))
+    with pytest.raises(SyncHookError) as exc:
+        handle_authorization_sync(db_session, _envelope(_batch(data)), 1000)
     assert exc.value.http_status == 400
     assert exc.value.error_code is SyncErrorCode.DUPLICATE_FORM_UUID
     assert "f1" in exc.value.message
 
 
+def test_1_user_loi_cau_truc_thi_ca_batch_khong_ai_duoc_ap_dung(db_session):
+    """all-or-nothing: user thứ 2 trùng formUuid thì user thứ 1 (hợp lệ) cũng không được áp dụng."""
+    valid_user = _user("u1", (("f1", "t1"),))
+    invalid_user = _user("u2", (("f2", "t2"), ("f2", "t3")))
+    with pytest.raises(SyncHookError):
+        handle_authorization_sync(db_session, _envelope(_batch(valid_user, invalid_user)), 1000)
+    assert get_user_permissions(db_session, "u1") == []
+    assert get_user_permissions(db_session, "u2") == []
+
+
 def test_ban_tin_lui_bi_bo_qua(db_session):
     _mark_applied(db_session, "u1", 2000)
-    result = handle_authorization_sync(db_session, _envelope(_data()), 1500)
-    assert result.status is SyncStatus.STALE
-    assert (result.upserted, result.deleted) == (0, 0)
+    result = handle_authorization_sync(db_session, _envelope(_batch(_user())), 1500)
+    assert result.status is SyncStatus.SUCCESS
+    assert result.results[0].status == "STALE"
+    assert (result.results[0].applied.upserted, result.results[0].applied.deleted) == (0, 0)
     assert get_user_permissions(db_session, "u1") == []
 
 
 def test_ban_tin_cung_version_bi_bo_qua(db_session):
     _mark_applied(db_session, "u1", 2000)
-    result = handle_authorization_sync(db_session, _envelope(_data()), 2000)
-    assert result.status is SyncStatus.STALE
+    result = handle_authorization_sync(db_session, _envelope(_batch(_user())), 2000)
+    assert result.results[0].status == "STALE"
 
 
 def test_ban_tin_moi_hon_duoc_ap_dung(db_session):
     _mark_applied(db_session, "u1", 2000)
-    result = handle_authorization_sync(db_session, _envelope(_data()), 2001)
-    assert result.status is SyncStatus.SUCCESS
+    result = handle_authorization_sync(db_session, _envelope(_batch(_user())), 2001)
+    assert result.results[0].status == "SUCCESS"
     assert len(get_user_permissions(db_session, "u1")) == 1
 
 
+def test_stale_tinh_rieng_tung_user_trong_cung_batch(db_session):
+    """u1 đã có mốc mới hơn (stale), u2 chưa từng đồng bộ (được áp dụng) — cùng 1 request."""
+    _mark_applied(db_session, "u1", 5000)
+    batch = _batch(_user("u1", (("f1", "t1"),)), _user("u2", (("f2", "t2"),)))
+    result = handle_authorization_sync(db_session, _envelope(batch), 3000)
+    statuses = {r.userId: r.status for r in result.results}
+    assert statuses == {"u1": "STALE", "u2": "SUCCESS"}
+    assert get_user_permissions(db_session, "u1") == []
+    assert len(get_user_permissions(db_session, "u2")) == 1
+
+
 def test_thu_hoi_het_quyen_bang_form_queries_rong(db_session):
-    handle_authorization_sync(db_session, _envelope(_data()), 1000)
-    data = _data()
+    handle_authorization_sync(db_session, _envelope(_batch(_user())), 1000)
+    data = _user()
     data["formQueries"] = []
-    result = handle_authorization_sync(db_session, _envelope(data), 2000)
-    assert result.status is SyncStatus.SUCCESS
-    assert (result.upserted, result.deleted) == (0, 1)
+    result = handle_authorization_sync(db_session, _envelope(_batch(data)), 2000)
+    assert result.results[0].status == "SUCCESS"
+    assert (result.results[0].applied.upserted, result.results[0].applied.deleted) == (0, 1)
     assert get_user_permissions(db_session, "u1") == []
