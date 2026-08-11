@@ -27,11 +27,42 @@ def _forms(*specs):
     return AuthorizationSyncData.model_validate(payload).form_queries
 
 
+def test_replace_khong_tu_commit_caller_phai_tu_commit(db_session, pg_url):
+    """`replace_user_permissions` không tự commit — dữ liệu chỉ thấy được từ session khác sau khi
+    caller tự gọi `commit()`. Đây là điều kiện để handler gộp nhiều user vào đúng 1 transaction."""
+    from sqlalchemy import create_engine, select
+    from sqlmodel import Session
+
+    from apps.hooks.models.ai_sync_model import AiUserPermission
+
+    replace_user_permissions(
+        db_session, user_id="u-commit-test", full_name=None, is_admin=False,
+        form_queries=_forms(("f1", "t1", ["a"])), sync_version=100,
+    )
+
+    other_engine = create_engine(pg_url)
+    with Session(other_engine) as other_session:
+        rows = other_session.execute(
+            select(AiUserPermission).where(AiUserPermission.user_id == "u-commit-test")
+        ).scalars().all()
+        assert rows == []  # chưa commit ở db_session nên session khác chưa thấy
+
+    db_session.commit()
+
+    with Session(other_engine) as other_session:
+        rows = other_session.execute(
+            select(AiUserPermission).where(AiUserPermission.user_id == "u-commit-test")
+        ).scalars().all()
+        assert len(rows) == 1
+    other_engine.dispose()
+
+
 def test_ghi_moi_snapshot(db_session):
     upserted, deleted = replace_user_permissions(
         db_session, user_id="u1", full_name="Nguyễn Văn A", is_admin=False,
         form_queries=_forms(("f1", "t1", ["a", "b"]), ("f2", "t2", ["c"])), sync_version=100,
     )
+    db_session.commit()
     assert (upserted, deleted) == (2, 0)
     rows = get_user_permissions(db_session, "u1")
     assert {r.form_uuid for r in rows} == {"f1", "f2"}
@@ -55,10 +86,12 @@ def test_snapshot_moi_xoa_form_khong_con_trong_payload(db_session):
         db_session, user_id="u1", full_name=None, is_admin=False,
         form_queries=_forms(("f1", "t1", ["a"]), ("f2", "t2", ["b"])), sync_version=100,
     )
+    db_session.commit()
     upserted, deleted = replace_user_permissions(
         db_session, user_id="u1", full_name=None, is_admin=False,
         form_queries=_forms(("f2", "t2", ["b"])), sync_version=200,
     )
+    db_session.commit()
     assert (upserted, deleted) == (1, 1)
     assert {r.form_uuid for r in get_user_permissions(db_session, "u1")} == {"f2"}
 
@@ -68,9 +101,11 @@ def test_form_queries_rong_thu_hoi_het_quyen(db_session):
         db_session, user_id="u1", full_name=None, is_admin=False,
         form_queries=_forms(("f1", "t1", ["a"])), sync_version=100,
     )
+    db_session.commit()
     upserted, deleted = replace_user_permissions(
         db_session, user_id="u1", full_name=None, is_admin=False, form_queries=[], sync_version=200,
     )
+    db_session.commit()
     assert (upserted, deleted) == (0, 1)
     assert get_user_permissions(db_session, "u1") == []
 
@@ -80,11 +115,13 @@ def test_upsert_ghi_de_dung_form_cu(db_session):
         db_session, user_id="u1", full_name="Tên cũ", is_admin=False,
         form_queries=_forms(("f1", "t_old", ["a"])), sync_version=100,
     )
+    db_session.commit()
     before = get_user_permissions(db_session, "u1")[0]
     replace_user_permissions(
         db_session, user_id="u1", full_name="Tên mới", is_admin=True,
         form_queries=_forms(("f1", "t_new", ["x", "y"])), sync_version=200,
     )
+    db_session.commit()
     rows = get_user_permissions(db_session, "u1")
     assert len(rows) == 1
     row = rows[0]
@@ -103,13 +140,16 @@ def test_khong_dung_den_quyen_cua_user_khac(db_session):
         db_session, user_id="u1", full_name=None, is_admin=False,
         form_queries=_forms(("f1", "t1", ["a"])), sync_version=100,
     )
+    db_session.commit()
     replace_user_permissions(
         db_session, user_id="u2", full_name=None, is_admin=False,
         form_queries=_forms(("f1", "t1", ["a"])), sync_version=100,
     )
+    db_session.commit()
     replace_user_permissions(
         db_session, user_id="u2", full_name=None, is_admin=False, form_queries=[], sync_version=200,
     )
+    db_session.commit()
     assert len(get_user_permissions(db_session, "u1")) == 1
     assert get_user_permissions(db_session, "u2") == []
 

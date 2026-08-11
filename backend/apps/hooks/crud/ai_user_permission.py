@@ -28,6 +28,9 @@ def replace_user_permissions(
     Dùng `INSERT ... ON CONFLICT (user_id, form_uuid) DO UPDATE` thay vì "xoá hết rồi chèn lại":
     giữ được `id` và `created_at` của dòng cũ, và không có khoảng thời gian user mất sạch quyền
     giữa hai câu lệnh.
+
+    Không tự commit — caller chịu trách nhiệm commit sau khi lặp áp dụng xong cho cả batch, để
+    nhiều user trong cùng request nằm trong đúng 1 transaction (xem `handlers/authorization.py`).
     """
     now = datetime.now(timezone.utc)
     incoming_uuids = [form.form_uuid for form in form_queries]
@@ -68,7 +71,6 @@ def replace_user_permissions(
         session.execute(statement)
         upserted += 1
 
-    session.commit()
     return upserted, deleted
 
 

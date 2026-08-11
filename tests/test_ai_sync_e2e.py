@@ -30,25 +30,29 @@ def _body(user_id: str, timestamp: str, form_uuids: list[str]) -> dict:
         "version": "1.0",
         "timestamp": timestamp,
         "data": {
-            "userId": user_id,
-            "fullName": "Nguyễn Văn A",
-            "isAdmin": False,
-            "formQueries": [
+            "users": [
                 {
-                    "formUuid": form_uuid,
-                    "tableInfo": {
-                        "databaseTableName": "kdl_nhan_khau_row_values",
-                        "tableDisplayName": "Dữ liệu Nhân khẩu",
-                        "tableDescription": "Bảng lưu trữ thông tin cư trú của công dân",
-                        "fields": [
-                            {"id": "province_id", "name": "Mã Tỉnh/Thành", "description": "Mã định danh"},
-                        ],
-                    },
-                    "postgresQuery": "SELECT * FROM kdl_nhan_khau_row_values WHERE province_id = '01'",
-                    "clickHouseQuery": "SELECT * FROM kdl_nhan_khau_row_values WHERE province_id = '01'",
+                    "userId": user_id,
+                    "fullName": "Nguyễn Văn A",
+                    "isAdmin": False,
+                    "formQueries": [
+                        {
+                            "formUuid": form_uuid,
+                            "tableInfo": {
+                                "databaseTableName": "kdl_nhan_khau_row_values",
+                                "tableDisplayName": "Dữ liệu Nhân khẩu",
+                                "tableDescription": "Bảng lưu trữ thông tin cư trú của công dân",
+                                "fields": [
+                                    {"id": "province_id", "name": "Mã Tỉnh/Thành", "description": "Mã định danh"},
+                                ],
+                            },
+                            "postgresQuery": "SELECT * FROM kdl_nhan_khau_row_values WHERE province_id = '01'",
+                            "clickHouseQuery": "SELECT * FROM kdl_nhan_khau_row_values WHERE province_id = '01'",
+                        }
+                        for form_uuid in form_uuids
+                    ],
                 }
-                for form_uuid in form_uuids
-            ],
+            ]
         },
     }
 
@@ -91,7 +95,7 @@ def test_e2e_dong_bo_roi_thu_hoi_va_retry(e2e_client, db_session):
     assert log.status == "SUCCESS"
     assert log.sync_version == 1786356000000
     assert log.processed_at is not None
-    assert log.request_payload["data"]["userId"] == "usr-e2e"
+    assert log.request_payload["data"]["users"][0]["userId"] == "usr-e2e"
 
     # 2. Retry đúng bản tin đó: DUPLICATE, không xử lý lại
     again = e2e_client.post(
@@ -150,7 +154,10 @@ def test_e2e_action_type_chua_ho_tro_van_de_lai_vet(e2e_client, db_session):
 
 
 def test_e2e_payload_sai_van_de_lai_vet(e2e_client, db_session):
-    body = {"actionType": 1, "version": "1.0", "timestamp": "2026-08-10T10:00:00Z", "data": {"userId": "u-bad"}}
+    body = {
+        "actionType": 1, "version": "1.0", "timestamp": "2026-08-10T10:00:00Z",
+        "data": {"users": [{"userId": "u-bad"}]},
+    }
     resp = e2e_client.post("/api/v1/hooks/ai-sync", json=body, headers=_headers("idem-e2e-badpayload"))
     assert resp.status_code == 400
     assert resp.json()["errorCode"] == "INVALID_PAYLOAD"
@@ -158,3 +165,68 @@ def test_e2e_payload_sai_van_de_lai_vet(e2e_client, db_session):
     assert log.status == "FAILED"
     assert log.user_id == "u-bad"
     assert get_user_permissions(db_session, "u-bad") == []
+
+
+def test_e2e_batch_nhieu_user_1_thanh_cong_1_stale(e2e_client, db_session):
+    # usr-stale đã có mốc mới hơn từ 1 bản tin trước đó
+    pre = e2e_client.post(
+        "/api/v1/hooks/ai-sync",
+        json=_body("usr-stale", "2026-08-10T12:00:00Z", ["form-x"]),
+        headers=_headers("idem-pre"),
+    )
+    assert pre.status_code == 200
+
+    batch_body = {
+        "actionType": 1,
+        "version": "1.0",
+        "timestamp": "2026-08-10T10:00:00Z",  # cũ hơn mốc đã áp cho usr-stale
+        "data": {
+            "users": [
+                {
+                    "userId": "usr-fresh",
+                    "isAdmin": False,
+                    "formQueries": [
+                        {
+                            "formUuid": "form-y",
+                            "tableInfo": {"databaseTableName": "t", "fields": [{"id": "a"}]},
+                        }
+                    ],
+                },
+                {"userId": "usr-stale", "isAdmin": False, "formQueries": []},
+            ]
+        },
+    }
+    resp = e2e_client.post("/api/v1/hooks/ai-sync", json=batch_body, headers=_headers("idem-batch-1"))
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "SUCCESS"
+    results_by_user = {r["userId"]: r["status"] for r in body["results"]}
+    assert results_by_user == {"usr-fresh": "SUCCESS", "usr-stale": "STALE"}
+    assert body["applied"] == {"upserted": 1, "deleted": 0}
+    assert {r.form_uuid for r in get_user_permissions(db_session, "usr-fresh")} == {"form-y"}
+    # usr-stale không bị đụng vào — vẫn còn form-x từ bản tin trước
+    assert {r.form_uuid for r in get_user_permissions(db_session, "usr-stale")} == {"form-x"}
+
+
+def test_e2e_batch_1_user_loi_thi_khong_ai_duoc_ap_dung(e2e_client, db_session):
+    batch_body = {
+        "actionType": 1,
+        "version": "1.0",
+        "timestamp": "2026-08-10T10:00:00Z",
+        "data": {
+            "users": [
+                {
+                    "userId": "usr-ok",
+                    "isAdmin": False,
+                    "formQueries": [
+                        {"formUuid": "form-1", "tableInfo": {"databaseTableName": "t", "fields": []}}
+                    ],
+                },
+                {"userId": "usr-ok", "isAdmin": False, "formQueries": []},  # userId trùng
+            ]
+        },
+    }
+    resp = e2e_client.post("/api/v1/hooks/ai-sync", json=batch_body, headers=_headers("idem-batch-bad"))
+    assert resp.status_code == 400
+    assert resp.json()["errorCode"] == "DUPLICATE_USER_ID"
+    assert get_user_permissions(db_session, "usr-ok") == []

@@ -6,10 +6,13 @@ import pytest
 from pydantic import ValidationError
 
 from apps.hooks.schemas.ai_sync_schema import (
+    AuthorizationSyncBatch,
     AuthorizationSyncData,
     SyncEnvelope,
     SyncHookResponse,
+    UserSyncResult,
     find_duplicate_form_uuid,
+    find_duplicate_user_id,
     normalize_fields,
     to_sync_version,
 )
@@ -187,4 +190,59 @@ def test_response_serialize_dung_ten_camel_case():
     assert body["actionType"] == 1
     assert body["status"] == "SUCCESS"
     assert body["applied"] == {"upserted": 0, "deleted": 0}
+    assert body["results"] == []
     assert body["errorCode"] is None
+
+
+BATCH_DATA = {"users": [VALID_DATA, {"userId": "u2", "isAdmin": True, "formQueries": []}]}
+
+
+def test_batch_hop_le_parse_dung_2_user():
+    batch = AuthorizationSyncBatch.model_validate(BATCH_DATA)
+    assert len(batch.users) == 2
+    assert batch.users[0].user_id == "usr-12345-67890"
+    assert batch.users[1].user_id == "u2"
+    assert batch.users[1].is_admin is True
+
+
+def test_batch_users_rong_van_parse_duoc_schema():
+    # Schema không tự chặn rỗng — EMPTY_USER_LIST là lỗi tường minh ở handler,
+    # không lẫn với lỗi schema chung.
+    batch = AuthorizationSyncBatch.model_validate({"users": []})
+    assert batch.users == []
+
+
+def test_batch_thieu_truong_users_bi_loai():
+    with pytest.raises(ValidationError):
+        AuthorizationSyncBatch.model_validate({})
+
+
+def test_find_duplicate_user_id():
+    batch = AuthorizationSyncBatch.model_validate(
+        {
+            "users": [
+                {"userId": "u1", "isAdmin": False, "formQueries": []},
+                {"userId": "u1", "isAdmin": False, "formQueries": []},
+            ]
+        }
+    )
+    assert find_duplicate_user_id(batch.users) == "u1"
+
+
+def test_find_duplicate_user_id_tra_none_khi_khong_trung():
+    batch = AuthorizationSyncBatch.model_validate(
+        {
+            "users": [
+                {"userId": "u1", "isAdmin": False, "formQueries": []},
+                {"userId": "u2", "isAdmin": False, "formQueries": []},
+            ]
+        }
+    )
+    assert find_duplicate_user_id(batch.users) is None
+
+
+def test_user_sync_result_serialize_dung_ten():
+    result = UserSyncResult(userId="u1", status="SUCCESS")
+    assert result.model_dump() == {
+        "userId": "u1", "status": "SUCCESS", "applied": {"upserted": 0, "deleted": 0}
+    }
