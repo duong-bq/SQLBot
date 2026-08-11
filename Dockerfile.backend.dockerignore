@@ -1,0 +1,26 @@
+# Ignore riêng cho Dockerfile.backend (BuildKit đọc <tên-Dockerfile>.dockerignore nếu có,
+# nếu không mới rơi về .dockerignore). Tách ra để .dockerignore cũ của bản all-in-one —
+# bản đó cần frontend/ và g2-ssr/ trong context — không bị ảnh hưởng.
+
+# Chặn hết rồi mở lại đúng thứ cần. Cách này an toàn hơn liệt kê từng thứ để loại:
+# thêm file rác vào repo về sau cũng không tự lọt vào context.
+*
+
+!backend
+!docker/backend-entrypoint.sh
+
+# Loại trong backend/
+backend/.venv
+backend/.opt-sqlbot-data
+backend/__pycache__
+backend/**/__pycache__
+backend/**/*.pyc
+backend/.mypy_cache
+backend/.ruff_cache
+backend/.pytest_cache
+backend/.coverage
+backend/htmlcov
+backend/logs
+backend/templates.7z
+backend/scripts
+backend/tests

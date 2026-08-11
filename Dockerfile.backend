@@ -1,0 +1,126 @@
+# Image chỉ chạy backend SQLBot. Postgres/Redis là service riêng bên ngoài.
+#
+# Khác gì `Dockerfile` (bản all-in-one của upstream):
+#   - Base là python:3.11-slim chính thức, không phải sqlbot-python-pg (image đó nhúng sẵn
+#     Postgres 17 và chạy nó trong cùng container qua start.sh).
+#   - Không build frontend (npm) và không build g2-ssr: container này chỉ phục vụ REST/SSE
+#     cho hệ thống tích hợp bên thứ ba. Pha sinh biểu đồ đã bị bỏ nên g2-ssr thành vô dụng.
+#   - Không nhúng model embedding ~2GB từ maxkb-vector-model. Dùng EMBEDDING_PROVIDER=api
+#     trỏ sang server embedding riêng. Nếu vẫn muốn model local, xem ghi chú cuối file.
+#   - Không tải Oracle instant client / thư viện DM: oracledb chạy thin mode (không cần
+#     client), còn wheel dmpython đã bundle sẵn libdmdpi trong dmPython.libs/.
+#
+# Build (context là gốc repo, dùng file Dockerfile.backend.dockerignore):
+#   docker build -f Dockerfile.backend -t sqlbot-backend:1.9.0 .
+#
+# Build cần ra được mạng tới 3 host mà uv.lock đã ghim URL tuyệt đối:
+#   mirrors.aliyun.com (index mặc định), test.pypi.org (sqlbot-xpack), download.pytorch.org
+#   (torch bản CPU). Đổi index nhanh không được vì --frozen đọc URL trong uv.lock — muốn
+#   đổi thì phải sửa [[tool.uv.index]] trong pyproject.toml rồi `uv lock` lại.
+
+# ---------------------------------------------------------------- builder
+FROM python:3.11-slim-bookworm AS builder
+
+COPY --from=ghcr.io/astral-sh/uv:0.7.8 /uv /uvx /bin/
+
+ENV UV_COMPILE_BYTECODE=1 \
+    UV_LINK_MODE=copy \
+    UV_PROJECT_ENVIRONMENT=/opt/sqlbot/app/.venv \
+    # Mặc định của uv là 30s và wheel torch CPU (~900MB) không tải xong kịp từ
+    # download.pytorch.org — build sẽ chết với "Failed to download distribution due to
+    # network timeout". Hạ luôn số download song song để mấy wheel to không giành băng thông
+    # của nhau rồi timeout cả loạt.
+    UV_HTTP_TIMEOUT=600 \
+    UV_CONCURRENT_DOWNLOADS=4
+
+# Phần lớn dependency có wheel manylinux, nhưng vài package (clickhouse-driver, ciso8601,
+# pyhive, thrift-sasl) có thể phải compile từ sdist. Toolchain nằm ở stage này nên không
+# lọt vào image chạy thật.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        build-essential pkg-config libsasl2-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /opt/sqlbot/app
+
+# Tách 2 lần sync để layer dependency (nặng ~1.7GB, tải lâu nhất) chỉ rebuild khi
+# pyproject.toml hoặc uv.lock đổi, không rebuild mỗi lần sửa code.
+#
+# --extra cpu là BẮT BUỘC: từ khi upstream chuyển torch sang optional-dependencies, không truyền
+# extra thì torch không được cài, mà apps/ai_model/embedding.py import langchain_huggingface ngay
+# đầu file và chính lệnh import đó nạp torch — thiếu là chết lúc khởi động, bất kể
+# EMBEDDING_PROVIDER đặt là gì. Extra còn lại (cu128) kéo về wheel CUDA nặng thêm vài GB.
+COPY backend/pyproject.toml backend/uv.lock ./
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv sync --frozen --extra cpu --no-install-project --no-dev
+
+COPY backend/ ./
+
+# --no-install-project: không build wheel của chính project. `packages = ["."]` trong
+# pyproject sẽ đóng gói cả cây source, mà không cần — PYTHONPATH đã trỏ vào /opt/sqlbot/app
+# và không chỗ nào `import sqlbot` như một package.
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv sync --frozen --extra cpu --no-install-project --no-dev
+
+# ---------------------------------------------------------------- runtime
+FROM python:3.11-slim-bookworm
+
+ARG TZ=Asia/Ho_Chi_Minh
+
+ENV PYTHONUNBUFFERED=1 \
+    SQLBOT_HOME=/opt/sqlbot \
+    PYTHONPATH=/opt/sqlbot/app \
+    PATH="/opt/sqlbot/app/.venv/bin:$PATH" \
+    TZ=${TZ} \
+    SQLBOT_PORT=8000
+
+# libgomp1: torch (bản CPU) link tới libgomp cho OpenMP. Thiếu nó thì `import torch` chết,
+# mà torch bị kéo vào ngay lúc import apps.ai_model.embedding (qua langchain_huggingface)
+# kể cả khi EMBEDDING_PROVIDER=api.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        libgomp1 tzdata ca-certificates \
+    && rm -rf /var/lib/apt/lists/* \
+    && ln -sf /usr/share/zoneinfo/${TZ} /etc/localtime \
+    && echo "${TZ}" > /etc/timezone
+
+# uid/gid 1000 để khớp user thường trên host — thư mục bind-mount khỏi lệch quyền.
+RUN groupadd -g 1000 sqlbot && useradd -u 1000 -g 1000 -m -s /bin/bash sqlbot
+
+COPY --from=builder --chown=sqlbot:sqlbot /opt/sqlbot/app /opt/sqlbot/app
+COPY --chown=sqlbot:sqlbot docker/backend-entrypoint.sh /opt/sqlbot/backend-entrypoint.sh
+
+# Các đường dẫn ghi file mặc định trong common/core/config.py. sqlbot_xpack mkdir UPLOAD_DIR
+# ngay lúc import nên thư mục phải thuộc sqlbot, không phải root.
+#
+# Vẫn giữ /opt/sqlbot chứ không đổi sang thư mục tương đối kiểu backend/.opt-sqlbot-data như
+# khi chạy ở máy dev: lý do phải lách ở máy dev là user thường không ghi được vào /opt của
+# host. Trong container filesystem là riêng, chown cho uid 1000 là xong, và giữ đúng default
+# của config thì khỏi phải override BASE_DIR/UPLOAD_DIR/EXCEL_PATH/MCP_IMAGE_PATH.
+# Chỗ vấn đề quyền quay lại là volume — xem ghi chú trong docker-compose.backend.yml.
+# Chown từng thư mục vừa tạo, KHÔNG `chown -R /opt/sqlbot`: hai lệnh COPY trên đã --chown
+# sẵn, mà -R phải duyệt hết 2GB venv nên tốn hơn 6 phút mỗi lần build cho đúng 0 thay đổi.
+RUN mkdir -p /opt/sqlbot/data/file /opt/sqlbot/data/excel /opt/sqlbot/images /opt/sqlbot/models \
+    && chown sqlbot:sqlbot /opt/sqlbot /opt/sqlbot/data /opt/sqlbot/data/file \
+                           /opt/sqlbot/data/excel /opt/sqlbot/images /opt/sqlbot/models \
+    && chmod +x /opt/sqlbot/backend-entrypoint.sh
+
+USER sqlbot
+WORKDIR /opt/sqlbot/app
+
+EXPOSE 8000
+
+# Không dùng "/" làm healthcheck: sqlbot_xpack mount SPA từ /opt/sqlbot/frontend/dist ở
+# root, mà image này không build frontend nên "/" luôn 404 và ghi traceback vào log mỗi
+# 30 giây. /system/config/key nằm trong whitelist của TokenMiddleware (gọi được không cần
+# JWT) và có truy vấn DB nên còn xác nhận luôn kết nối Postgres còn sống.
+HEALTHCHECK --interval=30s --timeout=10s --start-period=90s --retries=3 \
+    CMD python -c "import os,urllib.request;urllib.request.urlopen('http://127.0.0.1:'+os.environ.get('SQLBOT_PORT','8000')+os.environ.get('CONTEXT_PATH','')+'/api/v1/system/config/key',timeout=5)" || exit 1
+
+ENTRYPOINT ["/opt/sqlbot/backend-entrypoint.sh"]
+
+# Muốn quay lại embedding local (không cần server embedding riêng):
+#   1. Thêm vào stage runtime:
+#        COPY --from=ghcr.io/1panel-dev/maxkb-vector-model:v1.0.1 \
+#             --chown=sqlbot:sqlbot /opt/maxkb/app/model /opt/sqlbot/models
+#      (khai thêm ở đầu file: FROM ghcr.io/1panel-dev/maxkb-vector-model:v1.0.1 AS vector-model)
+#   2. Bỏ EMBEDDING_PROVIDER=api khỏi biến môi trường.
+#   Image sẽ phình thêm ~2GB.
