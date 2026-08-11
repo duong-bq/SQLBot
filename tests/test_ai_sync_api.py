@@ -22,12 +22,13 @@ from starlette.middleware.base import BaseHTTPMiddleware
 
 from apps.hooks.constants import SyncActionType, SyncStatus
 from apps.hooks.handlers.authorization import HandlerResult
+from apps.hooks.schemas.ai_sync_schema import SyncAppliedCounts, UserSyncResult
 
 VALID_BODY = {
     "actionType": 1,
     "version": "1.0",
     "timestamp": "2026-08-10T10:00:00Z",
-    "data": {"userId": "usr-1", "fullName": "A", "isAdmin": False, "formQueries": []},
+    "data": {"users": [{"userId": "usr-1", "fullName": "A", "isAdmin": False, "formQueries": []}]},
 }
 HEADERS = {"X-Request-ID": "req-1", "X-Idempotency-Key": "idem-1"}
 
@@ -101,7 +102,16 @@ def crud_patches():
 
 def _patch_handler(result=None, error=None):
     handler = MagicMock(
-        return_value=result or HandlerResult(user_id="usr-1", status=SyncStatus.SUCCESS, upserted=2, deleted=1)
+        return_value=result
+        or HandlerResult(
+            status=SyncStatus.SUCCESS,
+            results=[
+                UserSyncResult(
+                    userId="usr-1", status="SUCCESS",
+                    applied=SyncAppliedCounts(upserted=2, deleted=1),
+                )
+            ],
+        )
     )
     if error is not None:
         handler.side_effect = error
@@ -118,7 +128,9 @@ def test_thanh_cong_tra_200_va_dem_dung(client, crud_patches):
     body = resp.json()
     assert body["status"] == "SUCCESS"
     assert body["actionType"] == 1
-    assert body["userId"] == "usr-1"
+    assert body["results"] == [
+        {"userId": "usr-1", "status": "SUCCESS", "applied": {"upserted": 2, "deleted": 1}}
+    ]
     assert body["requestId"] == "req-1"
     assert body["idempotencyKey"] == "idem-1"
     assert body["applied"] == {"upserted": 2, "deleted": 1}
@@ -259,13 +271,89 @@ def test_handler_loi_khong_luong_truoc_tra_500(client, crud_patches):
     assert crud_patches["finish_log"].call_args.kwargs["status"] == SyncStatus.FAILED.value
 
 
-def test_ket_qua_stale_tra_200(client, crud_patches):
-    ctx, _ = _patch_handler(result=HandlerResult(user_id="usr-1", status=SyncStatus.STALE))
+def test_ket_qua_voi_user_stale_tra_200_va_giu_status_stale_trong_results(client, crud_patches):
+    ctx, _ = _patch_handler(
+        result=HandlerResult(
+            status=SyncStatus.SUCCESS,
+            results=[UserSyncResult(userId="usr-1", status="STALE")],
+        )
+    )
     with ctx:
         resp = client.post("/api/v1/hooks/ai-sync", json=VALID_BODY, headers=HEADERS)
     assert resp.status_code == 200
-    assert resp.json()["status"] == "STALE"
-    assert resp.json()["applied"] == {"upserted": 0, "deleted": 0}
+    body = resp.json()
+    assert body["status"] == "SUCCESS"
+    assert body["results"] == [
+        {"userId": "usr-1", "status": "STALE", "applied": {"upserted": 0, "deleted": 0}}
+    ]
+    assert body["applied"] == {"upserted": 0, "deleted": 0}
+
+
+def test_body_voi_nhieu_user_tra_ket_qua_tung_user(client, crud_patches):
+    ctx, _ = _patch_handler(
+        result=HandlerResult(
+            status=SyncStatus.SUCCESS,
+            results=[
+                UserSyncResult(
+                    userId="usr-1", status="SUCCESS",
+                    applied=SyncAppliedCounts(upserted=1, deleted=0),
+                ),
+                UserSyncResult(userId="usr-2", status="STALE"),
+            ],
+        )
+    )
+    body = dict(
+        VALID_BODY,
+        data={
+            "users": [
+                {"userId": "usr-1", "isAdmin": False, "formQueries": []},
+                {"userId": "usr-2", "isAdmin": False, "formQueries": []},
+            ]
+        },
+    )
+    with ctx:
+        resp = client.post("/api/v1/hooks/ai-sync", json=body, headers=HEADERS)
+    assert resp.status_code == 200
+    r = resp.json()
+    assert r["applied"] == {"upserted": 1, "deleted": 0}
+    assert [x["userId"] for x in r["results"]] == ["usr-1", "usr-2"]
+    assert [x["status"] for x in r["results"]] == ["SUCCESS", "STALE"]
+
+
+def test_userid_trung_trong_batch_tra_400(client, crud_patches):
+    from apps.hooks.constants import SyncErrorCode
+    from apps.hooks.errors import SyncHookError
+
+    ctx, _ = _patch_handler(
+        error=SyncHookError(400, SyncErrorCode.DUPLICATE_USER_ID, "userId bị lặp trong payload: usr-1")
+    )
+    body = dict(
+        VALID_BODY,
+        data={
+            "users": [
+                {"userId": "usr-1", "isAdmin": False, "formQueries": []},
+                {"userId": "usr-1", "isAdmin": False, "formQueries": []},
+            ]
+        },
+    )
+    with ctx:
+        resp = client.post("/api/v1/hooks/ai-sync", json=body, headers=HEADERS)
+    assert resp.status_code == 400
+    assert resp.json()["errorCode"] == "DUPLICATE_USER_ID"
+
+
+def test_users_rong_tra_400(client, crud_patches):
+    from apps.hooks.constants import SyncErrorCode
+    from apps.hooks.errors import SyncHookError
+
+    ctx, _ = _patch_handler(
+        error=SyncHookError(400, SyncErrorCode.EMPTY_USER_LIST, "data.users không được rỗng")
+    )
+    body = dict(VALID_BODY, data={"users": []})
+    with ctx:
+        resp = client.post("/api/v1/hooks/ai-sync", json=body, headers=HEADERS)
+    assert resp.status_code == 400
+    assert resp.json()["errorCode"] == "EMPTY_USER_LIST"
 
 
 def test_path_hooks_khong_nam_trong_whitelist():

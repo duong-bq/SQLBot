@@ -51,6 +51,7 @@ from apps.hooks.schemas.ai_sync_schema import (
     SyncAppliedCounts,
     SyncEnvelope,
     SyncHookResponse,
+    UserSyncResult,
     to_sync_version,
 )
 from apps.system.schemas.permission import SqlbotPermission, require_permissions
@@ -68,21 +69,27 @@ def _respond(
     request_id: str | None = None,
     idempotency_key: str | None = None,
     log_id: str | None = None,
-    user_id: str | None = None,
-    upserted: int = 0,
-    deleted: int = 0,
+    results: list[UserSyncResult] | None = None,
     error_code: SyncErrorCode | None = None,
     error_message: str | None = None,
 ) -> JSONResponse:
-    """Dựng JSONResponse thống nhất cho mọi nhánh trả về của hook."""
+    """Dựng JSONResponse thống nhất cho mọi nhánh trả về của hook.
+
+    `applied` cấp request là tổng cộng dồn `upserted`/`deleted` của tất cả phần tử trong `results`
+    — tiện cho SW không phải tự cộng, chi tiết từng user vẫn nằm trong `results`.
+    """
+    results = results or []
     body = SyncHookResponse(
         requestId=request_id,
         idempotencyKey=idempotency_key,
         actionType=action_type,
         status=status.value,
         logId=log_id,
-        userId=user_id,
-        applied=SyncAppliedCounts(upserted=upserted, deleted=deleted),
+        results=results,
+        applied=SyncAppliedCounts(
+            upserted=sum(r.applied.upserted for r in results),
+            deleted=sum(r.applied.deleted for r in results),
+        ),
         errorCode=error_code.value if error_code else None,
         errorMessage=error_message,
     )
@@ -95,7 +102,8 @@ def _duplicate_response(
     """Trả kết quả của lần xử lý đầu tiên cho request trùng idempotency key.
 
     Cố ý trả 200 chứ không 409: SW retry vì timeout mạng (dù lần đầu đã thành công) không nên nhận
-    lỗi. `errorCode`/`errorMessage` là của lần đầu, để SW biết lần đầu FAILED hay SUCCESS.
+    lỗi. `errorCode`/`errorMessage` là của lần đầu, để SW biết lần đầu FAILED hay SUCCESS. `results`
+    chi tiết từng user của lần đầu KHÔNG được lưu lại (audit log không có cột đó) nên trả rỗng.
     """
     return _respond(
         http_status=200,
@@ -104,10 +112,27 @@ def _duplicate_response(
         request_id=request_id,
         idempotency_key=idempotency_key,
         log_id=str(log.id),
-        user_id=log.user_id,
         error_code=SyncErrorCode(log.error_code) if log.error_code else None,
         error_message=log.error_message,
     )
+
+
+def _best_effort_single_user_id(raw_data: Any) -> str | None:
+    """Đoán `user_id` để ghi vào audit log RECEIVED trước khi parse đầy đủ.
+
+    Chỉ ghi được khi batch đúng 1 user — nhiều user thì cột `user_id` (đơn) không còn đủ diễn tả,
+    để `None` (xem spec `2026-08-11-ai-sync-hook-batch-users-design.md` §3).
+    """
+    if not isinstance(raw_data, dict):
+        return None
+    users = raw_data.get("users")
+    if not isinstance(users, list) or len(users) != 1:
+        return None
+    first = users[0]
+    if not isinstance(first, dict):
+        return None
+    user_id = first.get("userId")
+    return user_id if isinstance(user_id, str) else None
 
 
 @router.post("/ai-sync", summary="Nhận bản tin đồng bộ từ hệ thống SW")
@@ -159,7 +184,7 @@ async def ai_sync(request: Request, session: SessionDep) -> JSONResponse:
         int(action_type) if action_type else int(SyncActionType.UNKNOWN)
     )
     raw_data = raw.get("data")
-    best_effort_user_id = raw_data.get("userId") if isinstance(raw_data, dict) else None
+    best_effort_user_id = _best_effort_single_user_id(raw_data)
     schema_version = raw.get("version") if isinstance(raw.get("version"), str) else None
 
     try:
@@ -202,7 +227,6 @@ async def ai_sync(request: Request, session: SessionDep) -> JSONResponse:
             request_id=request_id,
             idempotency_key=idempotency_key,
             log_id=str(log.id),
-            user_id=log.user_id,
             error_code=error_code,
             error_message=message,
         )
@@ -243,7 +267,5 @@ async def ai_sync(request: Request, session: SessionDep) -> JSONResponse:
         request_id=request_id,
         idempotency_key=idempotency_key,
         log_id=str(log.id),
-        user_id=result.user_id,
-        upserted=result.upserted,
-        deleted=result.deleted,
+        results=result.results,
     )
