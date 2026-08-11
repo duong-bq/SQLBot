@@ -10,8 +10,13 @@ whitelist của `TokenMiddleware`.
 
 Ba điều dễ hỏng nếu sửa file này:
 
-1. **Luôn trả `JSONResponse`.** `ResponseMiddleware` bỏ qua JSONResponse (response_middleware.py:42)
-   nên body không bị bọc envelope `{code,data,msg}` — đó là hợp đồng đã thống nhất với SW.
+1. **Path `/api/v1/hooks/ai-sync` phải nằm trong `direct_paths` của `ResponseMiddleware`**
+   (response_middleware.py:30) thì body mới không bị bọc envelope `{code,data,msg}` — đó là hợp đồng
+   đã thống nhất với SW. Việc route trả `JSONResponse` **không** đủ: nhánh
+   `isinstance(response, JSONResponse)` trong middleware đó không bao giờ đúng khi có nhiều
+   `BaseHTTPMiddleware` xếp chồng, vì `call_next()` dựng lại response thành `_StreamingResponse`.
+   Đổi prefix/path của route mà quên sửa `direct_paths` là âm thầm phá hợp đồng, và chỉ các nhánh
+   HTTP 200 mới lộ ra (nhánh lỗi thoát envelope sẵn nhờ điều kiện `status_code != 200`).
 2. **Thứ tự các bước.** Ghi audit log TRƯỚC khi báo lỗi actionType/envelope, để mọi request đã xác
    thực đều để lại vết; nhưng KHÔNG ghi log cho request thiếu idempotency key/JSON hỏng — không
    được để những request chưa đọc được nội dung bơm dữ liệu rác vào bảng audit.

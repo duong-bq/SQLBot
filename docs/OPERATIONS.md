@@ -397,3 +397,24 @@ kỳ tài liệu, log hay issue nào; nếu cần xoay vòng mật khẩu thì p
 | `AUTHORIZATION_SYNC` là **full snapshot**, không phải patch | Gửi thiếu một `formUuid` đang có quyền là **thu hồi** form đó, không phải "giữ nguyên". `formQueries: []` thu hồi hết. Xem `AI_SYNC_HOOK_API_SPEC.md` §5 |
 | Gọi hook mà không đăng nhập trước | Không có static token riêng — SW phải `POST /login/access-token` lấy `X-SQLBOT-TOKEN` như mọi client khác, và tài khoản đó phải có quyền `ws_admin` |
 | Thiếu quyền `ws_admin` trả **500**, không phải 403 | Quy ước chung của `require_permissions` toàn hệ thống (xem §7.4 / `BACKEND_ARCHITECTURE.md` §7), không riêng gì hook |
+
+### 7.6. Envelope response
+
+**Trả `JSONResponse` trong route KHÔNG giúp thoát envelope `{code, data, msg}`.**
+
+`ResponseMiddleware` có một nhánh `isinstance(response, JSONResponse)` trông như lối thoát
+([response_middleware.py:43](../backend/common/core/response_middleware.py#L43)), nhưng nhánh đó
+**không bao giờ đúng** trên app thật: mỗi `BaseHTTPMiddleware` gọi `call_next()` sẽ dựng lại response
+thành `_StreamingResponse` của Starlette, nên tới lượt `ResponseMiddleware` chạy thì kiểu gốc đã mất.
+App có 4 middleware xếp chồng nên điều này luôn xảy ra.
+
+Cách duy nhất trả JSON thô là khai path pattern của route vào `direct_paths`
+([response_middleware.py:30](../backend/common/core/response_middleware.py#L30)). Lưu ý so khớp bằng
+`route.path_format`, tức phải ghi đúng dạng có tham số (`/foo/{id}`), không phải URL đã điền giá trị.
+
+Hai lý do bẫy này khó phát hiện:
+
+| | |
+|---|---|
+| Lỗi vẫn "đúng" format | `ResponseMiddleware` bỏ qua mọi response có `status_code != 200`, nên 4xx/5xx thoát envelope sẵn. Test một vài ca lỗi rồi kết luận "không bị bọc" là sai — chỉ nhánh **200** mới lộ vấn đề |
+| Test không bắt được | Fixture e2e ở [tests/test_ai_sync_e2e.py:56](../tests/test_ai_sync_e2e.py#L56) chỉ gắn `RequestContextMiddleware` + auth giả, **không** có `ResponseMiddleware` — về cấu trúc không thể phát hiện lớp lỗi này. Thêm endpoint đối tác mới thì phải kiểm bằng request thật vào app đã chạy |

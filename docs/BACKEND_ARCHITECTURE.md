@@ -53,7 +53,7 @@ backend/
 | `apps/mcp/` | MCP server | `mcp.py` |
 | `apps/hooks/` | Cổng nhận bản tin đồng bộ từ hệ ngoài (SW) + API đọc quyền (dev/test) | `api/ai_sync.py`, `api/permission_query.py`, `handlers/authorization.py`, `crud/ai_user_permission.py` |
 | `apps/dashboard/`, `apps/settings/`, `apps/swagger/` | Dashboard, tham số hệ thống, i18n cho OpenAPI | |
-| `common/core/` | Config, session DB, response middleware, cache | `config.py`, `db.py`, `response_middleware/` |
+| `common/core/` | Config, session DB, response middleware, cache | `config.py`, `db.py`, `response_middleware.py` |
 | `common/utils/` | Tiện ích: crypto, log, lock phân tán, embedding thread | `crypto.py`, `distributed_lock.py`, `embedding_threads.py` |
 
 Quy ước đặt tên: mỗi domain có `api/` (route), `crud/` hoặc `curd/` (truy cập DB — **cả hai cách
@@ -79,6 +79,12 @@ schema Pydantic).
 Thêm theo thứ tự `TokenMiddleware` → `ResponseMiddleware` → `RequestContextMiddleware` →
 `RequestContextMiddlewareCommon` ([main.py:246](../backend/main.py#L246)). Starlette chạy middleware
 theo thứ tự **ngược** với thứ tự thêm, nên `RequestContextMiddlewareCommon` chạm request trước.
+
+`ResponseMiddleware` bọc mọi response JSON có HTTP 200 vào envelope `{code, data, msg}`. Muốn một
+route trả **JSON thô** thì cách duy nhất là khai path pattern của nó vào danh sách `direct_paths`
+([response_middleware.py:30](../backend/common/core/response_middleware.py#L30)) — hiện có
+`mcp_question`, `mcp_assistant`, `/hooks/ai-sync` và bộ `openapi.json`/`docs`/`redoc`. Xem
+[OPERATIONS.md §7.6](OPERATIONS.md) để biết vì sao trả về `JSONResponse` trong route **không** đủ.
 
 ### `lifespan` — chạy lúc khởi động
 
