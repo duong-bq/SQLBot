@@ -121,7 +121,10 @@ def test_e2e_dong_bo_roi_thu_hoi_va_retry(e2e_client, db_session):
         headers=_headers("idem-e2e-3"),
     )
     assert stale.status_code == 200
-    assert stale.json()["status"] == "STALE"
+    # status cấp request luôn SUCCESS khi batch xử lý xong — STALE tính riêng theo user, nằm
+    # trong results[].status (xem handlers/authorization.py và AI_SYNC_HOOK_API_SPEC.md §7)
+    assert stale.json()["status"] == "SUCCESS"
+    assert stale.json()["results"][0]["status"] == "STALE"
     assert {r.form_uuid for r in get_user_permissions(db_session, "usr-e2e")} == {"form-2"}
 
     # 5. Thu hồi hết quyền
@@ -137,7 +140,8 @@ def test_e2e_dong_bo_roi_thu_hoi_va_retry(e2e_client, db_session):
         json=_body("usr-e2e", "2026-08-10T11:30:00Z", ["form-1"]),
         headers=_headers("idem-e2e-5"),
     )
-    assert late.json()["status"] == "STALE"
+    assert late.json()["status"] == "SUCCESS"
+    assert late.json()["results"][0]["status"] == "STALE"
     assert get_user_permissions(db_session, "usr-e2e") == []
 
 
