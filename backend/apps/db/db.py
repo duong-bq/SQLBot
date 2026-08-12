@@ -1169,10 +1169,10 @@ class ConnectionPoolManager:
         :param max_pools: max pool
         """
         self.max_pools = max_pools
-        self._pools = OrderedDict()  # 使用有序字典实现 LRU
+        self._pools: OrderedDict[int, sessionmaker] = OrderedDict()  # 使用有序字典实现 LRU
         self._lock = threading.Lock()  # 保证多线程安全
 
-    def get_pool(self, ds: CoreDatasource | AssistantOutDsSchema, **db_config):
+    def get_pool(self, ds: CoreDatasource | AssistantOutDsSchema, **db_config) -> sessionmaker:
         """
         get connection pool（lazy load + LRU update）
         """
@@ -1187,7 +1187,7 @@ class ConnectionPoolManager:
                 # 2. 如果连接池不存在，检查是否达到上限，若达到则淘汰最久未使用的（字典头部）
                 if len(self._pools) >= self.max_pools:
                     oldest_id, oldest_pool = self._pools.popitem(last=False)
-                    oldest_pool.close()  # 安全关闭被驱逐的连接池
+                    self._dispose(oldest_pool)  # 安全关闭被驱逐的连接池
                     print(f"[LRU] remove oldest: {oldest_id}")
 
             # 3. 创建新连接池并放入字典末尾
@@ -1197,13 +1197,24 @@ class ConnectionPoolManager:
             print(f"[LRU] create: {ds.id}")
             return new_pool
 
+    @staticmethod
+    def _dispose(pool) -> None:
+        """Giải phóng connection pool nằm dưới một sessionmaker"""
+        engine = getattr(pool, 'kw', {}).get('bind')
+        if engine is None:
+            return
+        try:
+            engine.dispose()
+        except Exception as e:
+            SQLBotLogUtil.warning(f'[Manager] dispose engine failed: {e}')
+
     def remove_pool(self, datasource_id):
         with self._lock:
             if datasource_id in self._pools:
                 # 1. 从字典中移除并获取该连接池对象
                 pool = self._pools.pop(datasource_id)
                 # 2. 安全关闭该连接池，释放底层所有数据库连接和内存
-                pool.close()
+                self._dispose(pool)
                 print(f"[Manager] Closed pool and remove: {datasource_id}")
             else:
                 print(f"[Manager] Warning: ds id {datasource_id} not exist in sqlalchemy")
@@ -1212,7 +1223,7 @@ class ConnectionPoolManager:
         """stop"""
         with self._lock:
             for pool in self._pools.values():
-                pool.close()
+                self._dispose(pool)
             self._pools.clear()
 
 
