@@ -51,7 +51,7 @@ backend/
 | `apps/template/` | Nạp prompt từ YAML (có `@cache`) | `template.py` |
 | `apps/system/` | User, workspace, auth, model config, assistant, apikey | `middleware/auth.py`, `schemas/permission.py`, `api/login.py` |
 | `apps/mcp/` | MCP server | `mcp.py` |
-| `apps/hooks/` | Cổng nhận bản tin đồng bộ từ hệ ngoài (SW) | `api/ai_sync.py`, `handlers/authorization.py`, `crud/ai_user_permission.py` |
+| `apps/hooks/` | Cổng nhận bản tin đồng bộ từ hệ ngoài (SW) + API đọc quyền (dev/test) | `api/ai_sync.py`, `api/permission_query.py`, `handlers/authorization.py`, `crud/ai_user_permission.py` |
 | `apps/dashboard/`, `apps/settings/`, `apps/swagger/` | Dashboard, tham số hệ thống, i18n cho OpenAPI | |
 | `common/core/` | Config, session DB, response middleware, cache | `config.py`, `db.py`, `response_middleware/` |
 | `common/utils/` | Tiện ích: crypto, log, lock phân tán, embedding thread | `crypto.py`, `distributed_lock.py`, `embedding_threads.py` |
@@ -334,5 +334,7 @@ Router đăng ký ở [apps/api.py](../backend/apps/api.py), prefix `settings.AP
   quản trị datasource, cho cả database quan hệ (§3–§7) lẫn file Excel/CSV (§8).
 - [AI_SYNC_HOOK_API_SPEC.md](../backend/scripts/ai_sync_hook/AI_SYNC_HOOK_API_SPEC.md) — cổng nhận
   bản tin đồng bộ từ hệ thống SW (`POST /hooks/ai-sync`).
+- [AI_PERMISSION_QUERY_API_SPEC.md](../backend/scripts/ai_sync_hook/AI_PERMISSION_QUERY_API_SPEC.md)
+  — 2 endpoint GET đọc lại quyền đã đồng bộ (dev/test), tách riêng khỏi spec ghi ở trên.
 
 Swagger: `GET /docs` (bật/tắt bằng `SQLBOT_DOC_ENABLED`), có i18n qua `?lang=zh|en`.

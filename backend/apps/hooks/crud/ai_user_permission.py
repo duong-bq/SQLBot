@@ -1,8 +1,9 @@
 """Truy cập bảng `ai_user_permissions` — trạng thái quyền hiện tại của user."""
 
 from datetime import datetime, timezone
+from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlmodel import Session
 
@@ -72,6 +73,42 @@ def replace_user_permissions(
         upserted += 1
 
     return upserted, deleted
+
+
+def list_users_with_permission_summary(session: Session) -> list[dict[str, Any]]:
+    """Tóm tắt quyền theo từng user đang có ≥1 dòng trong `ai_user_permissions`.
+
+    Mỗi phần tử: `user_id`, `full_name`, `is_admin`, `form_count`, `sync_version`, `synced_at`.
+    Dùng `MAX()` cho `full_name`/`is_admin`/`sync_version`/`synced_at` thay vì `GROUP BY` đủ cột —
+    an toàn vì mọi dòng của cùng 1 user luôn cùng giá trị các cột này (`replace_user_permissions`
+    ghi đồng loạt cho cả batch áp dụng), `MAX()` chỉ là cách hợp lệ về mặt SQL để lấy 1 giá trị đại
+    diện mà không cần `DISTINCT ON`. Sắp theo `user_id` cho ổn định thứ tự.
+    """
+    table = AiUserPermission.__table__
+    statement = (
+        select(
+            table.c.user_id,
+            func.max(table.c.full_name).label("full_name"),
+            func.bool_or(table.c.is_admin).label("is_admin"),
+            func.count().label("form_count"),
+            func.max(table.c.sync_version).label("sync_version"),
+            func.max(table.c.synced_at).label("synced_at"),
+        )
+        .group_by(table.c.user_id)
+        .order_by(table.c.user_id)
+    )
+    rows = session.execute(statement).all()
+    return [
+        {
+            "user_id": row.user_id,
+            "full_name": row.full_name,
+            "is_admin": row.is_admin,
+            "form_count": row.form_count,
+            "sync_version": row.sync_version,
+            "synced_at": row.synced_at,
+        }
+        for row in rows
+    ]
 
 
 def get_user_permissions(session: Session, user_id: str) -> list[AiUserPermission]:
