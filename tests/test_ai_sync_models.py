@@ -37,11 +37,13 @@ def test_permission_co_du_cot_va_unique_user_form():
     cols = AiUserPermission.__table__.columns
     for name in (
         "id", "user_id", "full_name", "is_admin", "form_uuid", "database_table_name",
-        "table_display_name", "table_description", "fields", "postgres_query",
+        "table_display_name", "table_description", "domain_code", "domain_uuid",
+        "domain_name", "domain_description", "fields", "postgres_query",
         "clickhouse_query", "sync_version", "synced_at", "created_at", "updated_at",
     ):
         assert name in cols, f"thiếu cột {name}"
     assert cols["sync_version"].nullable is False
+    assert cols["domain_code"].nullable is True
     constraint_cols = {
         tuple(sorted(c.name for c in con.columns))
         for con in AiUserPermission.__table__.constraints
@@ -54,3 +56,8 @@ def test_permission_co_index_user_id_va_user_table():
     names = {i.name for i in AiUserPermission.__table__.indexes}
     assert "idx_ai_user_permissions_user_id" in names
     assert "idx_ai_user_permissions_user_table" in names
+
+
+def test_permission_co_index_domain_code():
+    names = {i.name for i in AiUserPermission.__table__.indexes}
+    assert "idx_ai_user_permissions_domain_code" in names

@@ -78,6 +78,10 @@ class AiUserPermission(SQLModel, table=True):
 
     Một dòng = một user + một form + một bảng nghiệp vụ + danh sách field + query giới hạn quyền.
     `postgres_query` / `clickhouse_query` lưu nguyên văn, phase này không parse và không chạy.
+
+    `domain_*` là metadata lĩnh vực (linh vực nghiệp vụ) của bảng do SW gửi kèm `tableInfo`, chỉ để
+    đọc lại khi truy vấn quyền — không dùng để lọc/join gì trong phase này nên không chuẩn hoá
+    thành bảng riêng.
     """
 
     __tablename__ = "ai_user_permissions"
@@ -85,6 +89,7 @@ class AiUserPermission(SQLModel, table=True):
         UniqueConstraint("user_id", "form_uuid", name="uq_ai_user_permissions_user_form"),
         Index("idx_ai_user_permissions_user_id", "user_id"),
         Index("idx_ai_user_permissions_user_table", "user_id", "database_table_name"),
+        Index("idx_ai_user_permissions_domain_code", "domain_code"),
     )
 
     id: uuid.UUID | None = Field(
@@ -100,6 +105,10 @@ class AiUserPermission(SQLModel, table=True):
     database_table_name: str = Field(sa_column=Column(String(255), nullable=False))
     table_display_name: str | None = Field(default=None, sa_column=Column(String(255), nullable=True))
     table_description: str | None = Field(default=None, sa_column=Column(Text, nullable=True))
+    domain_code: str | None = Field(default=None, sa_column=Column(String(100), nullable=True))
+    domain_uuid: str | None = Field(default=None, sa_column=Column(String(100), nullable=True))
+    domain_name: str | None = Field(default=None, sa_column=Column(String(255), nullable=True))
+    domain_description: str | None = Field(default=None, sa_column=Column(Text, nullable=True))
     fields: list[dict[str, Any]] = Field(
         default_factory=list, sa_column=Column(JSONB, nullable=False, server_default=text("'[]'::jsonb"))
     )
