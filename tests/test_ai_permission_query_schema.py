@@ -18,6 +18,10 @@ def _row(**overrides) -> AiUserPermission:
         database_table_name="t1",
         table_display_name="Bảng 1",
         table_description="Mô tả",
+        domain_code="LV_DAN_CU",
+        domain_uuid="lv-uuid-5678",
+        domain_name="Lĩnh vực Dân cư",
+        domain_description="Mô tả lĩnh vực",
         fields=[{"id": "a", "name": "A", "description": None}],
         postgres_query="SELECT 1",
         clickhouse_query="SELECT 1",
@@ -53,6 +57,10 @@ def test_co_du_lieu_map_dung_field():
     assert form.formUuid == "f1"
     assert form.tableInfo.databaseTableName == "t1"
     assert form.tableInfo.tableDisplayName == "Bảng 1"
+    assert form.tableInfo.linhVucMa == "LV_DAN_CU"
+    assert form.tableInfo.linhVucUuid == "lv-uuid-5678"
+    assert form.tableInfo.linhVucName == "Lĩnh vực Dân cư"
+    assert form.tableInfo.linhVucDescription == "Mô tả lĩnh vực"
     assert form.tableInfo.fields == [{"id": "a", "name": "A", "description": None}]
     assert form.postgresQuery == "SELECT 1"
     assert form.clickHouseQuery == "SELECT 1"
@@ -64,3 +72,13 @@ def test_nhieu_form_lay_sync_version_tu_dong_dau():
     assert result.syncVersion == 200
     assert len(result.formQueries) == 2
     assert {f.formUuid for f in result.formQueries} == {"f1", "f2"}
+
+
+def test_domain_none_khong_loi():
+    row = _row(domain_code=None, domain_uuid=None, domain_name=None, domain_description=None)
+    result = to_permission_detail("u1", [row])
+    form = result.formQueries[0]
+    assert form.tableInfo.linhVucMa is None
+    assert form.tableInfo.linhVucUuid is None
+    assert form.tableInfo.linhVucName is None
+    assert form.tableInfo.linhVucDescription is None

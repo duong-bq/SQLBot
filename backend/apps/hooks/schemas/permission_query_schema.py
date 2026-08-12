@@ -21,6 +21,10 @@ class PermissionTableInfoOut(BaseModel):
     databaseTableName: str
     tableDisplayName: str | None = None
     tableDescription: str | None = None
+    linhVucMa: str | None = None
+    linhVucUuid: str | None = None
+    linhVucName: str | None = None
+    linhVucDescription: str | None = None
     fields: list[dict[str, Any]]
 
 
@@ -86,6 +90,10 @@ def to_permission_detail(user_id: str, rows: list[AiUserPermission]) -> UserPerm
                     databaseTableName=row.database_table_name,
                     tableDisplayName=row.table_display_name,
                     tableDescription=row.table_description,
+                    linhVucMa=row.domain_code,
+                    linhVucUuid=row.domain_uuid,
+                    linhVucName=row.domain_name,
+                    linhVucDescription=row.domain_description,
                     fields=row.fields,
                 ),
                 postgresQuery=row.postgres_query,

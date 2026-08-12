@@ -118,3 +118,27 @@ def test_detail_goi_dung_user_id_tu_path(client, crud_patches):
     client.get("/api/v1/hooks/ai-sync/permissions/usr-xyz")
     crud_patches["get_perms"].assert_called_once()
     assert crud_patches["get_perms"].call_args[0][1] == "usr-xyz"
+
+
+def test_detail_co_domain_fields_trong_table_info(client, crud_patches):
+    from datetime import datetime, timezone
+
+    from apps.hooks.models.ai_sync_model import AiUserPermission
+
+    crud_patches["get_perms"].return_value = [
+        AiUserPermission(
+            user_id="usr-1", full_name="A", is_admin=False, form_uuid="f1",
+            database_table_name="t1", table_display_name="Bảng 1", table_description="Mô tả",
+            domain_code="LV_DAN_CU", domain_uuid="lv-uuid-5678", domain_name="Lĩnh vực Dân cư",
+            domain_description="Mô tả lĩnh vực", fields=[], postgres_query=None,
+            clickhouse_query=None, sync_version=100,
+            synced_at=datetime(2026, 8, 12, 10, 0, tzinfo=timezone.utc),
+        )
+    ]
+    resp = client.get("/api/v1/hooks/ai-sync/permissions/usr-1")
+    assert resp.status_code == 200
+    table_info = resp.json()["data"]["formQueries"][0]["tableInfo"]
+    assert table_info["linhVucMa"] == "LV_DAN_CU"
+    assert table_info["linhVucUuid"] == "lv-uuid-5678"
+    assert table_info["linhVucName"] == "Lĩnh vực Dân cư"
+    assert table_info["linhVucDescription"] == "Mô tả lĩnh vực"
