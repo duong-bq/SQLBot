@@ -1,20 +1,11 @@
-# Serving SQLBot đầy đủ bằng một lệnh duy nhất: backend + Postgres (metadata) + Redis (cache),
-# gộp từ docker-compose.service.yml vào chung file này nên không cần chạy 2 lệnh compose nữa.
-#
-#   docker compose -f docker-compose.backend.yml up -d --build
-#
-# Sửa các giá trị dưới đây cho khớp server đích, hoặc để trong file .env cạnh compose file
-# (compose tự đọc .env cho phần ${...} — xem cảnh báo ở service backend, .env gốc repo đang
-# chứa cấu hình dành cho lúc chạy backend trực tiếp trên host và sẽ đè lên nếu không cẩn thận).
-#
-# Cổng ra host và subnet đã chọn theo hiện trạng server đích (xem ghi chú tại từng chỗ).
-# Muốn đổi mà không sửa file: đặt BACKEND_HOST_PORT / POSTGRES_HOST_PORT / REDIS_HOST_PORT.
+name: sqlbot-backend
+
 services:
   backend:
     build:
       context: .
       dockerfile: Dockerfile.backend
-    image: sqlbot-backend:1.9.0
+    image: sqlbot-backend:0.0.1
     container_name: sqlbot-backend
     restart: unless-stopped
     depends_on:
@@ -25,17 +16,6 @@ services:
     ports:
       - "${BACKEND_HOST_PORT:-8001}:8000"
     environment:
-      # --- Postgres metadata của SQLBot (KHÔNG phải DB nghiệp vụ được truy vấn) ---
-      # postgres/redis giờ là service cùng compose project nên gọi nhau bằng tên service
-      # qua network nội bộ Docker, KHÔNG qua host.docker.internal + port map ra host nữa.
-      #
-      # BẪY: ba giá trị dưới đây cố tình hardcode, KHÔNG dùng ${...}. File .env ở gốc repo
-      # đang có POSTGRES_SERVER=localhost, POSTGRES_PORT=5434, CACHE_REDIS_URL=...localhost:6380
-      # — đó là cấu hình cho lúc chạy backend trực tiếp trên host (backend đọc qua
-      # env_file="../.env"). Nhưng compose cũng tự nạp đúng file .env đó để thay ${...}, nên
-      # nếu để ${POSTGRES_SERVER:-postgres} thì giá trị thắng cuộc là "localhost" — bên trong
-      # container localhost trỏ về chính nó, backend sẽ không bao giờ thấy Postgres.
-      # Địa chỉ nội bộ của compose project là cố định và biết trước, không có lý do tham số hoá.
       POSTGRES_SERVER: postgres
       POSTGRES_PORT: 5432
       POSTGRES_USER: ${POSTGRES_USER:-root}
@@ -46,11 +26,6 @@ services:
       CACHE_TYPE: redis
       CACHE_REDIS_URL: redis://redis:6379/0
 
-      # --- BẮT BUỘC đặt cố định ---
-      # Mặc định trong code là secrets.token_urlsafe(32), sinh mới mỗi lần process start.
-      # Để trống thì mọi JWT đã phát bị vô hiệu sau mỗi lần restart container.
-      # Quote cả giá trị: dấu ":" trong thông báo lỗi của ${VAR:?msg} làm YAML parser hiểu
-      # thành mapping và văng "mapping values are not allowed in this context".
       SECRET_KEY: "${SECRET_KEY:?can SECRET_KEY, sinh bang openssl rand -base64 32}"
 
       # --- Embedding qua API, không nhúng model vào image ---
@@ -74,41 +49,19 @@ services:
       # --- Khác ---
       LLM_DISABLE_THINKING: ${LLM_DISABLE_THINKING:-True}
       TZ: Asia/Ho_Chi_Minh
-
     volumes:
-      # File Excel người dùng upload làm datasource + ảnh của MCP. Không mount thì mất
-      # sau mỗi lần recreate container.
-      #
-      # Dùng named volume, KHÔNG bind-mount, vì container chạy uid 1000 (không phải root):
-      #   - Named volume: lần đầu Docker copy nội dung /opt/sqlbot/data từ image vào volume,
-      #     giữ nguyên owner uid 1000 → ghi được ngay, và có sẵn cả file/ lẫn excel/.
-      #   - Bind-mount: Docker KHÔNG copy nội dung image vào, thư mục host thiếu thì daemon
-      #     tự tạo — trên Docker Engine thuần (server) tạo thành root:root, uid 1000 hết ghi
-      #     được. Đúng loại lỗi PermissionError phải lách bằng .opt-sqlbot-data ở máy dev.
-      #     Ngoài ra excel/ sẽ không tồn tại vì chỉ UPLOAD_DIR được mkdir lúc import.
-      #
-      # Vẫn muốn bind-mount để soi file từ host thì phải tự tạo và chown TRƯỚC khi up:
-      #   mkdir -p ./data/sqlbot-files/file ./data/sqlbot-files/excel ./data/sqlbot-images
-      #   sudo chown -R 1000:1000 ./data/sqlbot-files ./data/sqlbot-images
       - sqlbot_data:/opt/sqlbot/data
       - sqlbot_images:/opt/sqlbot/images
-
     extra_hosts:
-      # Không còn cần cho postgres/redis (đã là service nội bộ), nhưng vẫn giữ cho các URL
-      # khác trỏ ra chính host, vd EMBEDDING_API_BASE_URL nếu server embedding chạy trên host.
-      # Trên Linux, host.docker.internal không tự có như Docker Desktop.
       - "host.docker.internal:host-gateway"
-
     networks:
-      - sqlbot
+      - sqlbot-network
 
   postgres:
     image: pgvector/pgvector:pg16
     container_name: sqlbot-postgres
     restart: unless-stopped
     environment:
-      # Cùng biến với service backend ở trên (compose thay ${...} một lần cho cả file) nên
-      # user/password/db của hai bên luôn khớp, không phải sửa 2 chỗ.
       POSTGRES_USER: ${POSTGRES_USER:-root}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?can POSTGRES_PASSWORD}
       POSTGRES_DB: ${POSTGRES_DB:-sqlbot}
@@ -118,16 +71,11 @@ services:
       timeout: 5s
       retries: 10
     ports:
-      # Chỉ để soi dữ liệu từ host bằng psql/DBeaver. Backend KHÔNG đi qua cổng này, nó gọi
-      # thẳng service "postgres" ở cổng 5432 trong network nội bộ.
-      # 15432 thay vì 5434: trên server đích dải 5432-5445 đã có 6 instance Postgres khác
-      # chiếm (5432, 5433, 5434, 5435, 5438, 5445). 15432 vừa trống, vừa nằm dưới dải ephemeral
-      # của kernel (32768-60999) nên không sợ bị tiến trình khác mượn tạm.
       - "${POSTGRES_HOST_PORT:-15432}:5432"
     volumes:
       - ./data/postgresql:/var/lib/postgresql/data
     networks:
-      - sqlbot
+      - sqlbot-network
 
   redis:
     image: redis:7-alpine
@@ -142,30 +90,14 @@ services:
       # Tương tự postgres: chỉ để debug từ host. 6380 đã kiểm tra là còn trống trên server.
       - "${REDIS_HOST_PORT:-6380}:6379"
     networks:
-      - sqlbot
+      - sqlbot-network
 
 volumes:
   sqlbot_data:
   sqlbot_images:
 
-# Ghim subnet thay vì để Docker tự chọn. Docker cấp phát mặc định theo thứ tự trong
-# 172.17.0.0/16 → 172.31.0.0/16, và trên server đích gần hết dải: 172.17-172.27 và 172.29 đã bị
-# chiếm. Khi pool cạn, daemon nhảy sang dải khác và có thể trúng subnet mà host đang định tuyến
-# — lúc đó host thêm route cho bridge mới, route này prefix dài hơn nên thắng route LAN cũ và
-# phiên SSH đứt ngay giữa lệnh `up`.
-#
-# Chọn 10.251.1.0/24 vì trên server đích toàn bộ 10.0.0.0/8 chưa ai dùng (bảng route chỉ có
-# 192.168.x), lại nằm NGOÀI pool tự cấp phát của Docker nên không project nào vô tình giành mất.
-# 10.251.0.0/24 để dành cho stack Elasticsearch đang dùng dải đó.
-#
-# /24 = 254 địa chỉ, thừa cho 3 container. Không gán ipv4_address tĩnh cho từng service vì các
-# service gọi nhau bằng tên qua DNS nội bộ của Docker, IP cụ thể là gì không quan trọng.
-#
-# ĐỔI SERVER thì phải kiểm lại subnet này có trống không:
-#   docker network inspect $(docker network ls -q) --format '{{.Name}}: {{range .IPAM.Config}}{{.Subnet}} {{end}}'
-#   ip -4 route
 networks:
-  sqlbot:
+  sqlbot-network:
     name: sqlbot-net
     driver: bridge
     ipam:
