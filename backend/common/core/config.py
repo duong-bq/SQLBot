@@ -186,6 +186,44 @@ class Settings(BaseSettings):
 
     ORACLE_CLIENT_PATH: str = '/opt/sqlbot/db_client/oracle_instant_client'
 
+    # --- Luồng import excel bất đồng bộ (POST /datasource/createFromExcelAsync) ---
+    # Pool riêng, KHÔNG dùng chung pool 200 thread của embedding: mỗi job nạp cả dataframe vào RAM
+    # nên số thread phải nhỏ, còn embedding thì ngược lại.
+    EXCEL_IMPORT_WORKERS: int = 4
+    # Chu kỳ worker cập nhật heartbeat, và ngưỡng coi job là đã chết. Ngưỡng đặt bằng vài chu kỳ
+    # heartbeat chứ không theo độ dài job — đó là điểm khác biệt so với việc chỉ nhìn started_at.
+    EXCEL_IMPORT_HEARTBEAT_SECONDS: int = 30
+    EXCEL_IMPORT_STALE_SECONDS: int = 180
+    # Tổng thời gian chờ advisory lock trong pha đồng bộ, gom từ nhiều lần thử-rồi-ngủ (route không
+    # được đứng chờ trong một lời gọi DB đồng bộ — xem ``try_acquire_xact_lock``). Hết hạn thì trả
+    # lỗi thay vì xếp hàng vô hạn.
+    EXCEL_IMPORT_LOCK_TIMEOUT_MS: int = 5000
+    # Chu kỳ vòng quét phục hồi: nhặt job mồ côi, kết liễu job chết, gỡ callback kẹt, dọn file tạm.
+    EXCEL_IMPORT_RECOVERY_SECONDS: int = 60
+    # File tạm quá hạn này mà không job nào đang dùng thì xóa. Đặt dài vì thư mục này dùng chung với
+    # luồng /parseExcel → /importToDb của giao diện web, nơi người dùng có thể để giữa chừng khá lâu.
+    EXCEL_IMPORT_TEMP_TTL_HOURS: int = 24
+
+    # --- Callback về hệ ngoài (outbox) ---
+    # Để rỗng là tắt hẳn việc gửi callback; job vẫn chạy và vẫn ghi trạng thái.
+    AI_CALLBACK_URL: str = ''
+    # Mã sự kiện đối tác cấp RIÊNG cho việc báo kết quả nạp excel, không dùng lại cho loại bản tin
+    # nào khác — nên phong bì không cần thêm trường phân biệt sự kiện.
+    AI_CALLBACK_ACTION_TYPE: int = 999
+    # Thư viện HTTP mặc định KHÔNG có timeout; thiếu giá trị này thì một connection treo giữ thread
+    # gửi vĩnh viễn và ta quay lại đúng bài toán cạn pool mà outbox sinh ra để tránh.
+    AI_CALLBACK_TIMEOUT: int = 15
+    AI_CALLBACK_MAX_ATTEMPTS: int = 8
+    AI_CALLBACK_POLL_SECONDS: int = 10
+    AI_CALLBACK_WORKERS: int = 4
+    AI_CALLBACK_BATCH_SIZE: int = 20
+    # Giãn cách thử lại: nhân đôi sau mỗi lần hỏng, chặn trên để không bao giờ ngủ quên hàng giờ.
+    AI_CALLBACK_BACKOFF_BASE_SECONDS: int = 10
+    AI_CALLBACK_BACKOFF_CAP_SECONDS: int = 1800
+    # Header xác thực gửi kèm, dạng "Tên: giá trị". Đối tác đã xác nhận cổng nhận callback KHÔNG cần
+    # xác thực, nên mặc định rỗng; giữ lại biến để sau này họ đổi ý thì không phải sửa code.
+    AI_CALLBACK_AUTH_HEADER: str = ''
+
     @field_validator('SQL_DEBUG',
                      'EMBEDDING_ENABLED',
                      'GENERATE_SQL_QUERY_LIMIT_ENABLED',

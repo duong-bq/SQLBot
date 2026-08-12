@@ -4,13 +4,13 @@ import uuid
 from typing import List, Optional
 
 from fastapi import HTTPException
-from sqlalchemy import and_, or_, text
+from sqlalchemy import and_, delete, or_, text
 from sqlbot_xpack.permissions.models.ds_rules import DsRules
 from sqlmodel import select
 
 from apps.datasource.crud.permission import get_column_permission_fields, get_row_permission_filters, is_normal_user
 from apps.datasource.embedding.table_embedding import calc_table_embedding
-from apps.datasource.utils.utils import aes_decrypt
+from apps.datasource.utils.utils import aes_decrypt, aes_encrypt
 from apps.db.constant import DB
 from apps.db.db import get_tables, get_fields, exec_sql, check_connection, get_relations
 from apps.db.engine import get_engine_config, get_engine_conn
@@ -25,6 +25,7 @@ from ..crud.field import delete_field_by_ds_id, update_field
 from ..crud.table import delete_table_by_ds_id, update_table
 from ..models.datasource import CoreDatasource, CreateDatasource, CoreTable, CoreField, ColumnSchema, TableObj, \
     DatasourceConf, DatasourceStatus, TableAndFields
+from ..models.excel_job import ExcelImportJob
 from apps.db.db import pool_manager, driver_pool_manager
 
 
@@ -64,8 +65,8 @@ def usable_ds_condition():
     là một lần nguồn dữ liệu lặng lẽ biến mất.
 
     Nhánh ``is_(None)`` là bắt buộc và KHÔNG thừa: trong SQL, ``NULL NOT IN (...)`` cho kết quả
-    UNKNOWN chứ không phải TRUE, nên nếu chỉ viết ``not_in`` thì đúng những dòng NULL — đúng thứ
-    cần cứu — lại bị loại. Giữ cả hai lớp phòng.
+    UNKNOWN chứ không phải TRUE, nên nếu chỉ viết ``not_in`` thì đúng những dòng NULL — thứ mà
+    migration 076 backfill nhằm cứu — lại bị loại. Giữ cả hai lớp phòng.
     """
     return or_(
         CoreDatasource.status.is_(None),
@@ -78,17 +79,56 @@ def is_ds_usable(ds: CoreDatasource) -> bool:
     return ds.status not in DatasourceStatus.UNUSABLE
 
 
+def find_conflicting_ds(session: SessionDep, oid: Optional[int], name: str) -> Optional[CoreDatasource]:
+    """Tra nguồn dữ liệu đang chiếm chỗ của ``name`` trong workspace, trả về DÒNG chứ không ném lỗi.
+
+    ``check_name`` chỉ ném ``HTTPException(500)`` nên bên gọi không biết được id của nguồn dữ liệu
+    trùng. Luồng bất đồng bộ cần chính id đó: hệ ngoài gọi lại lần hai (retry mạng, người dùng bấm
+    hai lần) phải nhận về 409 kèm ``dsId`` và trạng thái, đủ để biết "cái này tôi tạo lúc nãy, đang
+    nạp" thay vì tưởng mình gặp lỗi lạ.
+
+    Cùng quy tắc lọc với ``check_name``: chuẩn hóa ``oid`` y như lúc ghi, và nguồn dữ liệu thất bại
+    không tính là chiếm chỗ.
+    """
+    current_oid = oid if oid is not None else 1
+    return session.exec(
+        select(CoreDatasource).where(and_(
+            CoreDatasource.name == name,
+            CoreDatasource.oid == current_oid,
+            CoreDatasource.status.is_distinct_from(DatasourceStatus.FAILED),
+        ))
+    ).first()
+
+
 def check_name(session: SessionDep, trans: Trans, user: CurrentUser, ds: CoreDatasource):
+    """Chặn trùng tên nguồn dữ liệu trong cùng workspace.
+
+    Hai điểm khác bản cũ:
+
+    - ``oid`` phải chuẩn hóa y như lúc ghi (``create_ds`` lưu 1 khi ``user.oid`` rỗng). Bản cũ so
+      thẳng ``user.oid``, nên với user có oid rỗng — thường là admin, đúng nhóm cầm token tích hợp
+      — mệnh đề thành phép so sánh với NULL, không khớp dòng nào, và việc chặn trùng tên coi như
+      không chạy.
+    - Nguồn dữ liệu ở trạng thái thất bại không tính là trùng: hệ ngoài được phép gọi lại với cùng
+      tên sau một lần import hỏng.
+
+    Lưu ý: đây vẫn chỉ là một câu SELECT, không có ràng buộc DB nào đứng sau, nên hai request song
+    song cùng tên vẫn lọt cả hai. Việc tuần tự hóa do advisory lock ở tầng endpoint lo.
+
+    Mã lỗi giữ nguyên 500 vì hàm dùng chung cho ``/datasource/add`` và ``/datasource/update``; đổi
+    sang 409 ở đây là đổi hợp đồng của hai endpoint giao diện web đang dùng.
+    """
+    current_oid = user.oid if user.oid is not None else 1
+    conditions = [
+        CoreDatasource.name == ds.name,
+        CoreDatasource.oid == current_oid,
+        CoreDatasource.status.is_distinct_from(DatasourceStatus.FAILED),
+    ]
     if ds.id is not None:
-        ds_list = session.query(CoreDatasource).filter(
-            and_(CoreDatasource.name == ds.name, CoreDatasource.id != ds.id, CoreDatasource.oid == user.oid)).all()
-        if ds_list is not None and len(ds_list) > 0:
-            raise HTTPException(status_code=500, detail=trans('i18n_ds_name_exist'))
-    else:
-        ds_list = session.query(CoreDatasource).filter(
-            and_(CoreDatasource.name == ds.name, CoreDatasource.oid == user.oid)).all()
-        if ds_list is not None and len(ds_list) > 0:
-            raise HTTPException(status_code=500, detail=trans('i18n_ds_name_exist'))
+        conditions.append(CoreDatasource.id != ds.id)
+    ds_list = session.query(CoreDatasource).filter(and_(*conditions)).all()
+    if ds_list is not None and len(ds_list) > 0:
+        raise HTTPException(status_code=500, detail=trans('i18n_ds_name_exist'))
 
 
 @clear_cache(namespace=CacheNamespace.AUTH_INFO, cacheName=CacheName.DS_ID_LIST, keyExpression="user.oid")
@@ -115,6 +155,51 @@ async def create_ds(session: SessionDep, trans: Trans, user: CurrentUser, create
     return ds
 
 
+@clear_cache(namespace=CacheNamespace.AUTH_INFO, cacheName=CacheName.DS_ID_LIST, keyExpression="user.oid")
+async def create_ds_importing(session: SessionDep, user: CurrentUser, name: str,
+                              description: str = '') -> CoreDatasource:
+    """Chèn MỘT dòng ``core_datasource`` giữ chỗ ở trạng thái đang nạp, không làm gì thêm.
+
+    Vì sao không dùng lại ``create_ds``: hàm đó luôn chạy tiếp ``sync_table`` và ``updateNum``, và
+    với danh sách bảng rỗng thì cả hai đều gây hại.
+
+    - ``sync_table`` kết thúc bằng ``run_save_ds_embeddings``, sinh embedding cho một nguồn dữ liệu
+      chưa có bảng nào. Worker xong sẽ sinh embedding đầy đủ lần nữa, nhưng ``save_ds_embedding``
+      ghi cột ``embedding`` bằng một UPDATE trần, không có mốc phiên bản, và cả hai tác vụ nằm
+      chung ``ThreadPoolExecutor`` 200 thread. Bản rỗng về sau là ghi đè mất bản đầy đủ — nguồn dữ
+      liệu vẫn "thành công", hỏi đáp vẫn chạy, chỉ khâu chọn bảng theo ngữ nghĩa mất tác dụng.
+    - ``updateNum`` giải mã ``configuration`` rồi ``len(conf.get('sheets'))``; thiếu khóa ``sheets``
+      là ``len(None)`` → TypeError ngay trong pha đồng bộ, 202 không bao giờ trả được.
+
+    ``configuration`` vì thế phải có ``sheets`` là list rỗng TƯỜNG MINH — không trông vào mặc định
+    của ``DatasourceConf``, nơi ``sheets`` khai mặc định là chuỗi rỗng.
+
+    KHÔNG commit: người gọi giữ quyền điều khiển transaction, vì pha đồng bộ cần gộp chung
+    advisory lock + kiểm trùng tên + chèn dòng này vào một transaction duy nhất. ``flush`` là đủ để
+    lấy ``id`` sinh ra.
+
+    Vẫn giữ ``@clear_cache`` trên DS_ID_LIST: nguồn dữ liệu mới cần vào danh sách phân quyền ngay,
+    việc chặn hỏi đáp do ``usable_ds_condition`` lo chứ không dựa vào cache vắng mặt.
+    """
+    record = CoreDatasource(
+        name=name,
+        description=description,
+        type="excel",
+        type_name=DB.get_db("excel").db_name,
+        configuration=aes_encrypt(json.dumps({"filename": "", "sheets": []})).decode(),
+        create_time=datetime.datetime.now(),
+        create_by=user.id,
+        oid=user.oid if user.oid is not None else 1,
+        status=DatasourceStatus.IMPORTING,
+        num="0/0",
+        recommended_config=1,
+    )
+    session.add(record)
+    session.flush()
+    session.refresh(record)
+    return record
+
+
 def chooseTables(session: SessionDep, trans: Trans, id: int, tables: List[CoreTable]):
     ds = session.query(CoreDatasource).filter(CoreDatasource.id == id).first()
     check_status(session, trans, ds, True)
@@ -125,10 +210,16 @@ def chooseTables(session: SessionDep, trans: Trans, id: int, tables: List[CoreTa
 def update_ds(session: SessionDep, trans: Trans, user: CurrentUser, ds: CoreDatasource):
     ds.id = int(ds.id)
     check_name(session, trans, user, ds)
-    # status = check_status(session, trans, ds)
-    ds.status = "Success"
+    # Không gán status ở đây. Bản cũ ghi cứng "Success" cho MỌI lần sửa, nên chỉ cần đổi mô tả một
+    # nguồn dữ liệu đang nạp là nó nhảy sang trạng thái dùng được trong khi worker chưa xong, rồi
+    # lọt vào hỏi đáp với 0 bảng. Sửa metadata là việc của người dùng; phán về tiến độ nạp dữ liệu
+    # là việc của worker.
     record = session.exec(select(CoreDatasource).where(CoreDatasource.id == ds.id)).first()
     update_data = ds.model_dump(exclude_unset=True)
+    # Gạt thẳng khỏi payload, không chỉ dựa vào việc không gán ở trên: giao diện web sửa nguồn dữ
+    # liệu gửi lại nguyên đối tượng vừa GET về, nên `status` nằm trong `model_fields_set` và sẽ ghi
+    # đè nếu để lọt.
+    update_data.pop('status', None)
     for field, value in update_data.items():
         setattr(record, field, value)
     session.add(record)
@@ -155,10 +246,19 @@ async def delete_ds(session: SessionDep, id: int):
         # drop all tables for current datasource
         engine = get_engine_conn()
         conf = DatasourceConf(**json.loads(aes_decrypt(term.configuration)))
-        with engine.connect() as conn:
-            for sheet in conf.sheets:
-                conn.execute(text(f'DROP TABLE IF EXISTS "{sheet["tableName"]}"'))
-            conn.commit()
+        try:
+            with engine.connect() as conn:
+                for sheet in conf.sheets:
+                    conn.execute(text(f'DROP TABLE IF EXISTS "{sheet["tableName"]}"'))
+                conn.commit()
+        finally:
+            # get_engine_conn dựng hẳn một Engine kèm pool riêng mỗi lần gọi và không ai đóng hộ.
+            engine.dispose()
+
+    # Xóa luôn dòng job của luồng import bất đồng bộ. Không có bước này thì mỗi lần hệ ngoài xóa
+    # một nguồn dữ liệu nạp hỏng sẽ để lại một dòng job trỏ tới id không còn tồn tại, và bảng job
+    # phình lên mãi. Xóa TRƯỚC khi xóa nguồn dữ liệu để nếu có lỗi thì hai bên vẫn còn khớp nhau.
+    session.execute(delete(ExcelImportJob).where(ExcelImportJob.ds_id == id))
 
     session.delete(term)
     session.commit()

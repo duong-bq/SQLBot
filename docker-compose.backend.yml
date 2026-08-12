@@ -62,6 +62,15 @@ services:
       BACKEND_CORS_ORIGINS: ${BACKEND_CORS_ORIGINS}
       FRONTEND_HOST: ${FRONTEND_HOST:-http://localhost:5173}
 
+      # --- Callback báo kết quả nạp Excel bất đồng bộ về hệ ngoài ---
+      # ĐỂ TRỐNG LÀ TẮT HẲN VIỆC GỬI. Không phải "gửi rồi lỗi": vòng gửi thoát ngay khi thấy URL
+      # rỗng, nên thư nằm nguyên trong hàng đợi (bảng excel_import_jobs) và không đốt lần thử nào.
+      # Nạp dữ liệu vẫn chạy đúng, chỉ là hệ ngoài không bao giờ biết kết quả — phải tự hỏi bằng
+      # GET /datasource/excelImportStatus/{ds_id}. Điền URL vào là các thư đang chờ tự động đi.
+      AI_CALLBACK_URL: ${AI_CALLBACK_URL:-}
+      # Mã sự kiện trong phong bì gửi cho hệ ngoài; do đối tác quy định, không tự đổi.
+      AI_CALLBACK_ACTION_TYPE: ${AI_CALLBACK_ACTION_TYPE:-999}
+
       # --- Khác ---
       LLM_DISABLE_THINKING: ${LLM_DISABLE_THINKING:-True}
       TZ: Asia/Ho_Chi_Minh

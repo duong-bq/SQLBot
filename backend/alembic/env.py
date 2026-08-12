@@ -33,6 +33,7 @@ from common.core.config import settings # noqa
 #from apps.datasource.models.datasource import SQLModel
 from apps.system.models.system_model import SQLModel
 from apps.hooks.models.ai_sync_model import SQLModel  # noqa
+from apps.datasource.models.excel_job import SQLModel  # noqa
 
 target_metadata = SQLModel.metadata
 

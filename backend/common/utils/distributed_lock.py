@@ -11,7 +11,7 @@ from functools import wraps
 from threading import Lock
 from typing import ClassVar, Self
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, text
 from sqlalchemy.engine import Connection
 from sqlalchemy.exc import SQLAlchemyError
 
@@ -80,6 +80,50 @@ class DistributedLock:
             self._connection.commit()
         finally:
             self._connection.close()
+
+
+def acquire_xact_lock(session, key: str, timeout_ms: int | None = None) -> None:
+    """Chiếm một advisory lock ĐẶT TÊN, tự nhả khi transaction hiện tại kết thúc.
+
+    Khác ``SingleWorkerGuard`` ở bốn điểm, và mỗi điểm đều có lý do:
+
+    - **Khóa theo tên động**, không phải một hằng số toàn cục. Hai thao tác trên hai tên khác nhau
+      sinh hai số khóa khác nhau nên không ai chờ ai; chỉ đúng cặp trùng tên mới xếp hàng.
+    - **Chờ** (``pg_advisory_xact_lock``) thay vì thử một lần rồi bỏ: mục đích là tuần tự hóa hai
+      request, không phải chọn ra một tiến trình.
+    - **Cấp transaction**: tự nhả khi commit/rollback/tiến trình chết. Loại cấp session mà quên nhả
+      thì khóa kẹt tới khi connection đóng, mà connection trong pool sống rất lâu.
+    - Dùng lại chính ``session`` của người gọi, để khóa và các câu lệnh cần bảo vệ nằm chung một
+      transaction. Xin khóa trên connection khác là không bảo vệ được gì.
+
+    Dùng để bịt lỗ TOCTOU của ``check_name``: đó chỉ là một câu SELECT, không có ràng buộc unique
+    nào đứng sau, nên hai request cùng tên chạy song song đều thấy "chưa có" rồi cùng chèn.
+    """
+    advisory_key = DistributedLock._postgres_advisory_key(key)
+    if timeout_ms:
+        # SET LOCAL chỉ có hiệu lực tới hết transaction, không rò sang request sau dùng lại
+        # connection này.
+        session.execute(text(f"SET LOCAL lock_timeout = '{int(timeout_ms)}ms'"))
+    session.execute(select(func.pg_advisory_xact_lock(advisory_key)))
+
+
+def try_acquire_xact_lock(session, key: str) -> bool:
+    """Thử chiếm advisory lock cấp transaction, **không chờ**: trả ``True``/``False`` ngay.
+
+    Sinh ra để dùng trong ``async def``. Bản chờ (``acquire_xact_lock``) chạy trong route bất đồng
+    bộ là một câu lệnh DB đồng bộ có thể đứng im vài giây, mà đứng im trong coroutine nghĩa là chặn
+    cả event loop — mọi request khác, kể cả các lời gọi mạng đang chờ, đứng theo. Đã đo được hậu quả
+    thật: client redis async trong cùng tiến trình văng ``TimeoutError`` khi có vài request cùng tên
+    bắn ra một lúc.
+
+    Người gọi tự quyết định chờ bằng cách lặp lại và ``await asyncio.sleep`` giữa hai lần thử — lúc
+    đó quyền điều khiển được trả về cho event loop nên không ai bị chặn.
+
+    Thất bại phải ``rollback`` trước khi thử lại: câu SELECT này đã mở một transaction, và khóa đã
+    chiếm được (nếu có) chỉ nhả khi transaction kết thúc.
+    """
+    advisory_key = DistributedLock._postgres_advisory_key(key)
+    return bool(session.execute(select(func.pg_try_advisory_xact_lock(advisory_key))).scalar())
 
 
 class SingleWorkerGuard:

@@ -17,6 +17,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 
 from alembic import command
 from apps.api import api_router
+from apps.datasource.task import start_datasource_background_tasks, stop_datasource_background_tasks
 from apps.swagger.i18n import PLACEHOLDER_PREFIX, tags_metadata, i18n_list
 from apps.swagger.i18n import get_translation, DEFAULT_LANG
 from apps.system.crud.aimodel_manage import async_model_info
@@ -57,6 +58,11 @@ def init_table_and_ds_embedding():
 
 
 def shutdown_resources() -> None:
+    # Dừng các vòng nền TRƯỚC khi nhả khóa và đóng tài nguyên: chúng còn đang mở session tới DB.
+    try:
+        stop_datasource_background_tasks()
+    except Exception:
+        SQLBotLogUtil.exception("SQLBot datasource background tasks shutdown failed")
     try:
         SingleWorkerGuard.release()
     except Exception:
@@ -71,6 +77,7 @@ async def lifespan(app: FastAPI):
     init_terminology_embedding_data()
     init_data_training_embedding_data()
     init_table_and_ds_embedding()
+    start_datasource_background_tasks()
     SQLBotLogUtil.info("✅ SQLBot 初始化完成")
     await sqlbot_xpack.core.clean_xpack_cache()
     await async_model_info()  # 异步加密已有模型的密钥和地址

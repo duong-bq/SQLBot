@@ -27,6 +27,13 @@
   "ds_import_to_db": "Import Data to Database",
   "ds_export_ds_schema": "Export Comment",
   "ds_upload_ds_schema": "Upload Comment",
+  "ds_create_from_excel": "Create Datasource from Excel/CSV",
+  "ds_create_from_excel_async": "Create Datasource from Excel/CSV (async, replies immediately)",
+  "ds_excel_import_status": "Get Excel Import Status",
+  "ds_name": "Datasource Name",
+  "ds_sheet_names": "Sheet names, empty means all sheets",
+  "ds_description": "Description",
+
 
   "mcp_api": "MCP Tools(It is not recommended to call via API)",
 

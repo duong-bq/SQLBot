@@ -27,6 +27,12 @@
   "ds_import_to_db": "导入数据到数据库",
   "ds_export_ds_schema": "导出备注信息",
   "ds_upload_ds_schema": "导入备注信息",
+  "ds_create_from_excel": "从Excel/CSV创建数据源",
+  "ds_create_from_excel_async": "从Excel/CSV创建数据源（异步，立即返回）",
+  "ds_excel_import_status": "查询Excel导入状态",
+  "ds_name": "数据源名称",
+  "ds_sheet_names": "工作表名称，留空表示全部",
+  "ds_description": "描述",
 
   "mcp_api": "MCP Tools(不建议api方式调用)",
 

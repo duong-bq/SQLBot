@@ -253,3 +253,43 @@ class SheetFields(BaseModel):
 class ImportRequest(BaseModel):
     filePath: str
     sheets: List[SheetFields]
+
+
+class CreatedExcelTable(BaseModel):
+    tableId: int
+    tableName: str
+    sheetName: str
+    rows: int
+
+
+class CreateFromExcelResponse(BaseModel):
+    dsId: int
+    name: str
+    tables: List[CreatedExcelTable]
+
+
+class CreateFromExcelAcceptedResponse(BaseModel):
+    """Kết quả pha đồng bộ của luồng import bất đồng bộ: đã NHẬN việc, chưa nạp xong.
+
+    Không có danh sách bảng — lúc trả về chưa bảng nào tồn tại. ``dsId`` là thứ duy nhất cần giữ:
+    nó cũng chính là ``externalId`` trong callback báo kết quả sau này.
+    """
+
+    dsId: int
+    name: str
+    status: str
+
+
+class ExcelImportStatusResponse(BaseModel):
+    """Trạng thái một lần import, cho hệ ngoài tự hỏi khi callback thất lạc.
+
+    Callback chỉ bảo đảm gửi ÍT NHẤT một lần và có thể chết hẳn sau khi hết số lần thử; không có
+    đường tra cứu chủ động thì hệ ngoài kẹt vĩnh viễn ở trạng thái "đang chờ".
+    """
+
+    dsId: int
+    name: str
+    status: str
+    errorCode: str | None = None
+    errorMessage: str | None = None
+    tableCount: int = 0
