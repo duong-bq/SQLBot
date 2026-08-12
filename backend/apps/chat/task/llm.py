@@ -38,7 +38,7 @@ from apps.chat.curd.chat import save_question, save_sql_answer, save_sql, \
 from apps.chat.models.chat_model import ChatQuestion, ChatRecord, Chat, RenameChat, ChatLog, OperationEnum, \
     ChatFinishStep, AxisObj, SystemPromptMessage, HumanPromptMessage, AIPromptMessage
 from apps.data_training.curd.data_training import get_training_template
-from apps.datasource.crud.datasource import get_table_schema, get_tables_sample_data
+from apps.datasource.crud.datasource import get_table_schema, get_tables_sample_data, usable_ds_condition
 from apps.datasource.crud.permission import get_row_permission_filters, is_normal_user
 from apps.datasource.embedding.ds_embedding import get_ds_embedding
 from apps.datasource.models.datasource import CoreDatasource
@@ -913,8 +913,10 @@ class LLMService:
         if self.current_assistant and self.current_assistant.type != 4:
             _ds_list = get_assistant_ds(session=_session, llm_service=self)
         else:
+            # Lọc nguồn dữ liệu chưa dùng được: đây là đường LLM tự chọn nguồn, chặn cửa gắn nguồn
+            # thủ công mà để ngỏ cửa này thì hậu quả y hệt — phiên hỏi đáp trên một nguồn 0 bảng.
             stmt = select(CoreDatasource.id, CoreDatasource.name, CoreDatasource.description).where(
-                and_(CoreDatasource.oid == self.oid))
+                and_(CoreDatasource.oid == self.oid, usable_ds_condition()))
             _ds_list = [
                 {
                     "id": ds.id,

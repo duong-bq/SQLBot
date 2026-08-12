@@ -11,7 +11,7 @@ from sqlalchemy.orm import aliased
 
 from apps.chat.models.chat_model import Chat, ChatRecord, CreateChat, ChatInfo, RenameChat, ChatQuestion, ChatLog, \
     TypeEnum, OperationEnum, ChatRecordResult, ChatLogHistory, ChatLogHistoryItem, ChatItem
-from apps.datasource.crud.datasource import get_ds
+from apps.datasource.crud.datasource import get_ds, is_ds_usable
 from apps.datasource.crud.recommended_problem import get_datasource_recommended_chart
 from apps.datasource.models.datasource import CoreDatasource
 from apps.db.constant import DB
@@ -842,11 +842,18 @@ def create_chat(session: SessionDep, current_user: CurrentUser, create_chat_obj:
             ds.type_name = DB.get_db(ds.type)
         else:
             ds = session.get(CoreDatasource, create_chat_obj.datasource)
+            # Kiểm tồn tại phải đứng TRƯỚC: bản cũ đọc ds.oid rồi mới hỏi `if not ds`, nên nguồn dữ
+            # liệu không tồn tại văng AttributeError và không bao giờ chạm tới câu báo lỗi tử tế.
+            if not ds:
+                raise Exception(f"Datasource with id {create_chat_obj.datasource} not found")
             if ds.oid != current_user.oid:
                 raise Exception(f"Datasource with id {create_chat_obj.datasource} does not belong to current workspace")
-
-        if not ds:
-            raise Exception(f"Datasource with id {create_chat_obj.datasource} not found")
+            # Nguồn dữ liệu đang nạp có 0 dòng trong core_table, nên M-Schema dựng ra rỗng và LLM sẽ
+            # sinh SQL dựa trên hư không. Chặn ngay từ lúc gắn nguồn vào phiên chat.
+            if not is_ds_usable(ds):
+                raise Exception(
+                    f"Datasource with id {create_chat_obj.datasource} is not ready (status={ds.status})"
+                )
 
         chat.engine_type = ds.type_name
     else:
@@ -939,6 +946,8 @@ def resolve_chat_id(session: SessionDep, current_user: CurrentUser, chat_id: Uni
         raise Exception(f"Datasource with id {datasource_id} not found")
     if ds.oid != current_user.oid:
         raise Exception(f"Datasource with id {datasource_id} does not belong to current workspace")
+    if not is_ds_usable(ds):
+        raise Exception(f"Datasource with id {datasource_id} is not ready (status={ds.status})")
 
     now = datetime.datetime.now()
     chat = Chat(

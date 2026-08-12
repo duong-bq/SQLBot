@@ -4,7 +4,7 @@ import uuid
 from typing import List, Optional
 
 from fastapi import HTTPException
-from sqlalchemy import and_, text
+from sqlalchemy import and_, or_, text
 from sqlbot_xpack.permissions.models.ds_rules import DsRules
 from sqlmodel import select
 
@@ -24,7 +24,7 @@ from .table import get_tables_by_ds_id
 from ..crud.field import delete_field_by_ds_id, update_field
 from ..crud.table import delete_table_by_ds_id, update_table
 from ..models.datasource import CoreDatasource, CreateDatasource, CoreTable, CoreField, ColumnSchema, TableObj, \
-    DatasourceConf, TableAndFields
+    DatasourceConf, DatasourceStatus, TableAndFields
 from apps.db.db import pool_manager, driver_pool_manager
 
 
@@ -53,6 +53,29 @@ def check_status_by_id(session: SessionDep, trans: Trans, ds_id: int, is_raise: 
 
 def check_status(session: SessionDep, trans: Trans, ds: CoreDatasource, is_raise: bool = False):
     return check_connection(trans, ds, is_raise)
+
+
+def usable_ds_condition():
+    """Điều kiện lọc các nguồn dữ liệu ĐEM RA HỎI ĐÁP ĐƯỢC, viết theo lối loại trừ.
+
+    Phải viết loại trừ chứ không phải ``status == 'Success'``: tập trạng thái không dùng được là
+    tập đóng do code này kiểm soát, còn tập "hợp lệ" thì mở — có NULL của dữ liệu cũ, có "Success",
+    và có thể có bất cứ giá trị nào ai đó thêm về sau. Lọc theo tập mở thì mỗi lần thêm một giá trị
+    là một lần nguồn dữ liệu lặng lẽ biến mất.
+
+    Nhánh ``is_(None)`` là bắt buộc và KHÔNG thừa: trong SQL, ``NULL NOT IN (...)`` cho kết quả
+    UNKNOWN chứ không phải TRUE, nên nếu chỉ viết ``not_in`` thì đúng những dòng NULL — đúng thứ
+    cần cứu — lại bị loại. Giữ cả hai lớp phòng.
+    """
+    return or_(
+        CoreDatasource.status.is_(None),
+        CoreDatasource.status.not_in(DatasourceStatus.UNUSABLE),
+    )
+
+
+def is_ds_usable(ds: CoreDatasource) -> bool:
+    """Bản kiểm tra trên đối tượng đã nạp sẵn, tương đương ``usable_ds_condition`` ở phía SQL."""
+    return ds.status not in DatasourceStatus.UNUSABLE
 
 
 def check_name(session: SessionDep, trans: Trans, user: CurrentUser, ds: CoreDatasource):

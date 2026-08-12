@@ -7,6 +7,27 @@ from sqlalchemy.dialects.postgresql import JSONB
 from sqlmodel import SQLModel, Field
 
 
+class DatasourceStatus:
+    """Tập giá trị của cột ``core_datasource.status``.
+
+    Trước đây cột này chỉ được ghi cứng ``"Success"`` và không nơi nào đọc. Luồng import excel bất
+    đồng bộ làm nó có nghĩa thật: giữa lúc trả 202 và lúc worker xong, nguồn dữ liệu tồn tại nhưng
+    chưa dùng được.
+
+    Dữ liệu cũ có thể mang ``NULL`` (cột nullable, không có server default, và chỉ ``create_ds`` /
+    ``update_ds`` từng ghi). Vì vậy MỌI phép lọc phải viết theo lối LOẠI TRỪ ``UNUSABLE`` — xem
+    ``usable_ds_condition``. Lọc theo ``status == SUCCESS`` sẽ làm biến mất toàn bộ nguồn dữ liệu
+    tạo bằng script hoặc bằng bản cũ.
+    """
+
+    SUCCESS = "Success"
+    IMPORTING = "Importing"
+    FAILED = "Failed"
+
+    # Các trạng thái KHÔNG được phép đem ra hỏi đáp.
+    UNUSABLE = (IMPORTING, FAILED)
+
+
 class CoreDatasource(SQLModel, table=True):
     __tablename__ = "core_datasource"
     id: int = Field(sa_column=Column(BigInteger, Identity(always=True), nullable=False, primary_key=True))
