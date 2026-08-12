@@ -2,7 +2,7 @@
 
 Dành cho hệ thống bên thứ ba cần tạo, nạp tri thức và quản lý nguồn dữ liệu (datasource) qua API.
 
-Phạm vi: 21 endpoint làm việc với database quan hệ.
+Phạm vi: 26 endpoint. Nguồn dữ liệu là database quan hệ (§3–§7) hoặc file Excel/CSV ([§8](#8-tạo-nguồn-dữ-liệu-từ-file-excel--csv), [§9](#9-tạo-nguồn-excelcsv-bằng-một-lời-gọi)).
 
 ---
 
@@ -13,7 +13,8 @@ Phạm vi: 21 endpoint làm việc với database quan hệ.
 **Xác thực:** header `X-SQLBOT-TOKEN: Bearer <jwt>`, lấy bằng `POST /login/access-token`
 (form-urlencoded). Toàn bộ endpoint dưới đây yêu cầu tài khoản có quyền `ws_admin`.
 
-**Response thành công:**
+**Response thành công:** mọi mã 2xx đều được bọc cùng một vỏ, kể cả `202` của
+[9.2](#92-post-datasourcecreatefromexcelasync).
 
 ```json
 {"code": 0, "data": <kết quả>, "msg": null}
@@ -23,13 +24,15 @@ Phạm vi: 21 endpoint làm việc với database quan hệ.
 
 | HTTP | Body | Ý nghĩa |
 |---|---|---|
+| 400 | `"<thông điệp>"` | Đầu vào sai ở mức nhìn ra được ngay — chỉ [§9](#9-tạo-nguồn-excelcsv-bằng-một-lời-gọi) dùng |
 | 401 | `"Authentication invalid【...】"` | Token thiếu, sai định dạng, hoặc hết hạn |
+| 409 | `{"code": "...", ...}` | Xung đột tên nguồn dữ liệu — chỉ [9.2](#92-post-datasourcecreatefromexcelasync) dùng |
 | 422 | `"<thông điệp>"` hoặc `{"detail":[...]}` | Sai tham số |
 | 500 | `"<thông điệp>"` | Mọi lỗi còn lại |
 
-⚠ Không có 403 và 404. Thiếu quyền hoặc id không tồn tại đều trả **500** với cùng chuỗi
-`"Access denied or resource not found!"`. Thông điệp lỗi thay đổi theo `Accept-Language` — đừng
-string-match để điều khiển logic.
+⚠ Trừ §9, các endpoint còn lại **không có 403 và 404**. Thiếu quyền hoặc id không tồn tại đều trả
+**500** với cùng chuỗi `"Access denied or resource not found!"`. Thông điệp lỗi thay đổi theo
+`Accept-Language` — đừng string-match để điều khiển logic.
 
 ⚠ 422 có hai dạng body: chuỗi JSON trần (lỗi do SQLBot ném) hoặc object `{"detail":[...]}` (lỗi do
 FastAPI bắt). Client phải xử lý được cả hai.
@@ -38,7 +41,7 @@ FastAPI bắt). Client phải xử lý được cả hai.
 
 ## 2. Bản đồ endpoint
 
-**Tạo nguồn** ([§3](#3-tạo-nguồn-dữ-liệu)) — chưa có `ds_id`, gửi cấu hình kết nối ở mỗi bước:
+**Tạo nguồn từ database** ([§3](#3-tạo-nguồn-dữ-liệu)) — chưa có `ds_id`, gửi cấu hình kết nối ở mỗi bước:
 
 | | Endpoint |
 |---|---|
@@ -47,6 +50,22 @@ FastAPI bắt). Client phải xử lý được cả hai.
 | 3.3 | `POST /datasource/getSchemaByConf` |
 | 3.4 | `POST /datasource/getTablesByConf` |
 | 3.5 | `POST /datasource/add` |
+
+**Tạo nguồn từ file Excel/CSV, ba bước** ([§8](#8-tạo-nguồn-dữ-liệu-từ-file-excel--csv)) — luồng riêng, không dùng 3.2–3.4. Chọn đường này khi cần xác nhận hoặc sửa kiểu từng cột trước lúc nạp:
+
+| | Endpoint |
+|---|---|
+| 8.1 | `POST /datasource/parseExcel` |
+| 8.2 | `POST /datasource/importToDb` |
+| 8.3 | `POST /datasource/add` với `type: "excel"` |
+
+**Tạo nguồn từ file Excel/CSV, một lời gọi** ([§9](#9-tạo-nguồn-excelcsv-bằng-một-lời-gọi)) — server tự làm cả ba bước trên:
+
+| | Endpoint | |
+|---|---|---|
+| 9.1 | `POST /datasource/createFromExcel` | đồng bộ, chờ nạp xong mới trả về |
+| 9.2 | `POST /datasource/createFromExcelAsync` | trả `202` ngay, nạp ở nền, báo kết quả bằng callback |
+| 9.4 | `GET /datasource/excelImportStatus/{ds_id}` | tra trạng thái một lần nạp |
 
 **Đọc thông tin nguồn đã tạo** ([§4](#4-đọc-thông-tin-nguồn-đã-tạo)):
 
@@ -85,7 +104,10 @@ FastAPI bắt). Client phải xử lý được cả hai.
 | 7.5 | `POST /datasource/update` |
 | 7.6 | `POST /datasource/delete/{ds_id}/{name}` |
 
-Thứ tự tích hợp tối thiểu để chatbot trả lời được: **3.2 → 3.3 → 3.4 → 3.5 → 6.2**.
+Thứ tự tích hợp tối thiểu để chatbot trả lời được:
+
+- nguồn là database: **3.2 → 3.3 → 3.4 → 3.5 → 6.2**
+- nguồn là file Excel/CSV: **9.2** (một lời gọi), hoặc **8.1 → 8.2 → 8.3** nếu cần can thiệp kiểu cột
 
 ---
 
@@ -93,6 +115,9 @@ Thứ tự tích hợp tối thiểu để chatbot trả lời được: **3.2 �
 
 Ba bước đầu (3.2–3.4) không ghi gì vào database, gọi lại bao nhiêu lần cũng được. Server không lưu
 state giữa các bước — client gửi lại cấu hình kết nối ở mỗi bước.
+
+Cả mục này chỉ áp dụng cho nguồn là **database quan hệ**. Nguồn là file Excel/CSV đi theo luồng riêng
+ở [§8](#8-tạo-nguồn-dữ-liệu-từ-file-excel--csv).
 
 ### 3.1. Cấu hình kết nối
 
@@ -872,7 +897,479 @@ URL-encode nếu có dấu hoặc khoảng trắng.
 **Lưu ý:**
 
 - ⚠ Không hoàn tác được và không hỏi lại. Chú thích đã nạp ở §5 mất theo.
+- ⚠ Với nguồn `type: "excel"`, endpoint này **xóa luôn dữ liệu**: mọi bảng liệt kê trong
+  `configuration.sheets` bị drop khỏi kho dữ liệu. Nguồn database chỉ mất khai báo, dữ liệu gốc
+  không bị đụng tới.
 - Lịch sử hội thoại đã hỏi trên nguồn này không bị xóa nhưng sẽ không hỏi tiếp được.
+- Đây cũng là cách dọn nguồn dữ liệu ở trạng thái `Failed` do
+  [9.2](#92-post-datasourcecreatefromexcelasync) để lại: nó không hỏi đáp được nhưng vẫn chiếm tên,
+  không xóa thì tạo lại đúng tên đó sẽ bị `409`.
 
 ---
 
+## 8. Tạo nguồn dữ liệu từ file Excel / CSV
+
+Nguồn dữ liệu loại `excel` được tạo qua ba bước: **8.1 → 8.2 → 8.3**.
+
+Cả ba bước này gộp được thành một lời gọi duy nhất — xem
+[§9](#9-tạo-nguồn-excelcsv-bằng-một-lời-gọi). Chỉ đi đường ba bước khi cần xem trước cấu trúc file
+hoặc sửa kiểu dữ liệu của cột trước lúc nạp; §9 không cho can thiệp vào kiểu cột.
+
+| Bước | Việc xảy ra |
+|---|---|
+| 8.1 `parseExcel` | Tải file lên, đọc thử cấu trúc. Chưa tạo bảng, chưa tạo nguồn dữ liệu |
+| 8.2 `importToDb` | Nạp dữ liệu thành bảng. Đã ghi dữ liệu, nhưng chưa có nguồn dữ liệu nào |
+| 8.3 `add` | Tạo nguồn dữ liệu trỏ tới các bảng ở 8.2. Từ đây chatbot mới trả lời được |
+
+**Không dùng 3.2–3.4 cho luồng này.** Với `type: "excel"` các endpoint đó không mang thông tin gì hữu
+ích: `POST /datasource/check` luôn trả `true` bất kể file ra sao, `getSchemaByConf` không có schema để
+chọn, còn `getTablesByConf` và 7.1 trả về danh sách bảng của kho dữ liệu nội bộ chứ không phải bảng
+của nguồn này. Tương tự, 4.3 `GET /datasource/check/{ds_id}` luôn trả `true` với nguồn `excel`.
+
+Sau bước 8.3 thì mọi endpoint của §4, §5, §6 và 7.3–7.6 dùng bình thường như nguồn database, trừ một
+khác biệt ở 7.6 (xem lưu ý tại mục đó).
+
+### 8.1. `POST /datasource/parseExcel`
+
+Tải file lên và trả về cấu trúc đọc được: có những sheet nào, mỗi sheet có cột nào, kiểu dữ liệu đoán
+được của từng cột, kèm tối đa 10 dòng đầu để đối chiếu.
+
+Bước này không tạo bảng và không tạo nguồn dữ liệu. Mục đích là để phía tích hợp xác nhận hoặc sửa
+kiểu từng cột trước khi nạp thật ở 8.2. Gọi lại bao nhiêu lần cũng được — mỗi lần cho một `filePath`
+mới, độc lập với các lần trước.
+
+**Request** — `multipart/form-data`, không phải JSON.
+
+| Field | Kiểu | Bắt buộc | Ghi chú |
+|---|---|---|---|
+| `file` | file | ✔ | Tên part phải đúng là `file` |
+
+| Ràng buộc trên `file` | Giá trị |
+|---|---|
+| Phần mở rộng | `.xlsx`, `.xls`, `.csv` (không phân biệt hoa thường) |
+| Dung lượng | Không giới hạn |
+
+```bash
+curl -X POST 'https://<host>/api/v1/datasource/parseExcel' \
+  -H 'X-SQLBOT-TOKEN: Bearer <jwt>' \
+  -F 'file=@thu_ngan_sach_2024.xlsx'
+```
+
+**Response**
+
+```json
+{
+  "code": 0,
+  "msg": null,
+  "data": {
+    "filePath": "thu_ngan_sach_2024_9f3c1ab27d.xlsx",
+    "data": [
+      {
+        "sheetName": "Quy1",
+        "fields": [
+          {"fieldName": "ma_don_vi",  "fieldType": "string"},
+          {"fieldName": "ten_don_vi", "fieldType": "string"},
+          {"fieldName": "ngay_thu",   "fieldType": "datetime"},
+          {"fieldName": "so_tien",    "fieldType": "float"}
+        ],
+        "data": [
+          {"ma_don_vi": "001", "ten_don_vi": "Sở Tài chính", "ngay_thu": "2024-01-15T00:00:00",
+           "so_tien": 1250000.0},
+          {"ma_don_vi": "002", "ten_don_vi": "Sở Y tế", "ngay_thu": "2024-01-18T00:00:00",
+           "so_tien": 870000.0}
+        ],
+        "rows": 1543
+      },
+      {"sheetName": "Quy2", "fields": [], "data": [], "rows": 1602}
+    ]
+  }
+}
+```
+
+| Field | Kiểu | Ý nghĩa |
+|---|---|---|
+| `filePath` | string | Định danh của file vừa tải lên. Chuỗi đục — không phân tích, không tự sinh, không sửa. Phải gửi lại nguyên văn ở 8.2. Đây là thứ duy nhất nối 8.1 với 8.2 |
+| `data` | array | Mỗi phần tử là một sheet. File `.csv` luôn cho đúng một phần tử |
+| `data[].sheetName` | string | Tên sheet. Với file `.csv` giá trị luôn là `"Sheet1"`, không liên quan tới tên file |
+| `data[].fields` | array | Danh sách cột, theo đúng thứ tự cột trong file |
+| `data[].fields[].fieldName` | string hoặc number | Tên cột lấy từ dòng tiêu đề. Nếu ô tiêu đề trong file là số thì trường này là số chứ không phải chuỗi |
+| `data[].fields[].fieldType` | string | Kiểu đoán được: `string`, `int`, `float` hoặc `datetime`. Đây là **đề xuất**, được phép sửa ở 8.2 |
+| `data[].data` | array | Tối đa 10 dòng đầu, mỗi dòng là object `{tên cột: giá trị}`. Ô rỗng trả `null`. Chỉ để xem đối chiếu |
+| `data[].rows` | number | Tổng số dòng thật của sheet, không phải số phần tử trong `data[].data` |
+
+**Lưu ý:**
+
+- ⚠ Cột ngày tháng trong file `.csv` gần như luôn được đoán là `string`. Đọc cảnh báo ở 8.2 trước khi
+  định sửa lại thành `datetime`.
+- ⚠ Mỗi lần gọi để lại một bản sao file trên server và bản sao đó không tự xóa, kể cả khi không bao
+  giờ gọi 8.2.
+- ⚠ Nếu SQLBot chạy nhiều instance sau load balancer, `filePath` chỉ dùng được trên đúng instance đã
+  nhận file; khi đó 8.2 có thể trả 400 `"File not found"` một cách ngẫu nhiên. Cần xác nhận mô hình
+  triển khai trước khi tích hợp.
+
+**Lỗi riêng:**
+
+| HTTP | Body | Khi nào |
+|---|---|---|
+| 400 | `"Only support .xlsx/.xls/.csv"` | Phần mở rộng không hợp lệ |
+| 500 | thông điệp của trình đọc file | File hỏng hoặc không mở được |
+
+### 8.2. `POST /datasource/importToDb`
+
+Nạp dữ liệu từ file đã tải ở 8.1 vào kho dữ liệu của SQLBot, mỗi sheet thành một bảng. Trả về tên
+bảng đã tạo — giá trị bắt buộc phải có để sang 8.3.
+
+Đây là bước **có ghi dữ liệu**. Gọi lại lần nữa với cùng `filePath` tạo ra một bộ bảng mới hoàn toàn
+(tên khác), không ghi đè bộ cũ; bộ cũ trở thành bảng mồ côi không thuộc nguồn dữ liệu nào. Chỉ gọi
+một lần cho mỗi lần import.
+
+**Request**
+
+| Field | Kiểu | Bắt buộc | Ý nghĩa |
+|---|---|---|---|
+| `filePath` | string | ✔ | Lấy nguyên văn từ `data.filePath` của 8.1 |
+| `sheets` | array | ✔ | Sheet muốn nạp. Chỉ sheet có tên ở đây mới được tạo bảng — bỏ bớt phần tử là cách duy nhất để không import một sheet |
+| `sheets[].sheetName` | string | ✔ | Phải trùng khít một `data[].sheetName` của 8.1 |
+| `sheets[].fields` | array | ✔ | Khai kiểu cho từng cột |
+| `sheets[].fields[].fieldName` | string hoặc number | ✔ | Giữ nguyên giá trị và kiểu như 8.1 trả về |
+| `sheets[].fields[].fieldType` | string | ✔ | `string`, `int`, `float` hoặc `datetime`. Giá trị khác bị coi là `string` mà không báo lỗi |
+
+```json
+{
+  "filePath": "thu_ngan_sach_2024_9f3c1ab27d.xlsx",
+  "sheets": [
+    {
+      "sheetName": "Quy1",
+      "fields": [
+        {"fieldName": "ma_don_vi",  "fieldType": "string"},
+        {"fieldName": "ten_don_vi", "fieldType": "string"},
+        {"fieldName": "ngay_thu",   "fieldType": "datetime"},
+        {"fieldName": "so_tien",    "fieldType": "float"}
+      ]
+    }
+  ]
+}
+```
+
+**Response**
+
+```json
+{
+  "code": 0,
+  "msg": null,
+  "data": {
+    "filename": "thu_ngan_sach_2024_9f3c1ab27d.xlsx",
+    "sheets": [
+      {"sheetName": "Quy1", "tableName": "excel_Quy1_4d8e2f1a03", "tableComment": "", "rows": 1543},
+      {"sheetName": "Quy2", "tableName": "excel_Quy2_b71c05e9d2", "tableComment": "", "rows": 1602}
+    ]
+  }
+}
+```
+
+| Field | Kiểu | Ý nghĩa |
+|---|---|---|
+| `filename` | string | Chính là `filePath` đã gửi lên, trả lại để đối chiếu |
+| `sheets` | array | Kết quả từng sheet, cùng thứ tự với request |
+| `sheets[].sheetName` | string | Tên sheet đã nạp. Với file `.csv` giá trị này luôn bị đặt lại thành `"Sheet1"` dù request gửi tên khác |
+| `sheets[].tableName` | string | Tên bảng thật đã tạo. Do server sinh, không đoán trước được, không lặp lại giữa hai lần gọi |
+| `sheets[].tableComment` | string | Luôn rỗng. Chú thích cho bảng đặt sau bằng 5.1 |
+| `sheets[].rows` | number | Số dòng đã nạp vào bảng |
+
+Giữ lại **toàn bộ object `data`** này: bước 8.3 cần cả `filename` lẫn nguyên mảng `sheets`.
+
+**Lưu ý:**
+
+- ⚠ `fields` không lọc được cột. Cột nào có trong file thì đều được nạp, kể cả khi không khai trong
+  `fields`; khai `fields` chỉ để ép kiểu. Muốn chatbot bỏ qua một cột thì tắt cột đó sau bằng 5.3.
+- ⚠ `fieldName` không tồn tại trong file bị bỏ qua im lặng, không có lỗi. Gõ sai tên cột thì hiện
+  tượng quan sát được là kiểu dữ liệu của cột đó không đổi như mong muốn.
+- ⚠ **Với file `.csv`, không được đặt `fieldType: "datetime"` cho bất kỳ cột nào** — request trả 500
+  và không bảng nào được tạo. Cột ngày trong CSV phải để `string`. Hạn chế này không áp dụng cho
+  `.xlsx` / `.xls`.
+- ⚠ Request nhiều sheet mà hỏng ở sheet giữa chừng: các sheet trước đó **đã tạo bảng và vẫn tồn tại**,
+  nhưng response lỗi không cho biết chúng tên gì. Gửi từng sheet một nếu cần kiểm soát chặt.
+- ⚠ Bảng đã tạo không tự cập nhật khi file gốc thay đổi. Muốn có dữ liệu mới phải làm lại từ 8.1 và
+  tạo bộ bảng mới.
+
+**Lỗi riêng:**
+
+| HTTP | Body | Khi nào |
+|---|---|---|
+| 400 | `"File not found"` | `filePath` sai, hoặc file không còn trên server |
+| 500 | `"…: the dtype datetime64[ns] is not supported for parsing…"` | Đặt `datetime` cho cột của file `.csv` |
+| 500 | `"…: Worksheet named '<tên>' not found"` | `sheetName` không có trong file |
+| 500 | `"Insert data failed for <tên bảng>: …"` | Lỗi khi ghi vào kho dữ liệu |
+
+### 8.3. `POST /datasource/add` với `type: "excel"`
+
+Cùng endpoint với [3.5](#35-post-datasourceadd), nhưng `configuration` và `tables` lấy từ response
+của 8.2.
+
+**Request**
+
+| Field | Kiểu | Bắt buộc | Ghi chú |
+|---|---|---|---|
+| `name` | string | ✔ | ≤128 ký tự, duy nhất trong workspace |
+| `type` | string | ✔ | Cố định `"excel"` |
+| `configuration` | object | ✔ | Chỉ gồm `filename` và `sheets` |
+| `configuration.filename` | string | ✔ | `data.filename` của 8.2 |
+| `configuration.sheets` | array | ✔ | Nguyên mảng `data.sheets` của 8.2, không cắt bớt phần tử, không bỏ field |
+| `tables` | array | ✔ | Bảng muốn chatbot nhìn thấy |
+| `tables[].table_name` | string | ✔ | Lấy từ `sheets[].tableName` của 8.2 |
+| `tables[].table_comment` | string | | |
+| `description` | string | | ≤512 ký tự |
+
+`configuration` ở đây **không có** `host`, `port`, `username`, `password`, `database`, `dbSchema` —
+những field đó chỉ dành cho nguồn database.
+
+```json
+{
+  "name": "Thu ngân sách 2024",
+  "description": "Số liệu thu ngân sách theo quý",
+  "type": "excel",
+  "configuration": {
+    "filename": "thu_ngan_sach_2024_9f3c1ab27d.xlsx",
+    "sheets": [
+      {"sheetName": "Quy1", "tableName": "excel_Quy1_4d8e2f1a03", "tableComment": "", "rows": 1543},
+      {"sheetName": "Quy2", "tableName": "excel_Quy2_b71c05e9d2", "tableComment": "", "rows": 1602}
+    ]
+  },
+  "tables": [
+    {"table_name": "excel_Quy1_4d8e2f1a03", "table_comment": "Thu ngân sách quý 1/2024"},
+    {"table_name": "excel_Quy2_b71c05e9d2", "table_comment": "Thu ngân sách quý 2/2024"}
+  ]
+}
+```
+
+**Response** — giống 3.5, với `type: "excel"` và `type_name: "Excel/CSV"`.
+
+**Lưu ý:**
+
+- ⚠ `tables[].table_name` phải là **`tableName`**, không phải `sheetName`. Đưa nhầm `sheetName` thì
+  API vẫn trả 200 và nguồn dữ liệu vẫn hiện trong danh sách, nhưng nó không có cột nào và chatbot
+  không trả lời được câu hỏi nào về nguồn đó.
+- ⚠ Không cắt bớt `configuration.sheets`, kể cả sheet không đưa vào `tables`. Mảng này là thứ duy
+  nhất nối nguồn dữ liệu với các bảng đã tạo; sheet nào bị gỡ khỏi mảng thì bảng tương ứng sẽ không
+  được dọn khi xóa nguồn dữ liệu (7.6) và ở lại vĩnh viễn trong kho.
+- ⚠ Tên bảng do server sinh (`excel_<tên sheet đã lọc>_<hash>`) và bỏ hết dấu tiếng Việt cùng ký tự
+  đặc biệt, nên nó gần như không mang nghĩa. Chất lượng SQL sinh ra phụ thuộc nặng vào chú thích, vì
+  vậy với nguồn Excel/CSV thì **nạp chú thích ở §5 là bắt buộc**, không còn là tùy chọn.
+- Các lưu ý còn lại của 3.5 vẫn áp dụng.
+
+### 8.4. Thêm file mới vào nguồn dữ liệu đã có
+
+Không có endpoint riêng cho việc này. Trình tự phải tự ghép:
+
+1. `8.1` rồi `8.2` với file mới → thu được mảng `sheets` mới.
+2. `7.5 POST /datasource/update` với `configuration.sheets` = **mảng cũ ∪ mảng mới**. Đọc mảng cũ ở
+   đâu: giữ lại từ lần tạo trước, vì `configuration` trong response của 4.1/4.2 ở dạng lưu trữ nội bộ
+   và không parse được.
+3. `7.3 POST /datasource/chooseTables/{ds_id}` với danh sách **đầy đủ** bảng cũ và mới. Endpoint này
+   thay thế toàn bộ tập bảng — bảng cũ không có trong danh sách sẽ bị gỡ khỏi nguồn dữ liệu cùng mọi
+   chú thích đã nạp cho nó.
+
+⚠ Bỏ sót bước 2 thì nguồn dữ liệu vẫn hoạt động, nhưng bảng của file mới sẽ không bị dọn khi xóa
+nguồn. Bỏ sót bước 3 thì bảng mới đã tồn tại nhưng chatbot không nhìn thấy.
+
+---
+
+
+## 9. Tạo nguồn Excel/CSV bằng một lời gọi
+
+Ba bước 8.1 → 8.2 → 8.3 gộp lại thành **một** request `multipart/form-data`. Server tự đọc file, tạo
+bảng, tạo nguồn dữ liệu và đăng ký các bảng đó.
+
+Đánh đổi so với §8: không xem trước được cấu trúc và **không sửa được kiểu cột** — kiểu do server tự
+đoán. Cần can thiệp kiểu thì phải quay lại đường ba bước.
+
+Hai biến thể, khác nhau đúng ở chỗ *khi nào* response trả về:
+
+| | 9.1 `createFromExcel` | 9.2 `createFromExcelAsync` |
+|---|---|---|
+| Trả về khi | Đã nạp xong toàn bộ | Đã nhận file, **chưa** nạp |
+| HTTP | `200` | `202` |
+| Thời gian giữ kết nối | Bằng thời gian nạp — file lớn có thể vài phút | Cỡ vài chục ms |
+| Biết kết quả bằng cách | Đọc luôn response | Nhận [callback](#93-callback-báo-kết-quả) hoặc gọi [9.4](#94-get-datasourceexcelimportstatusds_id) |
+| Nguồn dữ liệu dùng được ngay sau khi trả về | ✔ | ✘ — đang ở trạng thái `Importing` |
+
+**Nên dùng 9.2.** 9.1 giữ lại cho tích hợp cũ: nó buộc client chờ suốt quá trình nạp, và mọi
+reverse proxy đứng giữa đều có timeout riêng — file đủ lớn thì client nhận `504` trong khi server
+vẫn đang nạp và cuối cùng vẫn tạo ra nguồn dữ liệu, tức là client không còn suy ra được trạng thái
+thật từ lỗi mình nhận.
+
+Cả hai endpoint đều cần quyền **`ws_admin`**.
+
+### 9.1. `POST /datasource/createFromExcel`
+
+**Request** — `multipart/form-data`.
+
+| Field | Kiểu | Bắt buộc | Ghi chú |
+|---|---|---|---|
+| `file` | file | ✔ | `.xlsx`, `.xls`, `.csv` |
+| `name` | string | ✔ | Tên nguồn dữ liệu, phải chưa tồn tại trong workspace |
+| `sheetNames` | string (lặp lại) | | Chỉ nạp các sheet này. Bỏ trống = nạp tất cả. File CSV bỏ qua trường này |
+| `description` | string | | ≤512 ký tự |
+
+`sheetNames` lặp lại tên field cho mỗi giá trị, không phải mảng JSON:
+
+```bash
+curl -X POST 'https://<host>/api/v1/datasource/createFromExcel' \
+  -H 'X-SQLBOT-TOKEN: Bearer <jwt>' \
+  -F 'file=@thu_ngan_sach_2024.xlsx' \
+  -F 'name=Thu ngân sách 2024' \
+  -F 'sheetNames=Quy1' \
+  -F 'sheetNames=Quy2' \
+  -F 'description=Số liệu thu ngân sách theo quý'
+```
+
+**Response `200`:**
+
+```json
+{
+  "code": 0,
+  "data": {
+    "dsId": 42,
+    "name": "Thu ngân sách 2024",
+    "tables": [
+      {"tableId": 118, "tableName": "excel_Quy1_4d8e2f1a03", "sheetName": "Quy1", "rows": 1543},
+      {"tableId": 119, "tableName": "excel_Quy2_b71c05e9d2", "sheetName": "Quy2", "rows": 1602}
+    ]
+  },
+  "msg": null
+}
+```
+
+### 9.2. `POST /datasource/createFromExcelAsync`
+
+**Request** — giống hệt 9.1, không đổi field nào.
+
+**Response `202`:**
+
+```json
+{
+  "code": 0,
+  "data": {"dsId": 42, "name": "Thu ngân sách 2024", "status": "Importing"},
+  "msg": null
+}
+```
+
+`dsId` có ngay từ lúc này và không đổi về sau — dùng nó làm khóa đối chiếu với callback.
+
+Response **không** có `tables`: lúc trả về chưa bảng nào tồn tại.
+
+Nguồn dữ liệu đã nằm trong database nhưng ở trạng thái `Importing`, nên nó **không** xuất hiện trong
+danh sách nguồn để hỏi đáp và chatbot chưa trả lời được câu nào về nó. Trạng thái chuyển thành
+`Success` hoặc `Failed` khi nạp xong.
+
+**Những lỗi bắt được ngay tại pha đồng bộ** (trả luôn trong response, chưa tạo gì):
+
+| HTTP | Khi nào | Body |
+|---|---|---|
+| `400` | Đuôi file không phải `.xlsx`/`.xls`/`.csv` | `Only support .xlsx/.xls/.csv` |
+| `400` | `name` rỗng | `Datasource name is required` |
+| `400` | File không mở được bằng thư viện đọc excel | `Cannot read workbook: <lý do>` |
+| `400` | `sheetNames` có tên không tồn tại trong file | `Sheet not found: <tên>. Available: <danh sách>` |
+| `409` | Tên nguồn dữ liệu đã tồn tại | xem dưới |
+| `409` | Đang có request khác tạo cùng tên đó | xem dưới |
+
+Nguyên tắc phân chia: **mọi thứ client có thể gõ sai đều hỏng ngay ở response**, không đẩy sang
+callback. Chỉ những lỗi không ai đoán trước được (file hỏng giữa chừng, hết đĩa, database chết) mới
+báo về bằng callback.
+
+**Hai dạng `409`**, phân biệt bằng trường `code`:
+
+```json
+{"code": "DATASOURCE_NAME_EXISTS", "message": "Datasource name already exists: Thu ngân sách 2024",
+ "dsId": 42, "status": "Success"}
+```
+
+Gửi trùng tên. Response mang theo `dsId` và `status` của nguồn đang chiếm tên, nên client tự phân
+biệt được hai tình huống: `status` là `Importing` nghĩa là **chính request trước của mình** đang
+chạy (gọi lại do timeout mạng chẳng hạn) — cứ chờ callback, đừng tạo lại; `Success` nghĩa là tên đã
+thuộc về một nguồn khác — phải đổi tên.
+
+```json
+{"code": "DATASOURCE_NAME_LOCKED", "message": "Another import for name '...' is in progress"}
+```
+
+Hai request cùng tên bắn ra gần như cùng lúc và bên kia chiếm chỗ quá lâu; request này bị trả về
+thay vì xếp hàng vô hạn. Hiếm gặp — bình thường bên thua chờ vài trăm ms rồi nhận
+`DATASOURCE_NAME_EXISTS` kèm `dsId` của bên thắng. **Lỗi tạm thời, gọi lại sau vài giây.**
+
+### 9.3. Callback báo kết quả
+
+Khi nạp xong (thành công hay thất bại), SQLBot gửi một request tới URL do bên tích hợp cung cấp:
+
+```
+POST <URL đã cấu hình>
+Content-Type: application/json
+
+{
+  "actionType": 999,
+  "payload": {
+    "externalId": 42,
+    "status": true,
+    "message": "Import succeeded"
+  }
+}
+```
+
+| Trường | Nghĩa |
+|---|---|
+| `actionType` | Mã sự kiện cố định `999`, cấp riêng cho việc báo kết quả nạp excel |
+| `payload.externalId` | **Chính là `dsId`** đã trả về ở response `202` |
+| `payload.status` | `true` = nguồn dữ liệu đã dùng được; `false` = nạp hỏng |
+| `payload.message` | Mô tả bằng tiếng Anh. Khi hỏng đây là lý do (`Uploaded file is gone: ...`, `No sheet could be parsed from the uploaded file`, …) |
+
+Coi là nhận thành công khi trả về HTTP **2xx** bất kỳ. Nội dung body không được đọc.
+
+**Bốn điều bên nhận bắt buộc phải xử lý:**
+
+1. **Có thể nhận trùng.** Cơ chế gửi bảo đảm *ít nhất một lần*, không phải *đúng một lần*: trả 2xx
+   chậm hơn timeout thì lá thư đó vẫn được gửi lại. Xử lý theo `externalId` phải **idempotent** —
+   lần thứ hai với cùng `externalId` không được sinh ra tác dụng phụ mới.
+2. **Có thể không bao giờ nhận được.** Sau một số lần thử (giãn cách tăng dần) SQLBot dừng hẳn. Đó
+   là lý do phải có [9.4](#94-get-datasourceexcelimportstatusds_id) làm đường đối chiếu — hệ ngoài
+   nên tự hỏi lại với những `dsId` chờ quá lâu thay vì chờ vô hạn.
+3. **`status: false` để lại một nguồn dữ liệu rác.** Nguồn đó tồn tại với trạng thái `Failed`, không
+   vào hỏi đáp nhưng vẫn **chiếm tên** — tạo lại đúng tên đó sẽ bị `409`. Bên tích hợp phải gọi
+   [7.6 `POST /datasource/delete/{ds_id}/{name}`](#76-post-datasourcedeleteds_idname) để dọn.
+4. **Chú thích vẫn phải nạp riêng.** Nhận `status: true` mới là có dữ liệu; tên bảng do server sinh
+   ra gần như vô nghĩa, nên chất lượng trả lời phụ thuộc vào việc nạp chú thích ở [§5](#5-nạp-chú-thích).
+
+### 9.4. `GET /datasource/excelImportStatus/{ds_id}`
+
+Tra trạng thái một lần nạp. Dùng khi callback thất lạc, hoặc để hiển thị tiến trình.
+
+**Response `200`:**
+
+```json
+{
+  "code": 0,
+  "data": {
+    "dsId": 42,
+    "name": "Thu ngân sách 2024",
+    "status": "Success",
+    "errorCode": null,
+    "errorMessage": null,
+    "tableCount": 2
+  },
+  "msg": null
+}
+```
+
+| Trường | Nghĩa |
+|---|---|
+| `status` | `Importing` (đang chạy) · `Success` · `Failed` |
+| `errorCode` | Chỉ có khi `Failed`: `FILE_NOT_FOUND`, `NO_SHEET_PARSED`, `JOB_ABANDONED` (tiến trình nạp bị tắt giữa chừng), `INTERNAL_ERROR` |
+| `errorMessage` | Mô tả chi tiết đi kèm `errorCode` |
+| `tableCount` | Số bảng đã đăng ký cho nguồn dữ liệu này |
+
+`404` nếu `ds_id` không tồn tại. Nguồn dữ liệu tạo bằng đường 9.1 hoặc §8 cũng tra được ở đây, khi
+đó `errorCode`/`errorMessage` luôn `null`.
+
+Không có giới hạn tần suất, nhưng nạp một file cỡ chục MB thường xong trong vài giây — hỏi lại mỗi
+2–5 giây là đủ.
+
+---

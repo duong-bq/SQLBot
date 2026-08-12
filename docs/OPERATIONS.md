@@ -129,7 +129,35 @@ vector cũ và mới không cùng không gian.
 | `BACKEND_CORS_ORIGINS` | `[]` | Danh sách origin, ngăn bằng dấu phẩy. Starlette so khớp **chuỗi chính xác** — khác scheme/host/port là bị chặn, không có wildcard theo domain |
 | `SQLBOT_DOC_ENABLED` | `True` | Bật `/docs` và `/openapi.json` |
 
-### 2.7. Khác
+### 2.7. Nạp Excel bất đồng bộ và callback
+
+Chỉ ảnh hưởng `POST /datasource/createFromExcelAsync` và ba vòng nền đi kèm (worker nạp, vòng gửi
+callback, vòng quét phục hồi) — xem [BACKEND_ARCHITECTURE.md §5](BACKEND_ARCHITECTURE.md).
+
+| Biến | Mặc định | Tác dụng |
+|---|---|---|
+| `AI_CALLBACK_URL` | `''` | URL nhận callback báo kết quả. **Để rỗng là tắt hẳn việc gửi** — job vẫn nạp, thư vẫn nằm chờ trong bảng, hệ ngoài không bao giờ biết kết quả |
+| `AI_CALLBACK_ACTION_TYPE` | `999` | Mã sự kiện trong phong bì `{actionType, payload}`. Do đối tác quy định |
+| `AI_CALLBACK_AUTH_HEADER` | `''` | Header xác thực dạng `"Tên: giá trị"`. Đối tác hiện không yêu cầu xác thực |
+| `AI_CALLBACK_TIMEOUT` | `15` | Timeout mỗi lần gửi (giây). **Không được bỏ**: thư viện HTTP mặc định chờ vô hạn |
+| `AI_CALLBACK_MAX_ATTEMPTS` | `8` | Thử đủ số lần này mà vẫn hỏng thì thư chuyển `dead` và **dừng hẳn** |
+| `AI_CALLBACK_BACKOFF_BASE_SECONDS` / `_CAP_SECONDS` | `10` / `1800` | Giãn cách thử lại nhân đôi mỗi lần hỏng, chặn trên 30 phút |
+| `AI_CALLBACK_POLL_SECONDS` | `10` | Chu kỳ vòng gửi quét hàng đợi |
+| `AI_CALLBACK_WORKERS` / `AI_CALLBACK_BATCH_SIZE` | `4` / `20` | Số thư gửi song song và số thư nhặt mỗi vòng |
+| `EXCEL_IMPORT_WORKERS` | `4` | Số job nạp chạy song song. Pool **riêng**, không dùng chung 200 thread của embedding: mỗi job giữ cả dataframe trong RAM |
+| `EXCEL_IMPORT_HEARTBEAT_SECONDS` / `EXCEL_IMPORT_STALE_SECONDS` | `30` / `180` | Chu kỳ worker báo còn sống, và ngưỡng coi job là đã chết. Ngưỡng phải là **bội số vài lần** của chu kỳ |
+| `EXCEL_IMPORT_LOCK_TIMEOUT_MS` | `5000` | Tổng thời gian chờ khóa chống trùng tên, gom từ nhiều lần thử-rồi-ngủ. Hết hạn trả `409 DATASOURCE_NAME_LOCKED` thay vì xếp hàng vô hạn |
+| `EXCEL_IMPORT_RECOVERY_SECONDS` | `60` | Chu kỳ vòng quét phục hồi |
+| `EXCEL_IMPORT_TEMP_TTL_HOURS` | `24` | File tạm quá hạn này mà không job nào đang dùng thì xóa. Đặt dài vì thư mục dùng chung với luồng `/parseExcel` → `/importToDb` của web, nơi người dùng để giữa chừng khá lâu |
+
+**Bật callback ở deployment Docker**: `docker-compose.backend.yml` truyền `AI_CALLBACK_URL` xuống
+container, giá trị lấy từ file `.env` **cạnh compose file**. Chạy backend thẳng trên host thì đặt
+trong `.env` ở repo root như mọi biến khác. Điền URL rồi restart là các thư đang chờ tự đi — không
+cần bắn lại tay, và không lần thử nào bị đốt trong lúc URL còn rỗng.
+
+Chỉ `AI_CALLBACK_URL` là bắt buộc; các biến còn lại có mặc định dùng được ngay.
+
+### 2.8. Khác
 
 `CACHE_TYPE` (`memory`/`redis`/`None`), `CACHE_REDIS_URL`, `LOG_LEVEL`, `LOG_DIR`, `SQL_DEBUG`,
 `PG_POOL_SIZE`/`PG_MAX_OVERFLOW`/`PG_POOL_RECYCLE`/`PG_POOL_PRE_PING` (pool của **DB metadata**),
@@ -181,6 +209,16 @@ chạy uid 1000 (không phải root):
   vì chỉ `UPLOAD_DIR` được `mkdir` lúc import.
 
 Vẫn muốn bind-mount thì phải tự tạo và `chown 1000:1000` **trước khi** `up`.
+
+**Trước khi deploy bản có migration `076`**, đếm số dòng nó sẽ backfill:
+
+```sql
+SELECT count(*) FROM core_datasource WHERE status IS NULL OR status = '';
+```
+
+Migration đặt các dòng đó thành `Success`. Trên máy dev con số là 0 nên bước này chưa bao giờ được
+kiểm chứng với dữ liệu thật; production trả về số lớn thì phải xem qua danh sách trước — nguồn dữ
+liệu nào thực sự hỏng mà bị đánh dấu `Success` sẽ quay lại danh sách hỏi đáp.
 
 `docker/backend-entrypoint.sh` chờ Postgres (và Redis nếu `CACHE_TYPE=redis`) mở cổng trước khi gọi
 uvicorn — vì `lifespan` chạy `alembic upgrade head` ngay lúc start, DB chưa sẵn sàng thì process
@@ -398,7 +436,48 @@ kỳ tài liệu, log hay issue nào; nếu cần xoay vòng mật khẩu thì p
 | Gọi hook mà không đăng nhập trước | Không có static token riêng — SW phải `POST /login/access-token` lấy `X-SQLBOT-TOKEN` như mọi client khác, và tài khoản đó phải có quyền `ws_admin` |
 | Thiếu quyền `ws_admin` trả **500**, không phải 403 | Quy ước chung của `require_permissions` toàn hệ thống (xem §7.4 / `BACKEND_ARCHITECTURE.md` §7), không riêng gì hook |
 
-### 7.6. Envelope response
+### 7.6. Nạp Excel bất đồng bộ và các vòng nền
+
+| Bẫy | Chi tiết |
+|---|---|
+| **Thread nền không có request context** | `require_permissions` lấy user qua `RequestContext.get_request()`, thứ này là contextvar và `executor.submit` **không** truyền contextvar sang thread mới (khác `asyncio.to_thread`). Gọi bất kỳ route handler nào từ worker sẽ ném `RuntimeError` ngay dòng đầu. Vì vậy phần việc nặng phải nằm ở hàm thuần trong `utils/`, worker chỉ gọi hàm thuần |
+| **`submit` phải đứng sau `commit`** | Worker mở session riêng; ở mức cô lập READ COMMITTED nó không thấy dòng job của transaction chưa chốt. Submit trước commit thì worker báo "job not found" một cách ngẫu nhiên theo thời điểm |
+| **Exception trong `Future` biến mất không dấu vết** | `executor.submit` trả về `Future`; không ai gọi `.result()` thì lỗi bị nuốt hoàn toàn, job đứng im ở `running` cho tới khi vòng phục hồi chôn nó. Mọi điểm vào của worker phải có try/except bọc ngoài cùng |
+| **Đừng chờ trong `async def` bằng lời gọi đồng bộ** | Route là coroutine chạy trên event loop dùng chung; một câu lệnh DB đứng chờ vài giây (khóa, truy vấn nặng) chặn **toàn bộ** tiến trình. Đã đo được: bản đầu dùng `pg_advisory_xact_lock` (chờ tới 5s) làm client redis async trong cùng tiến trình văng `TimeoutError` và request trả 500 khi có vài lời gọi cùng tên bắn ra một lúc. Cách chữa: `pg_try_advisory_xact_lock` không chờ, lặp lại với `await asyncio.sleep` — lúc ngủ thì event loop được trả về |
+| **`NULL < x` cho UNKNOWN, không phải TRUE** | Mọi điều kiện lọc theo ngưỡng trên cột nullable (`heartbeat_at`, `callback_claimed_at`, `next_attempt_at`, `status`) phải có nhánh `is_(None)` đi kèm. Thiếu nhánh đó thì đúng những dòng cần cứu nhất — dòng chưa kịp ghi mốc thời gian — lại vĩnh viễn không được nhặt. Đã dính hai lần: `usable_ds_condition` và `requeue_stale_callbacks` |
+| **`AI_CALLBACK_URL` rỗng thì im lặng không gửi** | Không có log lỗi, không có lần thử nào bị đốt. Job vẫn `success`, thư vẫn nằm chờ trong `excel_import_jobs`, và hệ ngoài chờ mãi. Triệu chứng: `SELECT count(*) FROM excel_import_jobs WHERE callback_status='pending'` tăng dần |
+| **Callback là "ít nhất một lần"** | Bên nhận trả 2xx chậm hơn timeout thì lá thư đó vẫn được gửi lại. Không có cách nào biến thành "đúng một lần" — bên nhận phải idempotent theo `externalId` |
+| **Nguồn dữ liệu `Failed` vẫn chiếm tên** | Nạp hỏng để lại một dòng `core_datasource` trạng thái `Failed`: không vào hỏi đáp nhưng tạo lại đúng tên đó sẽ bị `409`. Bên tích hợp phải gọi endpoint xóa. Kiểm tra tồn đọng: `SELECT id, name FROM core_datasource WHERE status = 'Failed'` |
+| **Khối `COPY` chết ở `uploadExcel`** | [datasource.py:558](../backend/apps/datasource/api/datasource.py#L558) có một khối `COPY FROM STDIN` chạy sau `to_sql` nhưng thiếu `seek(0)`, nên nó đọc chuỗi rỗng và nạp 0 dòng. Vô hại đúng vì lỗi đó — ai "sửa" bằng cách thêm `seek(0)` sẽ làm **mọi bảng nhân đôi dữ liệu**. Đường mới (`utils/excel_import.py`) đã bỏ hẳn khối này |
+| **`sessionmaker.close()` không đóng pool** | `ConnectionPoolManager` lưu `sessionmaker`, và `sessionmaker` không có `close()` thật — engine bên dưới sống mãi cùng toàn bộ connection. Muốn giải phóng phải `engine.dispose()`. Cùng lớp lỗi với `get_engine_conn()` gọi xong không `dispose` |
+
+Đọc trạng thái hàng đợi khi cần chẩn đoán:
+
+```sql
+SELECT status, callback_status, count(*) FROM excel_import_jobs GROUP BY 1, 2;
+SELECT ds_id, error_code, callback_attempts, callback_last_error
+FROM excel_import_jobs WHERE callback_status = 'dead';
+```
+
+Thư đã `dead` đưa lại vào hàng đợi bằng `POST /datasource/resendExcelCallback/{ds_id}` (ẩn khỏi
+swagger, cần `ws_admin`) — không cần sửa DB bằng tay.
+
+### 7.7. Script chạy ngoài app: phải `import sqlbot_xpack` trước
+
+`apps/datasource/crud/datasource.py` và `apps/system/schemas/permission.py` import lẫn nhau qua
+`sqlbot_xpack` (nó kéo theo `apps/system/api/user.py`). Vòng này vô hại khi chạy bằng `main.py` vì
+thứ tự import của app tình cờ đúng, nhưng script tự viết import thẳng module datasource sẽ chết
+ngay dòng đầu:
+
+```
+ImportError: cannot import name 'get_ws_ds' from partially initialized module
+apps.datasource.crud.datasource (most likely due to a circular import)
+```
+
+Cách chữa: đặt `import sqlbot_xpack` lên **trước mọi import `apps.*`** trong script. `import
+apps.api` **không** chữa được — nó chết cùng kiểu.
+
+### 7.8. Envelope response
 
 **Trả `JSONResponse` trong route KHÔNG giúp thoát envelope `{code, data, msg}`.**
 
@@ -416,5 +495,5 @@ Hai lý do bẫy này khó phát hiện:
 
 | | |
 |---|---|
-| Lỗi vẫn "đúng" format | `ResponseMiddleware` bỏ qua mọi response có `status_code != 200`, nên 4xx/5xx thoát envelope sẵn. Test một vài ca lỗi rồi kết luận "không bị bọc" là sai — chỉ nhánh **200** mới lộ vấn đề |
+| Lỗi vẫn "đúng" format | `ResponseMiddleware` bỏ qua mọi response **ngoài dải 2xx**, nên 4xx/5xx thoát envelope sẵn. Test một vài ca lỗi rồi kết luận "không bị bọc" là sai — chỉ nhánh thành công mới lộ vấn đề |
 | Test không bắt được | Fixture e2e ở [tests/test_ai_sync_e2e.py:56](../tests/test_ai_sync_e2e.py#L56) chỉ gắn `RequestContextMiddleware` + auth giả, **không** có `ResponseMiddleware` — về cấu trúc không thể phát hiện lớp lỗi này. Thêm endpoint đối tác mới thì phải kiểm bằng request thật vào app đã chạy |

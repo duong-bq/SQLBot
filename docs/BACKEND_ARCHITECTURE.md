@@ -44,6 +44,7 @@ backend/
 |---|---|---|
 | `apps/chat/` | Hội thoại + **toàn bộ pipeline** | `task/llm.py` (2.4K dòng, trái tim hệ thống), `api/chat.py`, `curd/chat.py`, `models/chat_model.py` |
 | `apps/datasource/` | Datasource, bảng, cột, quan hệ, M-Schema | `crud/datasource.py`, `api/datasource.py`, `api/table_relation.py`, `embedding/table_embedding.py`, `crud/permission.py` |
+| `apps/datasource/task/` | Ba vòng chạy nền của luồng nạp Excel bất đồng bộ (xem §5) | `excel_import_task.py`, `callback_sender.py`, `excel_recovery.py` |
 | `apps/db/` | Tầng truy cập DB nghiệp vụ đa engine | `db.py` (1.3K dòng), `constant.py` (enum `DB`) |
 | `apps/ai_model/` | Nạp và cache LLM / embedding model | `model_factory.py`, `embedding.py` |
 | `apps/terminology/` | Từ điển thuật ngữ nghiệp vụ + vector | `curd/terminology.py` |
@@ -54,7 +55,7 @@ backend/
 | `apps/hooks/` | Cổng nhận bản tin đồng bộ từ hệ ngoài (SW) + API đọc quyền (dev/test) | `api/ai_sync.py`, `api/permission_query.py`, `handlers/authorization.py`, `crud/ai_user_permission.py` |
 | `apps/dashboard/`, `apps/settings/`, `apps/swagger/` | Dashboard, tham số hệ thống, i18n cho OpenAPI | |
 | `common/core/` | Config, session DB, response middleware, cache | `config.py`, `db.py`, `response_middleware.py` |
-| `common/utils/` | Tiện ích: crypto, log, lock phân tán, embedding thread | `crypto.py`, `distributed_lock.py`, `embedding_threads.py` |
+| `common/utils/` | Tiện ích: crypto, log, lock phân tán, embedding thread, vòng lặp định kỳ | `crypto.py`, `distributed_lock.py`, `embedding_threads.py`, `periodic.py` |
 
 Quy ước đặt tên: mỗi domain có `api/` (route), `crud/` hoặc `curd/` (truy cập DB — **cả hai cách
 viết đều tồn tại**, `apps/chat/curd/` là lỗi chính tả của upstream đã ăn sâu), `models/` (SQLModel +
@@ -80,11 +81,12 @@ Thêm theo thứ tự `TokenMiddleware` → `ResponseMiddleware` → `RequestCon
 `RequestContextMiddlewareCommon` ([main.py:246](../backend/main.py#L246)). Starlette chạy middleware
 theo thứ tự **ngược** với thứ tự thêm, nên `RequestContextMiddlewareCommon` chạm request trước.
 
-`ResponseMiddleware` bọc mọi response JSON có HTTP 200 vào envelope `{code, data, msg}`. Muốn một
-route trả **JSON thô** thì cách duy nhất là khai path pattern của nó vào danh sách `direct_paths`
+`ResponseMiddleware` bọc mọi response JSON có HTTP **2xx** vào envelope `{code, data, msg}` — không
+riêng 200, để endpoint trả `202` (`createFromExcelAsync`) không sinh ra hình dạng body thứ hai. Muốn
+một route trả **JSON thô** thì cách duy nhất là khai path pattern của nó vào danh sách `direct_paths`
 ([response_middleware.py:30](../backend/common/core/response_middleware.py#L30)) — hiện có
 `mcp_question`, `mcp_assistant`, `/hooks/ai-sync` và bộ `openapi.json`/`docs`/`redoc`. Xem
-[OPERATIONS.md §7.6](OPERATIONS.md) để biết vì sao trả về `JSONResponse` trong route **không** đủ.
+[OPERATIONS.md §7.8](OPERATIONS.md) để biết vì sao trả về `JSONResponse` trong route **không** đủ.
 
 ### `lifespan` — chạy lúc khởi động
 
@@ -94,11 +96,18 @@ route trả **JSON thô** thì cách duy nhất là khai path pattern của nó 
 2. `init_sqlbot_cache()`, `init_dynamic_cors(app)`
 3. Lấp embedding còn thiếu cho terminology / data_training / bảng+datasource. Bọc trong
    `SingleWorkerGuard.once` để nhiều worker uvicorn không cùng chạy.
-4. `async_model_info()` — mã hóa lại key/địa chỉ của model đã lưu.
+4. `start_datasource_background_tasks()` — bật vòng gửi callback và vòng quét phục hồi của luồng nạp
+   Excel (§5). **Cố ý không** bọc `SingleWorkerGuard`: hai vòng này giành việc bằng
+   `FOR UPDATE SKIP LOCKED` và `UPDATE` có điều kiện nên chạy ở mọi worker vừa an toàn vừa có lợi.
+5. `async_model_info()` — mã hóa lại key/địa chỉ của model đã lưu.
 
-Migration mới nhất: `074_ai_sync_hook.py` (tạo `ai_sync_hook_logs` + `ai_user_permissions`). Trước
-đó: `073_merge_heads_071.py` (gộp hai head `071` phát sinh khi merge nhánh), `072_add_chat_external_id.py`,
-`071_add_chat_record_answer.py`, `070_add_table_column_comments.py`.
+`shutdown_resources()` gọi `stop_datasource_background_tasks()` **trước** `SingleWorkerGuard.release()`
+— các vòng nền còn đang giữ session DB.
+
+Migration mới nhất: `076_excel_import_jobs.py` (tạo `excel_import_jobs` + backfill
+`core_datasource.status`). Trước đó: `075_ai_user_permissions_domain_info.py`, `074_ai_sync_hook.py`
+(tạo `ai_sync_hook_logs` + `ai_user_permissions`), `073_merge_heads_071.py` (gộp hai head `071` phát
+sinh khi merge nhánh), `072_add_chat_external_id.py`.
 
 ---
 
@@ -119,6 +128,8 @@ Migration mới nhất: `074_ai_sync_hook.py` (tạo `ai_sync_hook_logs` + `ai_u
 | Thêm một loại database | [db/constant.py](../backend/apps/db/constant.py) enum `DB` + [db.py](../backend/apps/db/db.py) + một file `templates/sql_examples/*.yaml` |
 | Sửa endpoint hỏi đáp | [chat.py:461](../backend/apps/chat/api/chat.py#L461) |
 | Sửa quản trị datasource | [apps/datasource/api/datasource.py](../backend/apps/datasource/api/datasource.py) |
+| Sửa luồng nạp Excel bất đồng bộ | `apps/datasource/task/` (3 vòng nền, §5) + `crud/excel_job.py` (mọi câu SQL của hàng đợi) + `utils/excel_import.py` (hàm thuần nạp file) |
+| Sửa hợp đồng callback với hệ ngoài | [callback_sender.py](../backend/apps/datasource/task/callback_sender.py) `send_callback` — **rồi cập nhật `DATASOURCE_API_SPEC.md` §9.3** |
 | Sửa auth / token | [apps/system/middleware/auth.py](../backend/apps/system/middleware/auth.py) + [apps/system/api/login.py](../backend/apps/system/api/login.py) |
 | Đổi cấu hình mặc định | [common/core/config.py](../backend/common/core/config.py) — bảng đầy đủ ở [OPERATIONS.md §2](OPERATIONS.md) |
 | Thêm bảng DB mới | model trong `apps/<domain>/models/` + migration trong `alembic/versions/` |
@@ -168,6 +179,38 @@ dependency**, không được gọi trong thân route, vì `require_permissions`
 
 `custom_comment` của bảng/cột là thứ đi thẳng vào M-Schema — đòn bẩy chất lượng SQL lớn nhất không
 cần đụng code.
+
+### Cụm nạp Excel bất đồng bộ — [excel_job.py](../backend/apps/datasource/models/excel_job.py)
+
+Một bảng duy nhất, `excel_import_jobs` (migration `076`), giữ **hai** vai trò: hàng đợi việc nạp và
+hộp thư đi (outbox) của callback. Ràng buộc `UNIQUE(ds_id)` nên mỗi nguồn dữ liệu có đúng một job.
+
+| Nhóm cột | Dùng để |
+|---|---|
+| `ds_id`, `oid`, `create_by`, `ds_name`, `file_path`, `sheet_names` | Đủ để worker làm việc mà không cần request context |
+| `status`, `worker_id`, `heartbeat_at`, `created_at`/`started_at`/`finished_at` | Vòng đời job và phát hiện worker chết |
+| `created_tables` | Danh sách bảng đã tạo, để dọn khi job hỏng giữa chừng |
+| `error_code`, `error_message` | Trả lại cho `GET /datasource/excelImportStatus/{ds_id}` |
+| `callback_status`, `callback_attempts`, `next_attempt_at`, `callback_claimed_at`, `callback_last_error`, `callback_payload` | Phần outbox |
+
+**Vì sao job row chính là outbox**, không tách bảng riêng: kết quả nạp và lá thư báo kết quả phải
+cùng sinh ra trong một transaction. Tách bảng thì có thể nạp xong mà thư không được ghi (hoặc ngược
+lại), và không có transaction phân tán nào ở đây để cứu.
+
+Ba vòng nền, mỗi vòng một file trong `apps/datasource/task/`:
+
+| Vòng | File | Việc |
+|---|---|---|
+| Worker nạp | `excel_import_task.py` | `ThreadPoolExecutor` riêng (`EXCEL_IMPORT_WORKERS`). Endpoint `submit` một job **sau khi commit**, worker mở session riêng, đập heartbeat theo chu kỳ, kết thúc bằng `finish_job` (ghi kết quả + xếp thư vào outbox trong cùng transaction) |
+| Vòng gửi | `callback_sender.py` | Ba pha: nhặt thư bằng `FOR UPDATE SKIP LOCKED` (transaction ngắn) → gọi HTTP **ngoài mọi transaction** → ghi kết quả (transaction ngắn). Không giữ transaction mở trong lúc chờ mạng — đó là lý do tách ba pha |
+| Vòng phục hồi | `excel_recovery.py` | Bốn việc độc lập, mỗi việc try/except riêng: nhặt job mồ côi (`pending` quá lâu), chôn job chết (heartbeat hết hạn → drop bảng dở, ds `Failed`, xếp thư báo hỏng), gỡ thư kẹt ở `sending`, dọn file tạm quá hạn không ai dùng |
+
+Giành việc giữa nhiều tiến trình dựa vào `SKIP LOCKED` và `UPDATE ... WHERE status = 'pending'` kiểm
+`rowcount` — không dùng khóa toàn cục, nên chạy bao nhiêu worker uvicorn cũng đúng.
+
+Chống trùng tên nguồn dữ liệu dùng **advisory lock** (`pg_advisory_xact_lock`, khóa dẫn từ chuỗi
+`sqlbot:ds:name:<oid>:<name>`) chứ không phải unique index: dữ liệu hiện có rất có thể đã trùng tên
+do `check_name` thủng với `oid` rỗng, thêm index là migration hỏng giữa chừng.
 
 ### Cụm RAG
 
@@ -336,8 +379,9 @@ Router đăng ký ở [apps/api.py](../backend/apps/api.py), prefix `settings.AP
 
 - [API_SPEC.md](../backend/scripts/chat_stream_demo/API_SPEC.md) — luồng tích hợp chat (login,
   datasource list, `POST /chat/question` SSE).
-- [DATASOURCE_API_SPEC.md](../backend/scripts/chat_stream_demo/DATASOURCE_API_SPEC.md) — 23 endpoint
-  quản trị datasource, cho cả database quan hệ (§3–§7) lẫn file Excel/CSV (§8).
+- [DATASOURCE_API_SPEC.md](../backend/scripts/chat_stream_demo/DATASOURCE_API_SPEC.md) — 26 endpoint
+  quản trị datasource, cho cả database quan hệ (§3–§7) lẫn file Excel/CSV (§8 ba bước, §9 một lời
+  gọi + callback).
 - [AI_SYNC_HOOK_API_SPEC.md](../backend/scripts/ai_sync_hook/AI_SYNC_HOOK_API_SPEC.md) — cổng nhận
   bản tin đồng bộ từ hệ thống SW (`POST /hooks/ai-sync`).
 - [AI_PERMISSION_QUERY_API_SPEC.md](../backend/scripts/ai_sync_hook/AI_PERMISSION_QUERY_API_SPEC.md)

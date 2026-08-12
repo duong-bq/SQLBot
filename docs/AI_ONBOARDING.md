@@ -40,6 +40,10 @@ Hệ quả cụ thể: `ChatFinishStep` đã bị **đánh số lại** để ch
 - Có cổng `POST /hooks/ai-sync` (`apps/hooks/`) nhận bản tin đồng bộ quyền user từ hệ thống SW, ghi
   vào `ai_user_permissions`. **Chưa** nối vào pipeline Text2SQL — LLM chưa dùng dữ liệu này để giới
   hạn quyền truy vấn.
+- Nạp nguồn dữ liệu từ file Excel/CSV có đường **bất đồng bộ**: `POST
+  /datasource/createFromExcelAsync` trả `202` ngay rồi nạp ở nền, báo kết quả về SW bằng callback
+  HTTP. Cần đặt `AI_CALLBACK_URL`, để rỗng là tắt gửi. Kiến trúc ở
+  [BACKEND_ARCHITECTURE.md](BACKEND_ARCHITECTURE.md) §5, hợp đồng ở `DATASOURCE_API_SPEC.md` §9.
 
 ## 4. Bản đồ tài liệu — hỏi gì thì đọc file nào
 
@@ -58,7 +62,7 @@ Hệ quả cụ thể: `ChatFinishStep` đã bị **đánh số lại** để ch
 | File | Nội dung |
 |---|---|
 | [backend/scripts/chat_stream_demo/API_SPEC.md](../backend/scripts/chat_stream_demo/API_SPEC.md) | Hợp đồng tích hợp chat: login, list datasource, `POST /chat/question` (SSE) — đủ catalog event, bảng lỗi, giới hạn hệ thống |
-| [backend/scripts/chat_stream_demo/DATASOURCE_API_SPEC.md](../backend/scripts/chat_stream_demo/DATASOURCE_API_SPEC.md) | 23 endpoint quản trị datasource — tạo/sync/chọn bảng/sửa chú thích/quan hệ bảng, cho cả database quan hệ lẫn file Excel/CSV |
+| [backend/scripts/chat_stream_demo/DATASOURCE_API_SPEC.md](../backend/scripts/chat_stream_demo/DATASOURCE_API_SPEC.md) | 26 endpoint quản trị datasource — tạo/sync/chọn bảng/sửa chú thích/quan hệ bảng, cho cả database quan hệ lẫn file Excel/CSV; §9 là luồng nạp Excel bất đồng bộ + hợp đồng callback |
 | [backend/scripts/ai_sync_hook/AI_SYNC_HOOK_API_SPEC.md](../backend/scripts/ai_sync_hook/AI_SYNC_HOOK_API_SPEC.md) | Cổng `POST /hooks/ai-sync` nhận bản tin đồng bộ quyền từ SW — actionType, full-snapshot, idempotency, bảng lỗi |
 | [backend/scripts/eval_text2sql/README.md](../backend/scripts/eval_text2sql/README.md) | Cách dùng harness đánh giá chất lượng |
 

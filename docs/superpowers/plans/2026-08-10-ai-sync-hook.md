@@ -18,7 +18,7 @@
 - Ruff select `E,W,F,I,B,C4,UP,ARG001` (`E501` được ignore).
 - **Không** đụng pipeline Text2SQL (`apps/chat/task/llm.py`).
 - Response của hook luôn là `JSONResponse` trả trực tiếp, để `ResponseMiddleware` bỏ qua ở [response_middleware.py:43](../../../backend/common/core/response_middleware.py#L43) — không bọc envelope `{code,data,msg}`.
-  > **Giả định này SAI, đã sửa sau khi test trên app thật.** `isinstance(response, JSONResponse)` không bao giờ đúng khi có nhiều `BaseHTTPMiddleware` xếp chồng. Phải khai path vào `direct_paths` — xem [OPERATIONS.md §7.6](../../OPERATIONS.md).
+  > **Giả định này SAI, đã sửa sau khi test trên app thật.** `isinstance(response, JSONResponse)` không bao giờ đúng khi có nhiều `BaseHTTPMiddleware` xếp chồng. Phải khai path vào `direct_paths` — xem [OPERATIONS.md §7.8](../../OPERATIONS.md).
 - `actionType` chưa triển khai **phải** trả lỗi, tuyệt đối không im lặng bỏ qua.
 - Không log giá trị `AI_SYNC_HOOK_TOKEN` ở bất cứ đâu; so sánh token bằng `secrets.compare_digest`.
 - Test đặt ở `tests/` (root repo), chạy `pytest ../tests` từ `backend/`.
