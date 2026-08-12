@@ -116,6 +116,10 @@ Một actionType đã release thì không được đổi ý nghĩa.
             "databaseTableName": "kdl_nhan_khau_row_values",
             "tableDisplayName": "Dữ liệu Nhân khẩu",
             "tableDescription": "Bảng lưu trữ thông tin cư trú của công dân",
+            "linhVucMa": "LV_DAN_CU",
+            "linhVucUuid": "lv-uuid-5678",
+            "linhVucName": "Lĩnh vực Dân cư",
+            "linhVucDescription": "Lĩnh vực quản lý các thông tin liên quan đến dân cư",
             "fields": [
               {
                 "id": "province_id",
@@ -155,6 +159,10 @@ trường đó bị bỏ qua (coi như không có) chứ không báo lỗi.
 | `tableInfo.databaseTableName` | string | Có | |
 | `tableInfo.tableDisplayName` | string | Không | |
 | `tableInfo.tableDescription` | string | Không | |
+| `tableInfo.linhVucMa` | string | Không | Mã lĩnh vực nghiệp vụ của bảng |
+| `tableInfo.linhVucUuid` | string | Không | |
+| `tableInfo.linhVucName` | string | Không | |
+| `tableInfo.linhVucDescription` | string | Không | |
 | `tableInfo.fields` | array | Có | **Có thể rỗng** |
 | `fields[].id` | string | Có | |
 | `fields[].name` | string | Không | |
