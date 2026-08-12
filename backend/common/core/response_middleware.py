@@ -44,7 +44,11 @@ class ResponseMiddleware(BaseHTTPMiddleware):
                 or request.url.path == f"{settings.CONTEXT_PATH}/openapi.json"
                 or path_pattern in direct_paths):
             return response
-        if response.status_code != 200:
+        # Bọc envelope cho MỌI mã 2xx, không riêng 200. Bản cũ chỉ nhận 200 nên một endpoint trả
+        # 202 sẽ lọt ra ngoài dưới dạng JSON trần, tức là cùng một API có hai hình dạng body tùy
+        # theo nhánh — client phải đoán. Không endpoint nào trong repo trả 2xx khác 200 trước đây
+        # nên nới điều kiện ở đây không đổi hành vi của đường cũ nào.
+        if not 200 <= response.status_code < 300:
             return response
         if response.headers.get("content-type") == "application/json":
             try:
