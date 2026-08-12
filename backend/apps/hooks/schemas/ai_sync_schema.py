@@ -46,6 +46,9 @@ class TableInfo(BaseModel):
 
     `fields` rỗng được chấp nhận: việc thu hồi quyền diễn ra ở mức form (form biến mất khỏi
     snapshot), không phải ở mức field.
+
+    `domain_*` (alias `linhVucMa`/`linhVucUuid`/`linhVucName`/`linhVucDescription`) là metadata
+    lĩnh vực nghiệp vụ của bảng, optional — SW cũ chưa gửi vẫn parse hợp lệ.
     """
 
     model_config = ConfigDict(populate_by_name=True, extra="ignore")
@@ -53,6 +56,10 @@ class TableInfo(BaseModel):
     database_table_name: str = Field(alias="databaseTableName", min_length=1)
     table_display_name: str | None = Field(default=None, alias="tableDisplayName")
     table_description: str | None = Field(default=None, alias="tableDescription")
+    domain_code: str | None = Field(default=None, alias="linhVucMa")
+    domain_uuid: str | None = Field(default=None, alias="linhVucUuid")
+    domain_name: str | None = Field(default=None, alias="linhVucName")
+    domain_description: str | None = Field(default=None, alias="linhVucDescription")
     field_list: list[FieldItem] = Field(alias="fields")
 
 

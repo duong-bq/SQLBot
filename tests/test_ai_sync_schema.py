@@ -28,6 +28,10 @@ VALID_DATA = {
                 "databaseTableName": "kdl_nhan_khau_row_values",
                 "tableDisplayName": "Dữ liệu Nhân khẩu",
                 "tableDescription": "Bảng lưu trữ thông tin cư trú của công dân",
+                "linhVucMa": "LV_DAN_CU",
+                "linhVucUuid": "lv-uuid-5678",
+                "linhVucName": "Lĩnh vực Dân cư",
+                "linhVucDescription": "Lĩnh vực quản lý các thông tin liên quan đến dân cư",
                 "fields": [
                     {"id": "province_id", "name": "Mã Tỉnh/Thành", "description": "Mã định danh của Tỉnh/Thành phố"},
                     {"id": "full_name", "name": "Họ và tên", "description": "Tên đầy đủ của công dân"},
@@ -66,6 +70,10 @@ def test_payload_hop_le_va_parse_dung_alias():
     form = data.form_queries[0]
     assert form.form_uuid == "form-abcd-1234"
     assert form.table_info.database_table_name == "kdl_nhan_khau_row_values"
+    assert form.table_info.domain_code == "LV_DAN_CU"
+    assert form.table_info.domain_uuid == "lv-uuid-5678"
+    assert form.table_info.domain_name == "Lĩnh vực Dân cư"
+    assert form.table_info.domain_description == "Lĩnh vực quản lý các thông tin liên quan đến dân cư"
     # alias "clickHouseQuery" viết hoa chữ H — sai alias là mất query
     assert form.clickhouse_query.startswith("SELECT")
     assert [f.id for f in form.table_info.field_list] == ["province_id", "full_name"]
@@ -75,6 +83,16 @@ def test_payload_bo_trong_form_queries_la_hop_le():
     data = AuthorizationSyncData.model_validate({"userId": "u1", "isAdmin": True, "formQueries": []})
     assert data.form_queries == []
     assert data.full_name is None
+
+
+def test_table_info_thieu_domain_van_hop_le():
+    from apps.hooks.schemas.ai_sync_schema import TableInfo
+
+    info = TableInfo.model_validate({"databaseTableName": "t1", "fields": []})
+    assert info.domain_code is None
+    assert info.domain_uuid is None
+    assert info.domain_name is None
+    assert info.domain_description is None
 
 
 @pytest.mark.parametrize("missing", ["userId", "isAdmin", "formQueries"])
