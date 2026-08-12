@@ -13,6 +13,8 @@ from apps.hooks.crud.ai_sync_log import (
     get_last_applied_version,
     get_log_by_idempotency_key,
 )
+from apps.hooks.crud.ai_user_permission import get_user_permissions, replace_user_permissions
+from apps.hooks.schemas.ai_sync_schema import FormQuery
 
 PAYLOAD = {"actionType": 1, "version": "1.0", "data": {"userId": "u1"}}
 
@@ -93,3 +95,48 @@ def test_get_last_applied_version_tach_theo_user(db_session):
     a = _new_log(db_session, key="k-a", user_id="ua")
     finish_log(db_session, a, status=SyncStatus.SUCCESS.value, sync_version=500)
     assert get_last_applied_version(db_session, "ub") == 0
+
+
+def _form_query(*, form_uuid="f1", domain_code="LV_DAN_CU", domain_name="Lĩnh vực Dân cư"):
+    return FormQuery.model_validate({
+        "formUuid": form_uuid,
+        "tableInfo": {
+            "databaseTableName": "t1",
+            "linhVucMa": domain_code,
+            "linhVucUuid": "lv-uuid-5678",
+            "linhVucName": domain_name,
+            "linhVucDescription": "Mô tả lĩnh vực",
+            "fields": [],
+        },
+    })
+
+
+def test_replace_user_permissions_ghi_du_domain_fields(db_session):
+    replace_user_permissions(
+        db_session, user_id="u-domain", full_name="A", is_admin=False,
+        form_queries=[_form_query()], sync_version=100,
+    )
+    db_session.commit()
+    rows = get_user_permissions(db_session, "u-domain")
+    assert len(rows) == 1
+    assert rows[0].domain_code == "LV_DAN_CU"
+    assert rows[0].domain_uuid == "lv-uuid-5678"
+    assert rows[0].domain_name == "Lĩnh vực Dân cư"
+    assert rows[0].domain_description == "Mô tả lĩnh vực"
+
+
+def test_replace_user_permissions_upsert_cap_nhat_domain_khac(db_session):
+    replace_user_permissions(
+        db_session, user_id="u-domain-2", full_name="A", is_admin=False,
+        form_queries=[_form_query(domain_code="LV_A", domain_name="Lĩnh vực A")], sync_version=100,
+    )
+    db_session.commit()
+    replace_user_permissions(
+        db_session, user_id="u-domain-2", full_name="A", is_admin=False,
+        form_queries=[_form_query(domain_code="LV_B", domain_name="Lĩnh vực B")], sync_version=200,
+    )
+    db_session.commit()
+    rows = get_user_permissions(db_session, "u-domain-2")
+    assert len(rows) == 1
+    assert rows[0].domain_code == "LV_B"
+    assert rows[0].domain_name == "Lĩnh vực B"
