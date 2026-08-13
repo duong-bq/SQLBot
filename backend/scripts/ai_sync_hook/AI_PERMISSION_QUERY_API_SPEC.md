@@ -93,10 +93,12 @@ cộng thêm `syncVersion`/`syncedAt` để dễ đối chiếu.
         "linhVucDescription": "Lĩnh vực quản lý các thông tin liên quan đến dân cư",
         "fields": [
           {"id": "province_id", "name": "Mã Tỉnh/Thành", "description": "Mã định danh của Tỉnh/Thành phố"}
+        ],
+        "queries": [
+          {"datasourceId": "ds-001", "datasourceType": "postgresql", "query": "SELECT * FROM kdl_nhan_khau_row_values WHERE province_id = '01'"},
+          {"datasourceId": "ds-002", "datasourceType": "clickhouse", "query": "SELECT * FROM kdl_nhan_khau_row_values WHERE province_id = '01'"}
         ]
-      },
-      "postgresQuery": "SELECT * FROM kdl_nhan_khau_row_values WHERE province_id = '01'",
-      "clickHouseQuery": "SELECT * FROM kdl_nhan_khau_row_values WHERE province_id = '01'"
+      }
     }
   ]
 }

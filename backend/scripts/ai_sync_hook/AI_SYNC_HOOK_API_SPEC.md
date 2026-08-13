@@ -131,10 +131,20 @@ Một actionType đã release thì không được đổi ý nghĩa.
                 "name": "Họ và tên",
                 "description": "Tên đầy đủ của công dân"
               }
+            ],
+            "queries": [
+              {
+                "datasourceId": "ds-001",
+                "datasourceType": "postgresql",
+                "query": "SELECT * FROM kdl_nhan_khau_row_values WHERE province_id = '01'"
+              },
+              {
+                "datasourceId": "ds-002",
+                "datasourceType": "clickhouse",
+                "query": "SELECT * FROM kdl_nhan_khau_row_values WHERE province_id = '01'"
+              }
             ]
-          },
-          "postgresQuery": "SELECT * FROM kdl_nhan_khau_row_values WHERE province_id = '01'",
-          "clickHouseQuery": "SELECT * FROM kdl_nhan_khau_row_values WHERE province_id = '01'"
+          }
         }
       ]
     }
@@ -142,8 +152,9 @@ Một actionType đã release thì không được đổi ý nghĩa.
 }
 ```
 
-⚠ Alias trong JSON là `clickHouseQuery` (chữ **H** hoa) — gõ sai thành `clickhouseQuery` sẽ khiến
-trường đó bị bỏ qua (coi như không có) chứ không báo lỗi.
+⚠ `queries[]` nằm **trong `tableInfo`**, không phải ngang cấp `tableInfo` — bản cũ dùng 2 field cố
+định `postgresQuery`/`clickHouseQuery` ở cấp `formQueries[i]`, giờ đã bỏ hẳn (breaking change, không
+tương thích ngược) để hỗ trợ số lượng/loại datasource tuỳ ý thay vì cố định 2 loại.
 
 | Trường | Kiểu | Bắt buộc | Ghi chú |
 |---|---|---|---|
@@ -154,8 +165,6 @@ trường đó bị bỏ qua (coi như không có) chứ không báo lỗi.
 | `users[].formQueries` | array | Có | **Có thể rỗng** — xem §5 |
 | `formQueries[].formUuid` | string | Có | Không được rỗng, không được lặp trong `formQueries` của CÙNG một user |
 | `formQueries[].tableInfo` | object | Có | |
-| `formQueries[].postgresQuery` | string | Không | |
-| `formQueries[].clickHouseQuery` | string | Không | |
 | `tableInfo.databaseTableName` | string | Có | |
 | `tableInfo.tableDisplayName` | string | Không | |
 | `tableInfo.tableDescription` | string | Không | |
@@ -167,10 +176,15 @@ trường đó bị bỏ qua (coi như không có) chứ không báo lỗi.
 | `fields[].id` | string | Có | |
 | `fields[].name` | string | Không | |
 | `fields[].description` | string | Không | |
+| `tableInfo.queries` | array | Có | **Không được rỗng** — một form không biết lấy dữ liệu từ nguồn nào thì vô nghĩa |
+| `queries[].datasourceId` | string | Có | Định danh datasource, không được lặp trong `queries` của CÙNG một form |
+| `queries[].datasourceType` | string | Có | Free string (`postgresql`, `clickhouse`, ...), SQLBot không validate theo enum |
+| `queries[].query` | string | Có | Query giới hạn phạm vi dữ liệu trên đúng datasource đó |
 
 `userId` trùng giữa các phần tử trong cùng `users` nhận **400 `DUPLICATE_USER_ID`**. `formUuid` trùng
 trong `formQueries` của cùng một user nhận **400 `DUPLICATE_FORM_UUID`** — không liên quan tới user
-khác trong cùng batch. `users` rỗng hoặc thiếu nhận **400 `EMPTY_USER_LIST`**.
+khác trong cùng batch. `datasourceId` trùng trong `queries` của cùng một form nhận
+**400 `DUPLICATE_DATASOURCE_ID`**. `users` rỗng hoặc thiếu nhận **400 `EMPTY_USER_LIST`**.
 
 ---
 
@@ -219,6 +233,7 @@ bản tin có thực sự được áp dụng hay không.
 | 400 | `FAILED` | `INVALID_ENVELOPE` | Envelope thiếu trường hoặc sai kiểu |
 | 400 | `FAILED` | `INVALID_PAYLOAD` | `data` sai theo schema ở §4 |
 | 400 | `FAILED` | `DUPLICATE_FORM_UUID` | `formUuid` bị lặp trong `formQueries` của cùng một user |
+| 400 | `FAILED` | `DUPLICATE_DATASOURCE_ID` | `datasourceId` bị lặp trong `queries` của cùng một form |
 | 400 | `FAILED` | `DUPLICATE_USER_ID` | `userId` bị lặp giữa các phần tử trong `users` |
 | 400 | `FAILED` | `EMPTY_USER_LIST` | `data.users` rỗng hoặc thiếu |
 | 422 | `FAILED` | `UNSUPPORTED_ACTION_TYPE` | actionType đã đặt tên nhưng chưa triển khai (2–6) |
@@ -265,9 +280,9 @@ curl -X POST "https://<host>/api/v1/hooks/ai-sync" \
               "formUuid": "form-abcd-1234",
               "tableInfo": {
                 "databaseTableName": "kdl_nhan_khau_row_values",
-                "fields": [{"id": "province_id", "name": "Mã Tỉnh/Thành"}]
-              },
-              "postgresQuery": "SELECT * FROM kdl_nhan_khau_row_values WHERE province_id = '\''01'\''"
+                "fields": [{"id": "province_id", "name": "Mã Tỉnh/Thành"}],
+                "queries": [{"datasourceId": "ds-001", "datasourceType": "postgresql", "query": "SELECT * FROM kdl_nhan_khau_row_values WHERE province_id = '\''01'\''"}]
+              }
             }
           ]
         }
