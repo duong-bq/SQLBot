@@ -117,7 +117,6 @@ const sendMessage = async () => {
     // khối này không trống. Không cộng gộp cả hai: bật lại thinking thì JSON sẽ dính vào cuối.
     let sql_reasoning = ''
     let sql_content = ''
-    let chart_answer = ''
     let answer = ''
 
     let tempResult = ''
@@ -216,10 +215,10 @@ const sendMessage = async () => {
                 answer = data.content ?? answer
                 _currentChat.value.records[index.value].answer = answer
                 break
-              case 'chart-result':
-                chart_answer += data.reasoning_content
-                _currentChat.value.records[index.value].chart_answer = chart_answer
-                break
+              // Server không còn stream cấu hình biểu đồ theo token (`chart-result` đã bỏ): nó là
+              // một khối JSON, mảnh dở dang không parse được nên hiện dần vô nghĩa. Nhánh cũ ở đây
+              // cộng dồn `reasoning_content` — trường luôn rỗng vì thinking đã tắt — nên khối "suy
+              // luận biểu đồ" thực chất chưa bao giờ có nội dung.
               case 'chart':
                 _currentChat.value.records[index.value].chart = data.content
                 break

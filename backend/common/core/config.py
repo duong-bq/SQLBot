@@ -175,6 +175,17 @@ class Settings(BaseSettings):
     LLM_ANSWER_HISTORY_ROUNDS: int = 3
     LLM_ANSWER_HISTORY_ROWS: int = 20
 
+    # Chạy pha sinh biểu đồ sau pha answer trên `POST /chat/question`. Thực chất là chọn `finish_step`
+    # mặc định của endpoint đó: True -> GENERATE_CHART, False -> GENERATE_ANSWER. Không đụng tới nhánh
+    # MCP (tự truyền QUERY_DATA) lẫn nhánh hạ cấp khi pha SQL hỏng hẳn (không có dữ liệu thì biểu đồ
+    # vô nghĩa, `run_task` bỏ qua bất kể biến này).
+    #
+    # Cái giá khi bật: thêm MỘT lượt gọi LLM cho mỗi câu hỏi (2 -> 3). Lượt này chạy song song với pha
+    # answer nên độ trễ tới `finish` tăng ít hơn nhiều so với chi phí token. Về hợp đồng stream thì
+    # chỉ thêm hai event mốc (`info` + `chart`), và pha biểu đồ hỏng KHÔNG giết lượt hỏi — client
+    # vẫn nhận đủ `answer` + `finish`. Xem API_SPEC.md §6.8.
+    GENERATE_CHART_ENABLED: bool = True
+
     PG_POOL_SIZE: int = 20
     PG_MAX_OVERFLOW: int = 30
     PG_POOL_RECYCLE: int = 3600
@@ -234,6 +245,7 @@ class Settings(BaseSettings):
                      'LLM_ANSWER_ON_FAILURE',
                      'LLM_ANSWER_HISTORY_ENABLED',
                      'LLM_SQL_HISTORY_JSON_ONLY',
+                     'GENERATE_CHART_ENABLED',
                      mode='before')
     @classmethod
     def lowercase_bool(cls, v: Any) -> Any:
