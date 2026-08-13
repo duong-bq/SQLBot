@@ -38,8 +38,8 @@ def test_permission_co_du_cot_va_unique_user_form():
     for name in (
         "id", "user_id", "full_name", "is_admin", "form_uuid", "database_table_name",
         "table_display_name", "table_description", "domain_code", "domain_uuid",
-        "domain_name", "domain_description", "fields", "postgres_query",
-        "clickhouse_query", "sync_version", "synced_at", "created_at", "updated_at",
+        "domain_name", "domain_description", "fields", "queries",
+        "sync_version", "synced_at", "created_at", "updated_at",
     ):
         assert name in cols, f"thiếu cột {name}"
     assert cols["sync_version"].nullable is False

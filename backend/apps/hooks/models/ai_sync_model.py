@@ -76,8 +76,9 @@ class AiSyncHookLog(SQLModel, table=True):
 class AiUserPermission(SQLModel, table=True):
     """Trạng thái quyền HIỆN TẠI của user sau khi parse bản tin AUTHORIZATION_SYNC.
 
-    Một dòng = một user + một form + một bảng nghiệp vụ + danh sách field + query giới hạn quyền.
-    `postgres_query` / `clickhouse_query` lưu nguyên văn, phase này không parse và không chạy.
+    Một dòng = một user + một form + một bảng nghiệp vụ + danh sách field + danh sách query theo
+    từng datasource. `queries` lưu nguyên mảng `{datasourceId, datasourceType, query}`, phase này
+    không parse và không chạy — giữ khoá camelCase để output API đọc thẳng không cần remap.
 
     `domain_*` là metadata lĩnh vực (linh vực nghiệp vụ) của bảng do SW gửi kèm `tableInfo`, chỉ để
     đọc lại khi truy vấn quyền — không dùng để lọc/join gì trong phase này nên không chuẩn hoá
@@ -112,8 +113,9 @@ class AiUserPermission(SQLModel, table=True):
     fields: list[dict[str, Any]] = Field(
         default_factory=list, sa_column=Column(JSONB, nullable=False, server_default=text("'[]'::jsonb"))
     )
-    postgres_query: str | None = Field(default=None, sa_column=Column(Text, nullable=True))
-    clickhouse_query: str | None = Field(default=None, sa_column=Column(Text, nullable=True))
+    queries: list[dict[str, Any]] = Field(
+        default_factory=list, sa_column=Column(JSONB, nullable=False, server_default=text("'[]'::jsonb"))
+    )
     sync_version: int = Field(sa_column=Column(BigInteger, nullable=False))
     synced_at: datetime | None = Field(
         default=None, sa_column=Column(TIMESTAMP(timezone=True), nullable=False, server_default=func.now())
