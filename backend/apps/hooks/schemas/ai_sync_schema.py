@@ -38,14 +38,28 @@ class FieldItem(BaseModel):
     description: str | None = None
 
 
+class QueryItem(BaseModel):
+    """Một phần tử trong `tableInfo.queries[]` — gắn 1 datasource cụ thể với query giới hạn phạm vi
+    dữ liệu trên đúng datasource đó. Thay thế 2 field cố định `postgresQuery`/`clickHouseQuery` cũ
+    (chỉ hỗ trợ đúng 2 loại datasource) bằng danh sách tổng quát theo `datasourceId`/`datasourceType`.
+    """
+
+    model_config = ConfigDict(populate_by_name=True, extra="ignore")
+
+    datasource_id: str = Field(alias="datasourceId", min_length=1)
+    datasource_type: str = Field(alias="datasourceType", min_length=1)
+    query: str = Field(min_length=1)
+
+
 class TableInfo(BaseModel):
-    """Bảng nghiệp vụ kèm danh sách field.
+    """Bảng nghiệp vụ kèm danh sách field và danh sách query theo từng datasource.
 
     Thuộc tính đặt tên `field_list` chứ không phải `fields` để tránh đụng vào không gian tên của
     Pydantic BaseModel; alias JSON vẫn là `fields`.
 
     `fields` rỗng được chấp nhận: việc thu hồi quyền diễn ra ở mức form (form biến mất khỏi
-    snapshot), không phải ở mức field.
+    snapshot), không phải ở mức field. Ngược lại `queries` KHÔNG được rỗng: một form không biết lấy
+    dữ liệu từ nguồn nào thì vô nghĩa.
 
     `domain_*` (alias `linhVucMa`/`linhVucUuid`/`linhVucName`/`linhVucDescription`) là metadata
     lĩnh vực nghiệp vụ của bảng, optional — SW cũ chưa gửi vẫn parse hợp lệ.
@@ -60,18 +74,19 @@ class TableInfo(BaseModel):
     domain_uuid: str | None = Field(default=None, alias="linhVucUuid")
     domain_name: str | None = Field(default=None, alias="linhVucName")
     domain_description: str | None = Field(default=None, alias="linhVucDescription")
+    queries: list[QueryItem] = Field(alias="queries", min_length=1)
     field_list: list[FieldItem] = Field(alias="fields")
 
 
 class FormQuery(BaseModel):
-    """Quyền của user trên một form: bảng, field, và query đã giới hạn phạm vi dữ liệu."""
+    """Quyền của user trên một form: bảng, field, và danh sách query theo datasource (trong
+    `table_info.queries`). Không còn field query riêng ở cấp này — đã dời hẳn vào `TableInfo`.
+    """
 
     model_config = ConfigDict(populate_by_name=True, extra="ignore")
 
     form_uuid: str = Field(alias="formUuid", min_length=1)
     table_info: TableInfo = Field(alias="tableInfo")
-    postgres_query: str | None = Field(default=None, alias="postgresQuery")
-    clickhouse_query: str | None = Field(default=None, alias="clickHouseQuery")
 
 
 class AuthorizationSyncData(BaseModel):
@@ -154,6 +169,18 @@ def normalize_fields(items: list[FieldItem]) -> list[dict[str, Any]]:
     return [{"id": item.id, "name": item.name, "description": item.description} for item in items]
 
 
+def normalize_queries(items: list[QueryItem]) -> list[dict[str, Any]]:
+    """Chuẩn hoá danh sách query về list dict đúng 3 khoá để ghi vào cột JSONB.
+
+    Giữ khoá **camelCase** (`datasourceId`/`datasourceType`/`query`) — khác `normalize_fields` vốn
+    dùng khoá đã sẵn cùng tên cả 2 phía — để output API đọc thẳng cột JSONB ra ngoài không phải remap.
+    """
+    return [
+        {"datasourceId": item.datasource_id, "datasourceType": item.datasource_type, "query": item.query}
+        for item in items
+    ]
+
+
 def find_duplicate_form_uuid(form_queries: list[FormQuery]) -> str | None:
     """Trả `formUuid` đầu tiên bị lặp trong payload, None nếu không có.
 
@@ -165,6 +192,21 @@ def find_duplicate_form_uuid(form_queries: list[FormQuery]) -> str | None:
         if form.form_uuid in seen:
             return form.form_uuid
         seen.add(form.form_uuid)
+    return None
+
+
+def find_duplicate_datasource_id(queries: list[QueryItem]) -> str | None:
+    """Trả `datasourceId` đầu tiên bị lặp trong `queries` của MỘT form, None nếu không có.
+
+    Cùng khuôn `find_duplicate_form_uuid` nhưng phạm vi kiểm là 1 form, không phải toàn batch —
+    kiểm tường minh để tránh DB âm thầm ghép đè khi lưu vào JSONB (JSONB không có ràng buộc unique
+    trên phần tử mảng).
+    """
+    seen: set[str] = set()
+    for item in queries:
+        if item.datasource_id in seen:
+            return item.datasource_id
+        seen.add(item.datasource_id)
     return None
 
 

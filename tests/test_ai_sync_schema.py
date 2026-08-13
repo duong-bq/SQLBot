@@ -11,9 +11,11 @@ from apps.hooks.schemas.ai_sync_schema import (
     SyncEnvelope,
     SyncHookResponse,
     UserSyncResult,
+    find_duplicate_datasource_id,
     find_duplicate_form_uuid,
     find_duplicate_user_id,
     normalize_fields,
+    normalize_queries,
     to_sync_version,
 )
 
@@ -32,13 +34,15 @@ VALID_DATA = {
                 "linhVucUuid": "lv-uuid-5678",
                 "linhVucName": "Lĩnh vực Dân cư",
                 "linhVucDescription": "Lĩnh vực quản lý các thông tin liên quan đến dân cư",
+                "queries": [
+                    {"datasourceId": "ds-001", "datasourceType": "postgresql", "query": "SELECT * FROM kdl_nhan_khau_row_values WHERE province_id = '01'"},
+                    {"datasourceId": "ds-002", "datasourceType": "clickhouse", "query": "SELECT * FROM kdl_nhan_khau_row_values WHERE province_id = '01'"},
+                ],
                 "fields": [
                     {"id": "province_id", "name": "Mã Tỉnh/Thành", "description": "Mã định danh của Tỉnh/Thành phố"},
                     {"id": "full_name", "name": "Họ và tên", "description": "Tên đầy đủ của công dân"},
                 ],
             },
-            "postgresQuery": "SELECT * FROM kdl_nhan_khau_row_values WHERE province_id = '01'",
-            "clickHouseQuery": "SELECT * FROM kdl_nhan_khau_row_values WHERE province_id = '01'",
         }
     ],
 }
@@ -74,8 +78,10 @@ def test_payload_hop_le_va_parse_dung_alias():
     assert form.table_info.domain_uuid == "lv-uuid-5678"
     assert form.table_info.domain_name == "Lĩnh vực Dân cư"
     assert form.table_info.domain_description == "Lĩnh vực quản lý các thông tin liên quan đến dân cư"
-    # alias "clickHouseQuery" viết hoa chữ H — sai alias là mất query
-    assert form.clickhouse_query.startswith("SELECT")
+    assert len(form.table_info.queries) == 2
+    assert form.table_info.queries[0].datasource_id == "ds-001"
+    assert form.table_info.queries[0].datasource_type == "postgresql"
+    assert form.table_info.queries[1].datasource_id == "ds-002"
     assert [f.id for f in form.table_info.field_list] == ["province_id", "full_name"]
 
 
@@ -88,7 +94,10 @@ def test_payload_bo_trong_form_queries_la_hop_le():
 def test_table_info_thieu_domain_van_hop_le():
     from apps.hooks.schemas.ai_sync_schema import TableInfo
 
-    info = TableInfo.model_validate({"databaseTableName": "t1", "fields": []})
+    info = TableInfo.model_validate({
+        "databaseTableName": "t1", "fields": [],
+        "queries": [{"datasourceId": "d1", "datasourceType": "postgresql", "query": "SELECT 1"}],
+    })
     assert info.domain_code is None
     assert info.domain_uuid is None
     assert info.domain_name is None
@@ -129,12 +138,17 @@ def test_table_info_fields_rong_duoc_chap_nhan():
     data = AuthorizationSyncData.model_validate(
         {
             "userId": "u1", "isAdmin": False,
-            "formQueries": [{"formUuid": "f1", "tableInfo": {"databaseTableName": "t", "fields": []}}],
+            "formQueries": [{
+                "formUuid": "f1",
+                "tableInfo": {
+                    "databaseTableName": "t", "fields": [],
+                    "queries": [{"datasourceId": "d1", "datasourceType": "postgresql", "query": "SELECT 1"}],
+                },
+            }],
         }
     )
     assert data.form_queries[0].table_info.field_list == []
     assert data.form_queries[0].table_info.table_display_name is None
-    assert data.form_queries[0].postgres_query is None
 
 
 def test_field_thieu_id_bi_loai():
@@ -164,12 +178,15 @@ def test_to_sync_version_ton_trong_offset():
     assert to_sync_version(plus7) == to_sync_version(datetime(2026, 8, 10, 10, 0, tzinfo=timezone.utc))
 
 
+_ONE_QUERY = [{"datasourceId": "d1", "datasourceType": "postgresql", "query": "SELECT 1"}]
+
+
 def test_normalize_fields_giu_du_3_khoa_va_dien_none():
     data = AuthorizationSyncData.model_validate(
         {
             "userId": "u1", "isAdmin": False,
             "formQueries": [
-                {"formUuid": "f1", "tableInfo": {"databaseTableName": "t", "fields": [{"id": "a"}]}}
+                {"formUuid": "f1", "tableInfo": {"databaseTableName": "t", "fields": [{"id": "a"}], "queries": _ONE_QUERY}}
             ],
         }
     )
@@ -182,8 +199,8 @@ def test_find_duplicate_form_uuid():
     body = {
         "userId": "u1", "isAdmin": False,
         "formQueries": [
-            {"formUuid": "f1", "tableInfo": {"databaseTableName": "t1", "fields": []}},
-            {"formUuid": "f1", "tableInfo": {"databaseTableName": "t2", "fields": []}},
+            {"formUuid": "f1", "tableInfo": {"databaseTableName": "t1", "fields": [], "queries": _ONE_QUERY}},
+            {"formUuid": "f1", "tableInfo": {"databaseTableName": "t2", "fields": [], "queries": _ONE_QUERY}},
         ],
     }
     data = AuthorizationSyncData.model_validate(body)
@@ -195,12 +212,80 @@ def test_find_duplicate_form_uuid_tra_none_khi_khong_trung():
         {
             "userId": "u1", "isAdmin": False,
             "formQueries": [
-                {"formUuid": "f1", "tableInfo": {"databaseTableName": "t1", "fields": []}},
-                {"formUuid": "f2", "tableInfo": {"databaseTableName": "t2", "fields": []}},
+                {"formUuid": "f1", "tableInfo": {"databaseTableName": "t1", "fields": [], "queries": _ONE_QUERY}},
+                {"formUuid": "f2", "tableInfo": {"databaseTableName": "t2", "fields": [], "queries": _ONE_QUERY}},
             ],
         }
     )
     assert find_duplicate_form_uuid(data.form_queries) is None
+
+
+def test_table_info_queries_rong_bi_loai():
+    with pytest.raises(ValidationError):
+        AuthorizationSyncData.model_validate(
+            {
+                "userId": "u1", "isAdmin": False,
+                "formQueries": [{"formUuid": "f1", "tableInfo": {"databaseTableName": "t", "fields": [], "queries": []}}],
+            }
+        )
+
+
+def test_table_info_thieu_queries_bi_loai():
+    with pytest.raises(ValidationError):
+        AuthorizationSyncData.model_validate(
+            {
+                "userId": "u1", "isAdmin": False,
+                "formQueries": [{"formUuid": "f1", "tableInfo": {"databaseTableName": "t", "fields": []}}],
+            }
+        )
+
+
+def test_normalize_queries_tra_dung_3_khoa_camel_case():
+    data = AuthorizationSyncData.model_validate(
+        {
+            "userId": "u1", "isAdmin": False,
+            "formQueries": [{"formUuid": "f1", "tableInfo": {"databaseTableName": "t", "fields": [], "queries": _ONE_QUERY}}],
+        }
+    )
+    assert normalize_queries(data.form_queries[0].table_info.queries) == _ONE_QUERY
+
+
+def test_find_duplicate_datasource_id():
+    data = AuthorizationSyncData.model_validate(
+        {
+            "userId": "u1", "isAdmin": False,
+            "formQueries": [{
+                "formUuid": "f1",
+                "tableInfo": {
+                    "databaseTableName": "t", "fields": [],
+                    "queries": [
+                        {"datasourceId": "d1", "datasourceType": "postgresql", "query": "SELECT 1"},
+                        {"datasourceId": "d1", "datasourceType": "clickhouse", "query": "SELECT 2"},
+                    ],
+                },
+            }],
+        }
+    )
+    assert find_duplicate_datasource_id(data.form_queries[0].table_info.queries) == "d1"
+
+
+def test_find_duplicate_datasource_id_tra_none_khi_khong_trung():
+    data = AuthorizationSyncData.model_validate(
+        {
+            "userId": "u1", "isAdmin": False,
+            "formQueries": [{
+                "formUuid": "f1",
+                "tableInfo": {
+                    "databaseTableName": "t", "fields": [],
+                    "queries": [
+                        {"datasourceId": "d1", "datasourceType": "postgresql", "query": "SELECT 1"},
+                        {"datasourceId": "d2", "datasourceType": "clickhouse", "query": "SELECT 2"},
+                    ],
+                },
+            }],
+        }
+    )
+    assert find_duplicate_datasource_id(data.form_queries[0].table_info.queries) is None
 
 
 def test_response_serialize_dung_ten_camel_case():
