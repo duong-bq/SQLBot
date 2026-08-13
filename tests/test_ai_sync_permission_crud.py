@@ -17,9 +17,11 @@ def _forms(*specs):
                     "tableDisplayName": f"Hiển thị {table}",
                     "tableDescription": f"Mô tả {table}",
                     "fields": [{"id": fid, "name": fid.upper(), "description": None} for fid in field_ids],
+                    "queries": [
+                        {"datasourceId": f"ds-{form_uuid}", "datasourceType": "postgresql", "query": f"SELECT * FROM {table}"},
+                        {"datasourceId": f"ds-{form_uuid}-ch", "datasourceType": "clickhouse", "query": f"SELECT * FROM {table} SETTINGS x=1"},
+                    ],
                 },
-                "postgresQuery": f"SELECT * FROM {table}",
-                "clickHouseQuery": f"SELECT * FROM {table} SETTINGS x=1",
             }
             for form_uuid, table, field_ids in specs
         ],
@@ -74,8 +76,10 @@ def test_ghi_moi_snapshot(db_session):
         {"id": "a", "name": "A", "description": None},
         {"id": "b", "name": "B", "description": None},
     ]
-    assert r1.postgres_query == "SELECT * FROM t1"
-    assert r1.clickhouse_query == "SELECT * FROM t1 SETTINGS x=1"
+    assert r1.queries == [
+        {"datasourceId": "ds-f1", "datasourceType": "postgresql", "query": "SELECT * FROM t1"},
+        {"datasourceId": "ds-f1-ch", "datasourceType": "clickhouse", "query": "SELECT * FROM t1 SETTINGS x=1"},
+    ]
     assert r1.sync_version == 100
     assert r1.full_name == "Nguyễn Văn A"
     assert r1.is_admin is False
@@ -133,6 +137,32 @@ def test_upsert_ghi_de_dung_form_cu(db_session):
     assert row.sync_version == 200
     assert row.full_name == "Tên mới"
     assert row.is_admin is True
+
+
+def test_upsert_cap_nhat_queries_khac(db_session):
+    replace_user_permissions(
+        db_session, user_id="u1", full_name=None, is_admin=False,
+        form_queries=_forms(("f1", "t1", ["a"])), sync_version=100,
+    )
+    db_session.commit()
+    new_form = AuthorizationSyncData.model_validate({
+        "userId": "u1", "isAdmin": False,
+        "formQueries": [{
+            "formUuid": "f1",
+            "tableInfo": {
+                "databaseTableName": "t1", "fields": [{"id": "a", "name": "A", "description": None}],
+                "queries": [{"datasourceId": "ds-moi", "datasourceType": "clickhouse", "query": "SELECT 2"}],
+            },
+        }],
+    }).form_queries
+    replace_user_permissions(
+        db_session, user_id="u1", full_name=None, is_admin=False,
+        form_queries=new_form, sync_version=200,
+    )
+    db_session.commit()
+    rows = get_user_permissions(db_session, "u1")
+    assert len(rows) == 1
+    assert rows[0].queries == [{"datasourceId": "ds-moi", "datasourceType": "clickhouse", "query": "SELECT 2"}]
 
 
 def test_khong_dung_den_quyen_cua_user_khac(db_session):
