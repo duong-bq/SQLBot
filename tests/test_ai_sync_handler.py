@@ -25,8 +25,11 @@ def _user(user_id="u1", forms=(("f1", "t1"),)):
         "formQueries": [
             {
                 "formUuid": form_uuid,
-                "tableInfo": {"databaseTableName": table, "fields": [{"id": "a"}]},
-                "postgresQuery": f"SELECT * FROM {table}",
+                "tableInfo": {
+                    "databaseTableName": table,
+                    "fields": [{"id": "a"}],
+                    "queries": [{"datasourceId": f"ds-{form_uuid}", "datasourceType": "postgresql", "query": f"SELECT * FROM {table}"}],
+                },
             }
             for form_uuid, table in forms
         ],
@@ -109,6 +112,28 @@ def test_trung_form_uuid_trong_1_user_raise_duplicate_form_uuid(db_session):
     assert exc.value.http_status == 400
     assert exc.value.error_code is SyncErrorCode.DUPLICATE_FORM_UUID
     assert "f1" in exc.value.message
+
+
+def test_trung_datasource_id_trong_1_form_raise_duplicate_datasource_id(db_session):
+    data = {
+        "userId": "u1", "isAdmin": False,
+        "formQueries": [{
+            "formUuid": "f1",
+            "tableInfo": {
+                "databaseTableName": "t1", "fields": [{"id": "a"}],
+                "queries": [
+                    {"datasourceId": "d1", "datasourceType": "postgresql", "query": "SELECT 1"},
+                    {"datasourceId": "d1", "datasourceType": "clickhouse", "query": "SELECT 2"},
+                ],
+            },
+        }],
+    }
+    with pytest.raises(SyncHookError) as exc:
+        handle_authorization_sync(db_session, _envelope(_batch(data)), 1000)
+    assert exc.value.http_status == 400
+    assert exc.value.error_code is SyncErrorCode.DUPLICATE_DATASOURCE_ID
+    assert "d1" in exc.value.message
+    assert get_user_permissions(db_session, "u1") == []
 
 
 def test_1_user_loi_cau_truc_thi_ca_batch_khong_ai_duoc_ap_dung(db_session):

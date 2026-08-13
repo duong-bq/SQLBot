@@ -21,6 +21,7 @@ from apps.hooks.schemas.ai_sync_schema import (
     SyncAppliedCounts,
     SyncEnvelope,
     UserSyncResult,
+    find_duplicate_datasource_id,
     find_duplicate_form_uuid,
     find_duplicate_user_id,
 )
@@ -74,6 +75,15 @@ def handle_authorization_sync(
                 SyncErrorCode.DUPLICATE_FORM_UUID,
                 f"formUuid bị lặp trong payload của user {user_data.user_id}: {duplicated_form}",
             )
+        for form in user_data.form_queries:
+            duplicated_datasource = find_duplicate_datasource_id(form.table_info.queries)
+            if duplicated_datasource:
+                raise SyncHookError(
+                    400,
+                    SyncErrorCode.DUPLICATE_DATASOURCE_ID,
+                    f"datasourceId bị lặp trong payload của user {user_data.user_id}, "
+                    f"form {form.form_uuid}: {duplicated_datasource}",
+                )
 
     results: list[UserSyncResult] = []
     for user_data in batch.users:
