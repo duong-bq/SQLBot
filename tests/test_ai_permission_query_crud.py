@@ -15,7 +15,10 @@ def _forms(*specs):
         "formQueries": [
             {
                 "formUuid": form_uuid,
-                "tableInfo": {"databaseTableName": table, "fields": [{"id": "a"}]},
+                "tableInfo": {
+                    "databaseTableName": table, "fields": [{"id": "a"}],
+                    "queries": [{"datasourceId": "d1", "datasourceType": "postgresql", "query": "SELECT 1"}],
+                },
             }
             for form_uuid, table in specs
         ],

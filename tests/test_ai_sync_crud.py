@@ -107,6 +107,7 @@ def _form_query(*, form_uuid="f1", domain_code="LV_DAN_CU", domain_name="Lĩnh v
             "linhVucName": domain_name,
             "linhVucDescription": "Mô tả lĩnh vực",
             "fields": [],
+            "queries": [{"datasourceId": "d1", "datasourceType": "postgresql", "query": "SELECT 1"}],
         },
     })
 
