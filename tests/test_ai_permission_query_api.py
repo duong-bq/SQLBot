@@ -130,8 +130,9 @@ def test_detail_co_domain_fields_trong_table_info(client, crud_patches):
             user_id="usr-1", full_name="A", is_admin=False, form_uuid="f1",
             database_table_name="t1", table_display_name="Bảng 1", table_description="Mô tả",
             domain_code="LV_DAN_CU", domain_uuid="lv-uuid-5678", domain_name="Lĩnh vực Dân cư",
-            domain_description="Mô tả lĩnh vực", fields=[], postgres_query=None,
-            clickhouse_query=None, sync_version=100,
+            domain_description="Mô tả lĩnh vực", fields=[],
+            queries=[{"datasourceId": "d1", "datasourceType": "postgresql", "query": "SELECT 1"}],
+            sync_version=100,
             synced_at=datetime(2026, 8, 12, 10, 0, tzinfo=timezone.utc),
         )
     ]
@@ -142,3 +143,4 @@ def test_detail_co_domain_fields_trong_table_info(client, crud_patches):
     assert table_info["linhVucUuid"] == "lv-uuid-5678"
     assert table_info["linhVucName"] == "Lĩnh vực Dân cư"
     assert table_info["linhVucDescription"] == "Mô tả lĩnh vực"
+    assert table_info["queries"] == [{"datasourceId": "d1", "datasourceType": "postgresql", "query": "SELECT 1"}]

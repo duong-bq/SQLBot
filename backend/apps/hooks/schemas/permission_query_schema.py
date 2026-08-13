@@ -26,6 +26,7 @@ class PermissionTableInfoOut(BaseModel):
     linhVucName: str | None = None
     linhVucDescription: str | None = None
     fields: list[dict[str, Any]]
+    queries: list[dict[str, Any]]
 
 
 class PermissionFormQueryOut(BaseModel):
@@ -35,8 +36,6 @@ class PermissionFormQueryOut(BaseModel):
 
     formUuid: str
     tableInfo: PermissionTableInfoOut
-    postgresQuery: str | None = None
-    clickHouseQuery: str | None = None
 
 
 class UserPermissionDetailOut(BaseModel):
@@ -95,9 +94,8 @@ def to_permission_detail(user_id: str, rows: list[AiUserPermission]) -> UserPerm
                     linhVucName=row.domain_name,
                     linhVucDescription=row.domain_description,
                     fields=row.fields,
+                    queries=row.queries,
                 ),
-                postgresQuery=row.postgres_query,
-                clickHouseQuery=row.clickhouse_query,
             )
             for row in rows
         ],

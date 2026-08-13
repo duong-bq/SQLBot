@@ -23,8 +23,7 @@ def _row(**overrides) -> AiUserPermission:
         domain_name="Lĩnh vực Dân cư",
         domain_description="Mô tả lĩnh vực",
         fields=[{"id": "a", "name": "A", "description": None}],
-        postgres_query="SELECT 1",
-        clickhouse_query="SELECT 1",
+        queries=[{"datasourceId": "d1", "datasourceType": "postgresql", "query": "SELECT 1"}],
         sync_version=100,
         synced_at=datetime(2026, 8, 12, 10, 0, tzinfo=timezone.utc),
     )
@@ -62,8 +61,7 @@ def test_co_du_lieu_map_dung_field():
     assert form.tableInfo.linhVucName == "Lĩnh vực Dân cư"
     assert form.tableInfo.linhVucDescription == "Mô tả lĩnh vực"
     assert form.tableInfo.fields == [{"id": "a", "name": "A", "description": None}]
-    assert form.postgresQuery == "SELECT 1"
-    assert form.clickHouseQuery == "SELECT 1"
+    assert form.tableInfo.queries == [{"datasourceId": "d1", "datasourceType": "postgresql", "query": "SELECT 1"}]
 
 
 def test_nhieu_form_lay_sync_version_tu_dong_dau():
