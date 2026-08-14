@@ -96,7 +96,12 @@ def custom_generate_unique_id(route: APIRoute) -> str:
 
 app = FastAPI(
     title=settings.PROJECT_NAME,
-    openapi_url=f"{settings.CONTEXT_PATH}/openapi.json" if settings.SQLBOT_DOC_ENABLED else None,
+    # openapi_url=None để FastAPI KHÔNG tự đăng ký route /openapi.json trong setup(). Route đó
+    # sinh ra ngay lúc khởi tạo app, tức trước mọi decorator @app.get trong file này, mà Starlette
+    # lấy route khớp đầu tiên — nên nó che mất `custom_openapi` bên dưới và làm chết cả cơ chế
+    # i18n lẫn phần khai security scheme. Việc phục vụ /openapi.json do `custom_openapi` lo,
+    # và chính nó mới kiểm settings.SQLBOT_DOC_ENABLED.
+    openapi_url=None,
     generate_unique_id_function=custom_generate_unique_id,
     lifespan=lifespan,
     docs_url=None,
@@ -119,6 +124,10 @@ class McpClientIpForwardMiddleware(BaseHTTPMiddleware):
 
 # cache docs for different text
 _openapi_cache: Dict[str, Dict[str, Any]] = {}
+
+# Tên định danh của security scheme trong tài liệu OpenAPI. Chỉ là nhãn nội bộ để Swagger UI
+# tham chiếu, KHÔNG phải tên header — tên header lấy từ settings.TOKEN_KEY.
+TOKEN_SECURITY_SCHEME = "SQLBotToken"
 
 # replace placeholder
 def replace_placeholders_in_schema(schema: Dict[str, Any], trans: Dict[str, str]) -> None:
@@ -152,6 +161,13 @@ def get_language_from_request(request: Request) -> str:
 
 
 def generate_openapi_for_lang(lang: str) -> Dict[str, Any]:
+    """Dựng schema OpenAPI đã dịch cho một ngôn ngữ, cache lại theo `lang`.
+
+    Phần khai `securitySchemes`/`security` phải thêm tay: xác thực của hệ thống nằm ở
+    `TokenMiddleware` (Starlette middleware) chứ không phải dependency của route, mà bộ sinh
+    OpenAPI chỉ nhìn thấy dependency — nên nó không tự suy ra được là API cần token. Khai ở đây
+    thuần là mô tả cho Swagger UI, không kiểm tra gì; nơi chặn request thật vẫn là middleware.
+    """
     if lang in _openapi_cache:
         return _openapi_cache[lang]
 
@@ -179,13 +195,27 @@ def generate_openapi_for_lang(lang: str) -> Dict[str, Any]:
     # openapi version
     openapi_schema.setdefault("openapi", "3.1.0")
 
-    # 2. get trans for lang
+    # 2. security scheme — cho Swagger UI có nút Authorize và tự kèm header vào mọi request
+    openapi_schema.setdefault("components", {})["securitySchemes"] = {
+        TOKEN_SECURITY_SCHEME: {
+            "type": "apiKey",
+            "in": "header",
+            "name": settings.TOKEN_KEY,
+            "description": (
+                "Dán nguyên chuỗi `Bearer <access_token>`, trong đó access_token lấy từ "
+                "`POST /login/access-token`. Thiếu tiền tố `Bearer ` sẽ bị từ chối."
+            ),
+        }
+    }
+    openapi_schema["security"] = [{TOKEN_SECURITY_SCHEME: []}]
+
+    # 3. get trans for lang
     trans = get_translation(lang)
 
-    # 3. replace placeholder
+    # 4. replace placeholder
     replace_placeholders_in_schema(openapi_schema, trans)
 
-    # 4. cache
+    # 5. cache
     _openapi_cache[lang] = openapi_schema
     return openapi_schema
 

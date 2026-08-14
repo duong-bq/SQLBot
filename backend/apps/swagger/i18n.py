@@ -41,7 +41,20 @@ def load_translation(lang: str) -> Dict[str, str]:
 
 
 # group tags
+#
+# THỨ TỰ TRONG DANH SÁCH NÀY LÀ THỨ TỰ NHÓM HIỆN TRÊN SWAGGER UI. Nó được đưa vào mảng `tags` cấp
+# gốc của tài liệu OpenAPI (main.py: generate_openapi_for_lang). Swagger UI xếp nhóm theo đúng thứ
+# tự đó, rồi mới nối các tag KHÔNG có tên ở đây vào cuối — nên tag bị quên vừa rơi xuống đáy vừa
+# mất phần mô tả nhóm. Thêm router có `tags=[...]` mới thì nhớ khai một dòng ở đây.
+#
+# Ba tag cuối danh sách hiện chưa có route nào dùng (`Audit` bị comment ở apps/api.py, hai tag kia
+# thuộc sqlbot_xpack và phụ thuộc license). Cố ý GIỮ LẠI: xoá đi thì lúc bật lên chúng lại rơi
+# xuống đáy đúng như trường hợp `login` trước đây.
 tags_metadata = [
+    {
+        "name": "login",
+        "description": f"{PLACEHOLDER_PREFIX}login_api"
+    },
     {
         "name": "Data Q&A",
         "description": f"{PLACEHOLDER_PREFIX}data_qa"
@@ -50,9 +63,14 @@ tags_metadata = [
         "name": "Datasource",
         "description": f"{PLACEHOLDER_PREFIX}ds_api"
     },
-    {"name": "Dashboard",
-     "description": f"{PLACEHOLDER_PREFIX}db_api"
-     },
+    {
+        "name": "Table Relation",
+        "description": f"{PLACEHOLDER_PREFIX}tr_api"
+    },
+    {
+        "name": "AI Sync Hook",
+        "description": f"{PLACEHOLDER_PREFIX}ai_sync_hook_api"
+    },
     {
         "name": "system_user",
         "description": f"{PLACEHOLDER_PREFIX}system_user_api"
@@ -74,43 +92,48 @@ tags_metadata = [
         "description": f"{PLACEHOLDER_PREFIX}system_embedded_api"
     },
     {
-        "name": "system_authentication",
-        "description": f"{PLACEHOLDER_PREFIX}system_authentication_api"
-    },
-    {"name": "Table Relation",
-     "description": f"{PLACEHOLDER_PREFIX}tr_api"
-     },
-    {
-        "name": "Data Permission",
-        "description": f"{PLACEHOLDER_PREFIX}per_api"
+        "name": "Terminology",
+        "description": f"{PLACEHOLDER_PREFIX}terminology_api"
     },
     {
         "name": "SQL Examples",
         "description": f"{PLACEHOLDER_PREFIX}data_training_api"
     },
     {
-        "name": "Terminology",
-        "description": f"{PLACEHOLDER_PREFIX}terminology_api"
+        "name": "Data Permission",
+        "description": f"{PLACEHOLDER_PREFIX}per_api"
     },
     {
-        "name": "CustomPrompt",
-        "description": f"{PLACEHOLDER_PREFIX}custom_prompt_api"
-    },
-    {
-        "name": "mcp",
-        "description": f"{PLACEHOLDER_PREFIX}mcp_api"
+        "name": "System",
+        "description": f"{PLACEHOLDER_PREFIX}system_setting_api"
     },
     {
         "name": "recommended problem",
         "description": f"{PLACEHOLDER_PREFIX}recommended_problem_api"
     },
     {
-        "name": "Audit",
-        "description": f"{PLACEHOLDER_PREFIX}audit_api"
-    },
-    {
         "name": "System_variable",
         "description": f"{PLACEHOLDER_PREFIX}variable_api"
+    },
+    {
+        "name": "Dashboard",
+        "description": f"{PLACEHOLDER_PREFIX}db_api"
+    },
+    {
+        "name": "mcp",
+        "description": f"{PLACEHOLDER_PREFIX}mcp_api"
+    },
+    {
+        "name": "system_authentication",
+        "description": f"{PLACEHOLDER_PREFIX}system_authentication_api"
+    },
+    {
+        "name": "CustomPrompt",
+        "description": f"{PLACEHOLDER_PREFIX}custom_prompt_api"
+    },
+    {
+        "name": "Audit",
+        "description": f"{PLACEHOLDER_PREFIX}audit_api"
     }
 ]
 

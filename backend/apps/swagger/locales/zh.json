@@ -1,4 +1,8 @@
 {
+  "login_api": "登录与访问令牌",
+  "ai_sync_hook_api": "AI Sync Hook - SW权限同步",
+  "system_setting_api": "系统设置",
+
   "ds_api": "数据源接口",
   "ds_list": "数据源列表",
   "ds_list_description": "获取当前工作空间下所有数据源",

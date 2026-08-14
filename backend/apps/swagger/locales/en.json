@@ -1,4 +1,8 @@
 {
+  "login_api": "Login & Access Token",
+  "ai_sync_hook_api": "AI Sync Hook - permission sync from SW",
+  "system_setting_api": "System Settings",
+
   "ds_api": "Datasource API",
   "ds_list": "Datasource list",
   "ds_list_description": "Retrieve all data sources under the current workspace",
