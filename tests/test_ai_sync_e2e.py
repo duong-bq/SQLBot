@@ -41,7 +41,6 @@ def _body(user_id: str, timestamp: str, form_uuids: list[str]) -> dict:
                             "tableInfo": {
                                 "databaseTableName": "kdl_nhan_khau_row_values",
                                 "tableDisplayName": "Dữ liệu Nhân khẩu",
-                                "tableDescription": "Bảng lưu trữ thông tin cư trú của công dân",
                                 "queries": [
                                     {"datasourceId": "ds-pg", "datasourceType": "postgresql", "query": "SELECT * FROM kdl_nhan_khau_row_values WHERE province_id = '01'"},
                                 ],

@@ -15,7 +15,6 @@ def _forms(*specs):
                 "tableInfo": {
                     "databaseTableName": table,
                     "tableDisplayName": f"Hiển thị {table}",
-                    "tableDescription": f"Mô tả {table}",
                     "queries": [
                         {"datasourceId": f"ds-{form_uuid}", "datasourceType": "postgresql", "query": f"SELECT * FROM {table}"},
                         {"datasourceId": f"ds-{form_uuid}-ch", "datasourceType": "clickhouse", "query": f"SELECT * FROM {table} SETTINGS x=1"},
@@ -70,7 +69,6 @@ def test_ghi_moi_snapshot(db_session):
     r1 = next(r for r in rows if r.form_uuid == "f1")
     assert r1.database_table_name == "t1"
     assert r1.table_display_name == "Hiển thị t1"
-    assert r1.table_description == "Mô tả t1"
     assert r1.queries == [
         {"datasourceId": "ds-f1", "datasourceType": "postgresql", "query": "SELECT * FROM t1"},
         {"datasourceId": "ds-f1-ch", "datasourceType": "clickhouse", "query": "SELECT * FROM t1 SETTINGS x=1"},

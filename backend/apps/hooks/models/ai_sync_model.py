@@ -79,7 +79,8 @@ class AiUserPermission(SQLModel, table=True):
     Một dòng = một user + một form + một bảng nghiệp vụ + danh sách query theo từng datasource.
     `queries` lưu nguyên mảng `{datasourceId, datasourceType, query}`, phase này không parse và
     không chạy — giữ khoá camelCase để output API đọc thẳng không cần remap. Không còn field-level
-    metadata (`fields`) — đã chuyển sang endpoint edit field/table riêng, ngoài phạm vi sync này.
+    metadata (`fields`) và mô tả bảng (`table_description`) — đã chuyển sang endpoint edit
+    field/table riêng, ngoài phạm vi sync này.
 
     `domain_*` là metadata lĩnh vực (linh vực nghiệp vụ) của bảng do SW gửi kèm `tableInfo`, chỉ để
     đọc lại khi truy vấn quyền — không dùng để lọc/join gì trong phase này nên không chuẩn hoá
@@ -106,7 +107,6 @@ class AiUserPermission(SQLModel, table=True):
     form_uuid: str = Field(sa_column=Column(String(100), nullable=False))
     database_table_name: str = Field(sa_column=Column(String(255), nullable=False))
     table_display_name: str | None = Field(default=None, sa_column=Column(String(255), nullable=True))
-    table_description: str | None = Field(default=None, sa_column=Column(Text, nullable=True))
     domain_code: str | None = Field(default=None, sa_column=Column(String(100), nullable=True))
     domain_uuid: str | None = Field(default=None, sa_column=Column(String(100), nullable=True))
     domain_name: str | None = Field(default=None, sa_column=Column(String(255), nullable=True))

@@ -56,7 +56,6 @@ def replace_user_permissions(
             "form_uuid": form.form_uuid,
             "database_table_name": form.table_info.database_table_name,
             "table_display_name": form.table_info.table_display_name,
-            "table_description": form.table_info.table_description,
             "domain_code": form.table_info.domain_code,
             "domain_uuid": form.table_info.domain_uuid,
             "domain_name": form.table_info.domain_name,

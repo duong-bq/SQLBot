@@ -44,8 +44,9 @@ class QueryItem(BaseModel):
 class TableInfo(BaseModel):
     """Bảng nghiệp vụ kèm danh sách query theo từng datasource.
 
-    Không còn nhận `fields` từ AUTHORIZATION_SYNC — field-level metadata đã chuyển sang endpoint
-    edit field/table riêng, gửi kèm ở đây (nếu có) bị bỏ qua âm thầm nhờ `extra="ignore"`.
+    Không còn nhận `fields`/`tableDescription` từ AUTHORIZATION_SYNC — field-level metadata và mô
+    tả bảng đã chuyển sang endpoint edit field/table riêng, gửi kèm ở đây (nếu có) bị bỏ qua âm thầm
+    nhờ `extra="ignore"`.
 
     `queries` KHÔNG được rỗng/thiếu: một form không biết lấy dữ liệu từ nguồn nào thì vô nghĩa.
 
@@ -57,7 +58,6 @@ class TableInfo(BaseModel):
 
     database_table_name: str = Field(alias="databaseTableName", min_length=1)
     table_display_name: str | None = Field(default=None, alias="tableDisplayName")
-    table_description: str | None = Field(default=None, alias="tableDescription")
     domain_code: str | None = Field(default=None, alias="linhVucMa")
     domain_uuid: str | None = Field(default=None, alias="linhVucUuid")
     domain_name: str | None = Field(default=None, alias="linhVucName")

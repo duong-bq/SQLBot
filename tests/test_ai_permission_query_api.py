@@ -128,7 +128,7 @@ def test_detail_co_domain_fields_trong_table_info(client, crud_patches):
     crud_patches["get_perms"].return_value = [
         AiUserPermission(
             user_id="usr-1", full_name="A", is_admin=False, form_uuid="f1",
-            database_table_name="t1", table_display_name="Bảng 1", table_description="Mô tả",
+            database_table_name="t1", table_display_name="Bảng 1",
             domain_code="LV_DAN_CU", domain_uuid="lv-uuid-5678", domain_name="Lĩnh vực Dân cư",
             domain_description="Mô tả lĩnh vực",
             queries=[{"datasourceId": "d1", "datasourceType": "postgresql", "query": "SELECT 1"}],

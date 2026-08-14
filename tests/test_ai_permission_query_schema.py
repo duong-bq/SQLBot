@@ -17,7 +17,6 @@ def _row(**overrides) -> AiUserPermission:
         form_uuid="f1",
         database_table_name="t1",
         table_display_name="Bảng 1",
-        table_description="Mô tả",
         domain_code="LV_DAN_CU",
         domain_uuid="lv-uuid-5678",
         domain_name="Lĩnh vực Dân cư",

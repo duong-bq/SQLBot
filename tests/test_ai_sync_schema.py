@@ -28,7 +28,6 @@ VALID_DATA = {
             "tableInfo": {
                 "databaseTableName": "kdl_nhan_khau_row_values",
                 "tableDisplayName": "Dữ liệu Nhân khẩu",
-                "tableDescription": "Bảng lưu trữ thông tin cư trú của công dân",
                 "linhVucMa": "LV_DAN_CU",
                 "linhVucUuid": "lv-uuid-5678",
                 "linhVucName": "Lĩnh vực Dân cư",
@@ -135,6 +134,24 @@ def test_table_info_field_thua_bi_bo_qua_am_tham():
     )
     assert not hasattr(data.form_queries[0].table_info, "field_list")
     assert not hasattr(data.form_queries[0].table_info, "fields")
+
+
+def test_table_info_table_description_thua_bi_bo_qua_am_tham():
+    """`tableDescription` không còn là field khai báo trong TableInfo — mô tả bảng đã chuyển sang
+    endpoint edit table riêng, gửi kèm (payload cũ) bị `extra="ignore"` bỏ qua âm thầm."""
+    data = AuthorizationSyncData.model_validate(
+        {
+            "userId": "u1", "isAdmin": False,
+            "formQueries": [{
+                "formUuid": "f1",
+                "tableInfo": {
+                    "databaseTableName": "t", "tableDescription": "Mô tả cũ",
+                    "queries": [{"datasourceId": "d1", "datasourceType": "postgresql", "query": "SELECT 1"}],
+                },
+            }],
+        }
+    )
+    assert not hasattr(data.form_queries[0].table_info, "table_description")
 
 
 def test_to_sync_version_doi_sang_epoch_millis():
