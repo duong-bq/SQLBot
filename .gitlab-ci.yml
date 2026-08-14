@@ -1,14 +1,15 @@
 stages:
   - test
 
-docker-test:
+harbor-test:
   stage: test
-
   tags:
     - sqlbot
-
   image: docker:27
 
   script:
     - docker version
-    - docker info
+
+    - echo "$HARBOR_PASSWORD" | docker login "$HARBOR_REGISTRY" -u "$HARBOR_USERNAME" --password-stdin
+
+    - docker pull dockerhub.elcomlab.com/ai-sqlbot/sqlbot-backend:test-v0.0.1
