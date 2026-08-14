@@ -1,0 +1,14 @@
+stages:
+  - test
+
+docker-test:
+  stage: test
+
+  tags:
+    - sqlbot
+
+  image: docker:27
+
+  script:
+    - docker version
+    - docker info
