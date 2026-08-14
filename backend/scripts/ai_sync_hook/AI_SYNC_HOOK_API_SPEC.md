@@ -115,23 +115,10 @@ Một actionType đã release thì không được đổi ý nghĩa.
           "tableInfo": {
             "databaseTableName": "kdl_nhan_khau_row_values",
             "tableDisplayName": "Dữ liệu Nhân khẩu",
-            "tableDescription": "Bảng lưu trữ thông tin cư trú của công dân",
             "linhVucMa": "LV_DAN_CU",
             "linhVucUuid": "lv-uuid-5678",
             "linhVucName": "Lĩnh vực Dân cư",
             "linhVucDescription": "Lĩnh vực quản lý các thông tin liên quan đến dân cư",
-            "fields": [
-              {
-                "id": "province_id",
-                "name": "Mã Tỉnh/Thành",
-                "description": "Mã định danh của Tỉnh/Thành phố"
-              },
-              {
-                "id": "full_name",
-                "name": "Họ và tên",
-                "description": "Tên đầy đủ của công dân"
-              }
-            ],
             "queries": [
               {
                 "datasourceId": "ds-001",
@@ -156,6 +143,11 @@ Một actionType đã release thì không được đổi ý nghĩa.
 định `postgresQuery`/`clickHouseQuery` ở cấp `formQueries[i]`, giờ đã bỏ hẳn (breaking change, không
 tương thích ngược) để hỗ trợ số lượng/loại datasource tuỳ ý thay vì cố định 2 loại.
 
+⚠ `tableInfo.fields` và `tableInfo.tableDescription` **không còn được nhận** từ bản tin này (breaking
+change, không tương thích ngược) — field-level metadata (tên/mô tả cột) và mô tả bảng đã chuyển sang
+endpoint edit field/table riêng của SW. Gửi kèm 2 trường này vẫn không báo lỗi (bị bỏ qua âm thầm),
+nhưng không còn tác dụng gì.
+
 | Trường | Kiểu | Bắt buộc | Ghi chú |
 |---|---|---|---|
 | `users` | array | Có | **Không được rỗng** — xem §7 mã lỗi `EMPTY_USER_LIST` |
@@ -167,15 +159,10 @@ tương thích ngược) để hỗ trợ số lượng/loại datasource tuỳ 
 | `formQueries[].tableInfo` | object | Có | |
 | `tableInfo.databaseTableName` | string | Có | |
 | `tableInfo.tableDisplayName` | string | Không | |
-| `tableInfo.tableDescription` | string | Không | |
 | `tableInfo.linhVucMa` | string | Không | Mã lĩnh vực nghiệp vụ của bảng |
 | `tableInfo.linhVucUuid` | string | Không | |
 | `tableInfo.linhVucName` | string | Không | |
 | `tableInfo.linhVucDescription` | string | Không | |
-| `tableInfo.fields` | array | Có | **Có thể rỗng** |
-| `fields[].id` | string | Có | |
-| `fields[].name` | string | Không | |
-| `fields[].description` | string | Không | |
 | `tableInfo.queries` | array | Có | **Không được rỗng** — một form không biết lấy dữ liệu từ nguồn nào thì vô nghĩa |
 | `queries[].datasourceId` | string | Có | Định danh datasource, không được lặp trong `queries` của CÙNG một form |
 | `queries[].datasourceType` | string | Có | Free string (`postgresql`, `clickhouse`, ...), SQLBot không validate theo enum |
@@ -280,7 +267,6 @@ curl -X POST "https://<host>/api/v1/hooks/ai-sync" \
               "formUuid": "form-abcd-1234",
               "tableInfo": {
                 "databaseTableName": "kdl_nhan_khau_row_values",
-                "fields": [{"id": "province_id", "name": "Mã Tỉnh/Thành"}],
                 "queries": [{"datasourceId": "ds-001", "datasourceType": "postgresql", "query": "SELECT * FROM kdl_nhan_khau_row_values WHERE province_id = '\''01'\''"}]
               }
             }

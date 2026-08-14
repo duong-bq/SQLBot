@@ -86,14 +86,10 @@ cộng thêm `syncVersion`/`syncedAt` để dễ đối chiếu.
       "tableInfo": {
         "databaseTableName": "kdl_nhan_khau_row_values",
         "tableDisplayName": "Dữ liệu Nhân khẩu",
-        "tableDescription": "Bảng lưu trữ thông tin cư trú của công dân",
         "linhVucMa": "LV_DAN_CU",
         "linhVucUuid": "lv-uuid-5678",
         "linhVucName": "Lĩnh vực Dân cư",
         "linhVucDescription": "Lĩnh vực quản lý các thông tin liên quan đến dân cư",
-        "fields": [
-          {"id": "province_id", "name": "Mã Tỉnh/Thành", "description": "Mã định danh của Tỉnh/Thành phố"}
-        ],
         "queries": [
           {"datasourceId": "ds-001", "datasourceType": "postgresql", "query": "SELECT * FROM kdl_nhan_khau_row_values WHERE province_id = '01'"},
           {"datasourceId": "ds-002", "datasourceType": "clickhouse", "query": "SELECT * FROM kdl_nhan_khau_row_values WHERE province_id = '01'"}
