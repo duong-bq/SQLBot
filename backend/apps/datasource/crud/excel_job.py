@@ -52,11 +52,15 @@ def current_worker_id() -> str:
 
 
 def create_job(session: Session, *, ds_id: int, oid: int, create_by: int, ds_name: str,
-               file_path: str, sheet_names: list[str]) -> ExcelImportJob:
+               file_path: str, sheet_names: list[str],
+               file_url: str | None = None) -> ExcelImportJob:
     """Ghi dòng job ở trạng thái chờ. KHÔNG commit — người gọi quyết định thời điểm.
 
     Pha đồng bộ cần gộp dòng này chung transaction với dòng ``core_datasource``, để hai thứ hoặc
     cùng tồn tại hoặc cùng không.
+
+    ``file_url`` để rỗng nghĩa là file đã nằm sẵn ở ``file_path`` (đường multipart cũ); có giá trị
+    nghĩa là worker phải tự tải về đúng ``file_path`` trước khi làm gì khác.
     """
     job = ExcelImportJob(
         ds_id=ds_id,
@@ -64,6 +68,7 @@ def create_job(session: Session, *, ds_id: int, oid: int, create_by: int, ds_nam
         create_by=create_by,
         ds_name=ds_name,
         file_path=file_path,
+        file_url=file_url,
         sheet_names=list(sheet_names),
         created_tables=[],
         status=ExcelImportJobStatus.PENDING,

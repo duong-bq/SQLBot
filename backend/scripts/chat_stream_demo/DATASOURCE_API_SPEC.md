@@ -64,7 +64,7 @@ FastAPI bắt). Client phải xử lý được cả hai.
 | | Endpoint | |
 |---|---|---|
 | 9.1 | `POST /datasource/createFromExcel` | đồng bộ, chờ nạp xong mới trả về |
-| 9.2 | `POST /datasource/createFromExcelAsync` | trả `202` ngay, nạp ở nền, báo kết quả bằng callback |
+| 9.2 | `POST /datasource/createFromExcelAsync` | nhận URL của file, trả `202` ngay, tải và nạp ở nền, báo kết quả bằng callback |
 | 9.4 | `GET /datasource/excelImportStatus/{ds_id}` | tra trạng thái một lần nạp |
 
 **Đọc thông tin nguồn đã tạo** ([§4](#4-đọc-thông-tin-nguồn-đã-tạo)):
@@ -1177,26 +1177,33 @@ nguồn. Bỏ sót bước 3 thì bảng mới đã tồn tại nhưng chatbot k
 
 ## 9. Tạo nguồn Excel/CSV bằng một lời gọi
 
-Ba bước 8.1 → 8.2 → 8.3 gộp lại thành **một** request `multipart/form-data`. Server tự đọc file, tạo
-bảng, tạo nguồn dữ liệu và đăng ký các bảng đó.
+Ba bước 8.1 → 8.2 → 8.3 gộp lại thành **một** request. Server tự đọc file, tạo bảng, tạo nguồn dữ
+liệu và đăng ký các bảng đó.
 
 Đánh đổi so với §8: không xem trước được cấu trúc và **không sửa được kiểu cột** — kiểu do server tự
 đoán. Cần can thiệp kiểu thì phải quay lại đường ba bước.
 
-Hai biến thể, khác nhau đúng ở chỗ *khi nào* response trả về:
+Hai biến thể, khác nhau ở *cách file tới tay server* và ở *khi nào* response trả về:
 
 | | 9.1 `createFromExcel` | 9.2 `createFromExcelAsync` |
 |---|---|---|
-| Trả về khi | Đã nạp xong toàn bộ | Đã nhận file, **chưa** nạp |
+| File tới bằng | Bytes trong request (`multipart/form-data`) | **URL** trỏ tới file, server tự tải (`application/json`) |
+| Trả về khi | Đã nạp xong toàn bộ | Đã nhận việc, **chưa** tải, chưa nạp |
 | HTTP | `200` | `202` |
-| Thời gian giữ kết nối | Bằng thời gian nạp — file lớn có thể vài phút | Cỡ vài chục ms |
+| Thời gian giữ kết nối | Bằng thời gian tải lên **cộng** thời gian nạp — file lớn có thể vài phút | Cỡ vài chục ms |
 | Biết kết quả bằng cách | Đọc luôn response | Nhận [callback](#93-callback-báo-kết-quả) hoặc gọi [9.4](#94-get-datasourceexcelimportstatusds_id) |
 | Nguồn dữ liệu dùng được ngay sau khi trả về | ✔ | ✘ — đang ở trạng thái `Importing` |
 
-**Nên dùng 9.2.** 9.1 giữ lại cho tích hợp cũ: nó buộc client chờ suốt quá trình nạp, và mọi
-reverse proxy đứng giữa đều có timeout riêng — file đủ lớn thì client nhận `504` trong khi server
-vẫn đang nạp và cuối cùng vẫn tạo ra nguồn dữ liệu, tức là client không còn suy ra được trạng thái
-thật từ lỗi mình nhận.
+**Nên dùng 9.2.** 9.1 giữ lại cho tích hợp cũ, và nó có hai chỗ hỏng độc lập nhau. Thứ nhất, nó
+buộc client chờ suốt quá trình nạp, mà mọi reverse proxy đứng giữa đều có timeout riêng — file đủ
+lớn thì client nhận `504` trong khi server vẫn đang nạp và cuối cùng vẫn tạo ra nguồn dữ liệu, tức
+là client không còn suy ra được trạng thái thật từ lỗi mình nhận. Thứ hai, bytes của file phải đi
+qua đúng cái kết nối HTTP đang chờ đó; đường truyền giữa hai bên chậm hay chập chờn thì cả request
+hỏng và phải tải lại từ đầu.
+
+9.2 gỡ cả hai bằng cách **không nhận bytes nữa**: bên tích hợp đẩy file lên object storage của mình
+rồi đưa cho SQLBot một URL ký sẵn (presigned URL). Việc tải nằm ở tiến trình nền, chậm bao lâu cũng
+không có ai ngồi chờ, và tải hỏng thì SQLBot tự thử lại.
 
 Cả hai endpoint đều cần quyền **`ws_admin`**.
 
@@ -1242,7 +1249,41 @@ curl -X POST 'https://<host>/api/v1/datasource/createFromExcel' \
 
 ### 9.2. `POST /datasource/createFromExcelAsync`
 
-**Request** — giống hệt 9.1, không đổi field nào.
+**Request** — `application/json`. Không còn `multipart/form-data`, không còn gửi bytes.
+
+| Field | Kiểu | Bắt buộc | Ghi chú |
+|---|---|---|---|
+| `fileUrl` | string | ✔ | URL ký sẵn trỏ tới file trên object storage. Xem điều kiện bên dưới |
+| `name` | string | ✔ | Tên nguồn dữ liệu, phải chưa tồn tại trong workspace |
+| `sheetNames` | string[] | | Mảng JSON. Chỉ nạp các sheet này, bỏ trống = nạp tất cả. File CSV bỏ qua trường này |
+| `description` | string | | ≤512 ký tự |
+
+```bash
+curl -X POST 'https://<host>/api/v1/datasource/createFromExcelAsync' \
+  -H 'X-SQLBOT-TOKEN: Bearer <jwt>' \
+  -H 'Content-Type: application/json' \
+  -d '{
+        "fileUrl": "https://minio.example.com/bucket/thu_ngan_sach_2024.xlsx?X-Amz-Algorithm=...&X-Amz-Signature=...",
+        "name": "Thu ngân sách 2024",
+        "sheetNames": ["Quy1", "Quy2"],
+        "description": "Số liệu thu ngân sách theo quý"
+      }'
+```
+
+**Bốn điều kiện của `fileUrl`.** Ba điều đầu do bên tích hợp bảo đảm; sai điều nào cũng ăn `400`:
+
+1. **Host phải nằm trong danh sách cho phép của SQLBot.** Đây là cấu hình phía SQLBot, không phải
+   thứ đặt trong request — báo trước cho bên vận hành SQLBot host object storage sẽ dùng, trước khi
+   gọi lần đầu. Host lạ bị từ chối, kể cả khi URL hoàn toàn hợp lệ.
+2. **Đường dẫn phải kết thúc bằng `.xlsx`, `.xls` hoặc `.csv`.** Đuôi file đọc từ phần đường dẫn,
+   phần chữ ký nằm sau dấu `?` không tính.
+3. **Hạn chữ ký còn ít nhất 1 giờ** kể từ lúc gọi. URL ký sẵn hết hạn sau khi SQLBot đã nhận việc
+   thì việc đó hỏng hẳn, không cứu được — mà job có thể phải xếp hàng sau các job khác trước khi
+   tới lượt tải. Ký ngắn hơn 1 giờ bị từ chối ngay. **Ký 24 giờ là an toàn nhất.**
+4. **File không quá 100 MB.** Vượt trần thì bị từ chối, ở response hoặc ở callback tùy lúc nào
+   SQLBot biết được dung lượng thật.
+
+SQLBot chỉ đọc file bằng `GET` và **không đi theo redirect** — URL phải trỏ thẳng tới đối tượng.
 
 **Response `202`:**
 
@@ -1262,20 +1303,38 @@ Nguồn dữ liệu đã nằm trong database nhưng ở trạng thái `Importin
 danh sách nguồn để hỏi đáp và chatbot chưa trả lời được câu nào về nó. Trạng thái chuyển thành
 `Success` hoặc `Failed` khi nạp xong.
 
-**Những lỗi bắt được ngay tại pha đồng bộ** (trả luôn trong response, chưa tạo gì):
+**Những lỗi trả luôn trong response** (chưa tạo gì, chưa có `dsId`):
 
-| HTTP | Khi nào | Body |
+| HTTP | `code` | Khi nào |
 |---|---|---|
-| `400` | Đuôi file không phải `.xlsx`/`.xls`/`.csv` | `Only support .xlsx/.xls/.csv` |
-| `400` | `name` rỗng | `Datasource name is required` |
-| `400` | File không mở được bằng thư viện đọc excel | `Cannot read workbook: <lý do>` |
-| `400` | `sheetNames` có tên không tồn tại trong file | `Sheet not found: <tên>. Available: <danh sách>` |
-| `409` | Tên nguồn dữ liệu đã tồn tại | xem dưới |
-| `409` | Đang có request khác tạo cùng tên đó | xem dưới |
+| `400` | `URL_INVALID` | `fileUrl` rỗng, không phải `http(s)`, hoặc không phân tích được |
+| `400` | `URL_HOST_NOT_ALLOWED` | Host của `fileUrl` không nằm trong danh sách cho phép |
+| `400` | `URL_BAD_EXTENSION` | Đường dẫn không kết thúc bằng `.xlsx`/`.xls`/`.csv` |
+| `400` | `URL_EXPIRED` | Chữ ký đã hết hạn, hoặc còn hạn quá ngắn |
+| `400` | `DOWNLOAD_FORBIDDEN` | Object storage trả `403` — chữ ký sai hoặc không đủ quyền |
+| `400` | `DOWNLOAD_NOT_FOUND` | Object storage trả `404` — sai đường dẫn hoặc file chưa được đẩy lên |
+| `400` | `FILE_TOO_LARGE` | Dung lượng khai báo vượt trần 100 MB |
+| `400` | — | `name` rỗng: `Datasource name is required` |
+| `409` | `DATASOURCE_NAME_EXISTS` | Tên nguồn dữ liệu đã tồn tại — xem dưới |
+| `409` | `DATASOURCE_NAME_LOCKED` | Đang có request khác tạo cùng tên đó — xem dưới |
 
-Nguyên tắc phân chia: **mọi thứ client có thể gõ sai đều hỏng ngay ở response**, không đẩy sang
-callback. Chỉ những lỗi không ai đoán trước được (file hỏng giữa chừng, hết đĩa, database chết) mới
-báo về bằng callback.
+Thân của các lỗi có `code` là một object, không phải chuỗi:
+
+```json
+{"code": "URL_EXPIRED", "message": "fileUrl expires in 120s, needs at least 3600s"}
+```
+
+**Ranh giới giữa response và callback đã dịch so với bản `multipart` trước đây.** Trước kia SQLBot
+cầm sẵn file ngay trong request nên nó đối chiếu được tên sheet và trả `400` luôn. Nay nó chỉ có
+URL, nên **`sheetNames` gõ sai và file hỏng đều về bằng callback**, kèm một nguồn dữ liệu `Failed`
+phải dọn. Xem điều 3 của [§9.3](#93-callback-báo-kết-quả).
+
+**Đọc kỹ chỗ này nếu bên tích hợp có logic thử lại:** một hỏng hóc của object storage có thể lộ ra ở
+response hoặc ở callback, tùy vào việc SQLBot có kịp biết trước khi nhận việc hay không. SQLBot chỉ
+từ chối ngay khi object storage **trả lời dứt khoát** (`403`, `404`, dung lượng vượt trần); nếu nó
+timeout, đứt kết nối hay trả `5xx` thì SQLBot vẫn nhận việc và trả `202`, rồi mới báo hỏng bằng
+callback nếu tải vẫn không được. Nghĩa là **`202` không bảo đảm file tải được**, và cùng một lỗi
+`DOWNLOAD_FAILED` có thể tới bằng cả hai đường — nên hai nhánh xử lý phải dùng chung một hàm.
 
 **Hai dạng `409`**, phân biệt bằng trường `code`:
 
@@ -1320,7 +1379,10 @@ Content-Type: application/json
 | `actionType` | Mã sự kiện cố định `999`, cấp riêng cho việc báo kết quả nạp excel |
 | `payload.externalId` | **Chính là `dsId`** đã trả về ở response `202` |
 | `payload.status` | `true` = nguồn dữ liệu đã dùng được; `false` = nạp hỏng |
-| `payload.message` | Mô tả bằng tiếng Anh. Khi hỏng đây là lý do (`Uploaded file is gone: ...`, `No sheet could be parsed from the uploaded file`, …) |
+| `payload.message` | Mô tả bằng tiếng Anh. Khi hỏng đây là lý do (`Sheet not found: Quy3. Available: Quy1, Quy2`, `Cannot download after 3 attempts: ...`, …) |
+
+`payload` **không có** `errorCode`. Cần mã lỗi phân loại được bằng máy thì gọi
+[9.4](#94-get-datasourceexcelimportstatusds_id) với `externalId` vừa nhận.
 
 Coi là nhận thành công khi trả về HTTP **2xx** bất kỳ. Nội dung body không được đọc.
 
@@ -1332,9 +1394,16 @@ Coi là nhận thành công khi trả về HTTP **2xx** bất kỳ. Nội dung b
 2. **Có thể không bao giờ nhận được.** Sau một số lần thử (giãn cách tăng dần) SQLBot dừng hẳn. Đó
    là lý do phải có [9.4](#94-get-datasourceexcelimportstatusds_id) làm đường đối chiếu — hệ ngoài
    nên tự hỏi lại với những `dsId` chờ quá lâu thay vì chờ vô hạn.
-3. **`status: false` để lại một nguồn dữ liệu rác.** Nguồn đó tồn tại với trạng thái `Failed`, không
-   vào hỏi đáp nhưng vẫn **chiếm tên** — tạo lại đúng tên đó sẽ bị `409`. Bên tích hợp phải gọi
-   [7.6 `POST /datasource/delete/{ds_id}/{name}`](#76-post-datasourcedeleteds_idname) để dọn.
+3. **`status: false` để lại một nguồn dữ liệu rác.** Nguồn đó tồn tại với trạng thái `Failed` và
+   không vào hỏi đáp, nhưng vẫn hiện trong [`GET /datasource/list`](#41-get-datasourcelist). Nó
+   **không chiếm tên**: gọi lại đúng tên đó sau khi sửa nguyên nhân sẽ ra `202` bình thường chứ
+   không phải `409`. Nhưng mỗi lần thử lại đẻ thêm một dòng `Failed` nữa, nên bên tích hợp vẫn phải
+   gọi [7.6 `POST /datasource/delete/{ds_id}/{name}`](#76-post-datasourcedeleteds_idname) để dọn.
+
+   Từ khi file tới bằng `fileUrl`, **tập lỗi rơi vào nhánh này rộng hơn hẳn trước**: `sheetNames` gõ
+   sai, file hỏng, tải không được — những thứ trước đây là `400` và không tạo ra gì. Đường dọn dẹp
+   vì thế không còn là nhánh hiếm gặp mà là nhánh chạy thường xuyên; nên gắn nó vào cùng chỗ xử lý
+   `status: false` thay vì làm thủ công.
 4. **Chú thích vẫn phải nạp riêng.** Nhận `status: true` mới là có dữ liệu; tên bảng do server sinh
    ra gần như vô nghĩa, nên chất lượng trả lời phụ thuộc vào việc nạp chú thích ở [§5](#5-nạp-chú-thích).
 
@@ -1362,14 +1431,42 @@ Tra trạng thái một lần nạp. Dùng khi callback thất lạc, hoặc đ�
 | Trường | Nghĩa |
 |---|---|
 | `status` | `Importing` (đang chạy) · `Success` · `Failed` |
-| `errorCode` | Chỉ có khi `Failed`: `FILE_NOT_FOUND`, `NO_SHEET_PARSED`, `JOB_ABANDONED` (tiến trình nạp bị tắt giữa chừng), `INTERNAL_ERROR` |
+| `errorCode` | Chỉ có khi `Failed` — xem bảng dưới |
 | `errorMessage` | Mô tả chi tiết đi kèm `errorCode` |
 | `tableCount` | Số bảng đã đăng ký cho nguồn dữ liệu này |
+
+**Các giá trị `errorCode`**, chia theo việc bên tích hợp phải làm gì:
+
+| `errorCode` | Nghĩa | Xử lý |
+|---|---|---|
+| `URL_EXPIRED` | Chữ ký hết hạn trước khi tới lượt tải | Ký URL mới với hạn dài hơn rồi gọi lại |
+| `URL_HOST_NOT_ALLOWED` | Host bị gỡ khỏi danh sách cho phép sau khi đã nhận việc | Liên hệ bên vận hành SQLBot |
+| `DOWNLOAD_FORBIDDEN` | Object storage trả `403` | Kiểm lại chữ ký và quyền của object |
+| `DOWNLOAD_NOT_FOUND` | Object storage trả `404` | Kiểm object còn tồn tại không (vòng đời tự xóa?) |
+| `DOWNLOAD_FAILED` | Tải hỏng sau nhiều lần thử: mạng đứt, `5xx`, hoặc quá chậm | Lỗi tạm thời — gọi lại với URL mới |
+| `FILE_TOO_LARGE` | File vượt trần 100 MB | Chia nhỏ file |
+| `SHEET_NOT_FOUND` | `sheetNames` có tên không tồn tại. `errorMessage` liệt kê tên có thật | Sửa `sheetNames` rồi gọi lại |
+| `CANNOT_READ_WORKBOOK` | Tải về được nhưng không mở được bằng thư viện đọc excel | File hỏng hoặc sai định dạng so với đuôi |
+| `NO_SHEET_PARSED` | File mở được nhưng không sheet nào đọc ra dữ liệu | Kiểm lại nội dung file |
+| `FILE_NOT_FOUND` | File biến mất khỏi máy chủ giữa chừng | Gọi lại |
+| `JOB_ABANDONED` | Tiến trình nạp bị tắt giữa chừng (deploy, hết bộ nhớ) | Lỗi tạm thời — gọi lại |
+| `INTERNAL_ERROR` | Lỗi không phân loại được | Báo cho bên vận hành SQLBot kèm `dsId` |
+
+Bốn mã `URL_*` và `DOWNLOAD_*` xuất hiện ở **cả** response `400` của [9.2](#92-post-datasourcecreatefromexcelasync)
+lẫn ở đây — cùng một tên cho cùng một chuyện, chỉ khác thời điểm phát hiện.
+
+Mọi trường hợp `Failed` đều để lại một nguồn dữ liệu rác phải dọn bằng
+[7.6](#76-post-datasourcedeleteds_idname), kể cả các lỗi chỉ liên quan tới việc tải file.
 
 `404` nếu `ds_id` không tồn tại. Nguồn dữ liệu tạo bằng đường 9.1 hoặc §8 cũng tra được ở đây, khi
 đó `errorCode`/`errorMessage` luôn `null`.
 
-Không có giới hạn tần suất, nhưng nạp một file cỡ chục MB thường xong trong vài giây — hỏi lại mỗi
-2–5 giây là đủ.
+Không có giới hạn tần suất, nhưng thời gian xử lý giờ gồm cả việc tải file về từ object storage nên
+nó phụ thuộc đường truyền giữa SQLBot và object storage, không chỉ phụ thuộc kích thước file. Hỏi
+lại mỗi 2–5 giây là đủ; đừng đặt hạn chờ cứng theo kích thước file.
+
+**Một chi tiết về thời điểm:** `status` chuyển sang `Failed` sớm hơn `errorCode` một nhịp rất ngắn,
+nên có khả năng đọc được `Failed` kèm `errorCode: null`. Gặp trường hợp đó thì hỏi lại một lần nữa
+thay vì coi là lỗi không rõ nguyên nhân.
 
 ---

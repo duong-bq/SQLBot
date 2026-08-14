@@ -37,8 +37,9 @@ from ..models.datasource import (
     SheetFields,
 )
 from ..models.excel_job import ExcelImportJob
-from ..utils.excel import parse_excel_preview
+from ..utils.excel import list_sheet_names, parse_excel_preview
 from ..utils.excel_import import ExcelImportError, drop_tables, import_sheets_to_db
+from ..utils.remote_file import download_to, validate_source_url
 from ..utils.utils import aes_encrypt
 
 # Pool RIÊNG, cố ý nhỏ. Không dùng chung pool 200 thread của embedding: mỗi job import nạp cả
@@ -53,6 +54,10 @@ ERR_FILE_MISSING = "FILE_NOT_FOUND"
 ERR_NO_SHEET = "NO_SHEET_PARSED"
 ERR_INTERNAL = "INTERNAL_ERROR"
 ERR_JOB_STALE = "JOB_ABANDONED"
+# Hai mã dưới đây từng là HTTP 400 của pha đồng bộ, lúc pha đó còn cầm file trong tay. Từ khi file
+# tới bằng đường tải từ URL thì chúng chỉ lộ ra sau khi worker tải xong, nên chúng đi đường callback.
+ERR_CANNOT_READ = "CANNOT_READ_WORKBOOK"
+ERR_SHEET_NOT_FOUND = "SHEET_NOT_FOUND"
 
 
 class _Heartbeat:
@@ -129,8 +134,56 @@ def _run_import_job_safe(job_id: int) -> None:
             SQLBotLogUtil.exception(f"cannot mark excel job {job_id} failed")
 
 
+def _fetch_source_file(file_url: str, save_path: str) -> None:
+    """Tải file nguồn về ``save_path``. Không làm gì nếu file đã có sẵn.
+
+    Phép kiểm "đã có sẵn" không thừa: vòng quét phục hồi có thể nhặt lại một job mà worker trước đã
+    tải xong rồi mới chết. Tải lại lúc đó vừa tốn thời gian vừa có thể hỏng hẳn — chữ ký của URL
+    thường đã hết hạn khi tới lượt chạy thứ hai.
+
+    Kiểm URL lại lần nữa ở đây thay vì tin dòng trong DB: giữa lúc nhận việc và lúc chạy có thể đã
+    qua hàng giờ (job xếp hàng, hoặc job được phục hồi), nên hạn chữ ký phải soi lại theo hiện tại.
+    Nó cũng chặn luôn trường hợp allowlist bị siết lại sau khi job đã vào hàng đợi.
+    """
+    if os.path.exists(save_path):
+        SQLBotLogUtil.info(f"source file already on disk, skip download: {save_path}")
+        return
+    src = validate_source_url(file_url)
+    SQLBotLogUtil.info(f"downloading source file from {src.safe_label}")
+    download_to(src, save_path)
+
+
+def _resolve_sheets(save_path: str, wanted: list[str]) -> list[str]:
+    """Đối chiếu tên sheet client gửi với mục lục thật của file, trả về danh sách sẽ nạp.
+
+    Bước này BẮT BUỘC dù ``parse_excel_preview`` cũng nhận ``sheet_names``: hàm đó bỏ qua IM LẶNG
+    mọi tên không tồn tại. Thiếu phép đối chiếu ở đây thì một tên sheet gõ sai sẽ cho ra callback
+    báo THÀNH CÔNG kèm một nguồn dữ liệu thiếu bảng — kiểu hỏng tệ nhất, vì không ai biết là đã hỏng.
+
+    Trước đây việc này nằm ở pha đồng bộ và trả về 400. Nay pha đó không còn cầm file nên nó lùi
+    xuống worker và về bằng callback.
+
+    Danh sách trả về theo THỨ TỰ TRONG FILE, không theo thứ tự client gửi.
+    """
+    try:
+        available = list_sheet_names(save_path)
+    except Exception as e:
+        raise ExcelImportError(ERR_CANNOT_READ, f"Cannot read workbook: {e}")
+
+    if not wanted:
+        return available
+
+    missing = [s for s in wanted if s not in available]
+    if missing:
+        raise ExcelImportError(
+            ERR_SHEET_NOT_FOUND,
+            f"Sheet not found: {', '.join(missing)}. Available: {', '.join(available)}"
+        )
+    return [s for s in available if s in set(wanted)]
+
+
 def _run_import_job(job_id: int) -> None:
-    """Chạy trọn một job: đọc file → tạo bảng → đồng bộ metadata → ghi kết quả vào outbox."""
+    """Chạy trọn một job: tải file → đối chiếu sheet → tạo bảng → đồng bộ metadata → ghi outbox."""
     with Session(engine) as session:
         job = session.get(ExcelImportJob, job_id)
         if job is None:
@@ -138,15 +191,25 @@ def _run_import_job(job_id: int) -> None:
             return
         ds_id = job.ds_id
         save_path = job.file_path
+        file_url = job.file_url
         sheet_names = list(job.sheet_names or [])
 
     mark_running(job_id, current_worker_id())
 
     created: list[str] = []
     try:
+        # Tải NẰM TRONG khối heartbeat: một file lớn qua đường truyền chậm có thể mất hàng chục
+        # phút, và nếu không có nhịp báo sống thì vòng quét phục hồi sẽ kết liễu đúng job đang khỏe.
         with _Heartbeat(job_id, settings.EXCEL_IMPORT_HEARTBEAT_SECONDS):
+            if file_url:
+                _fetch_source_file(file_url, save_path)
+
             if not os.path.exists(save_path):
-                raise ExcelImportError(ERR_FILE_MISSING, f"Uploaded file is gone: {save_path}")
+                raise ExcelImportError(ERR_FILE_MISSING, f"Source file is gone: {save_path}")
+
+            sheet_names = _resolve_sheets(save_path, sheet_names)
+            if not sheet_names:
+                raise ExcelImportError(ERR_NO_SHEET, "Workbook has no sheet to import")
 
             sheets_meta = parse_excel_preview(save_path, sheet_names=sheet_names or None)
             if not sheets_meta:
@@ -172,13 +235,16 @@ def _run_import_job(job_id: int) -> None:
     except Exception as e:
         fail_import_job(job_id, ds_id, created, ERR_INTERNAL, str(e))
     finally:
-        # Quyền sở hữu file chuyển sang worker kể từ lúc submit, nên worker là bên duy nhất xóa.
-        # Hai bên cùng xóa thì sinh lỗi lạ; không bên nào xóa thì rò đĩa.
-        try:
-            if os.path.exists(save_path):
-                os.remove(save_path)
-        except Exception as e:
-            SQLBotLogUtil.warning(f"cannot remove temp file {save_path}: {e}")
+        # Worker là bên duy nhất xóa file: từ khi file do chính worker tải về, không còn ai khác
+        # đụng tới nó. Hai bên cùng xóa thì sinh lỗi lạ; không bên nào xóa thì rò đĩa.
+        # Xóa cả file ``.part``: một lượt tải hỏng giữa chừng để lại nó, và nó không nằm trong tập
+        # được vòng quét phục hồi bảo vệ nên cứ nằm đó chiếm đĩa cho tới lần dọn theo tuổi file.
+        for leftover in (save_path, f"{save_path}.part"):
+            try:
+                if os.path.exists(leftover):
+                    os.remove(leftover)
+            except Exception as e:
+                SQLBotLogUtil.warning(f"cannot remove temp file {leftover}: {e}")
 
 
 def fail_import_job(job_id: int, ds_id: int, created: list[str], error_code: str, message: str) -> None:

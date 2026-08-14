@@ -56,11 +56,13 @@ def _bury_dead_jobs() -> int:
         )
         fail_import_job(job["id"], job["ds_id"], job["created_tables"], ERR_JOB_STALE,
                         "Import worker died before finishing")
-        try:
-            if job["file_path"] and os.path.exists(job["file_path"]):
-                os.remove(job["file_path"])
-        except Exception as e:
-            SQLBotLogUtil.warning(f"cannot remove temp file of dead job {job['id']}: {e}")
+        # Cả file ``.part``: worker chết giữa lúc tải để lại một file tải dở mang tên đó.
+        for leftover in (job["file_path"], f"{job['file_path']}.part") if job["file_path"] else ():
+            try:
+                if os.path.exists(leftover):
+                    os.remove(leftover)
+            except Exception as e:
+                SQLBotLogUtil.warning(f"cannot remove temp file of dead job {job['id']}: {e}")
     return len(victims)
 
 

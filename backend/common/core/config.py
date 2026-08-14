@@ -235,6 +235,31 @@ class Settings(BaseSettings):
     # xác thực, nên mặc định rỗng; giữ lại biến để sau này họ đổi ý thì không phải sửa code.
     AI_CALLBACK_AUTH_HEADER: str = ''
 
+    # --- Tải file nguồn từ presigned URL (thay cho việc hệ ngoài đẩy bytes lên bằng multipart) ---
+    # Danh sách host được phép tải về, ngăn cách bằng dấu phẩy, có thể kèm cổng. RỖNG LÀ CẤM TẤT
+    # CẢ: đây là lớp chống SSRF — server tự đi gọi một URL do client đưa, từ bên trong mạng nội bộ
+    # — nên nó phải hỏng theo hướng đóng. Mặc định mở là lớp bảo vệ coi như không tồn tại.
+    EXCEL_DOWNLOAD_ALLOWED_HOSTS: str = ''
+    # Trần dung lượng file tải về. Ép ở HAI chỗ: dung lượng nguồn khai lúc thăm dò, và số byte đếm
+    # được trong lúc stream — lời khai của nguồn không phải sự thật.
+    EXCEL_DOWNLOAD_MAX_MB: int = 100
+    EXCEL_DOWNLOAD_CONNECT_TIMEOUT: int = 5
+    # Timeout cho MỖI lần đọc, không phải cho cả lượt tải.
+    EXCEL_DOWNLOAD_READ_TIMEOUT: int = 30
+    # Trần tổng thời gian một lượt tải. Bắt buộc phải có riêng: timeout đọc chỉ bắt được kết nối
+    # đứng im, nó bất lực trước nguồn nhỏ giọt đều đặn vài byte mỗi giây — thứ giữ một worker vô hạn.
+    EXCEL_DOWNLOAD_TOTAL_TIMEOUT: int = 1800
+    # Số lần tải LẠI khi hỏng. Chỉ áp dụng cho lỗi mạng và 5xx; 4xx không bao giờ thử lại vì chữ ký
+    # sai hay object không tồn tại thì thử bao nhiêu lần cũng vậy, chỉ đẩy job tới gần hạn ký hơn.
+    EXCEL_DOWNLOAD_RETRIES: int = 2
+    # Hạn ký còn lại tối thiểu để nhận URL. Job có thể nằm xếp hàng sau các worker đang bận rồi mới
+    # tới lượt tải, nên URL sắp hết hạn gần như chắc chắn hỏng ở worker — từ chối sớm còn hơn.
+    EXCEL_DOWNLOAD_MIN_TTL_SECONDS: int = 300
+    # Thăm dò 1 byte (GET kèm Range) ngay ở pha đồng bộ, để bắt sớm chữ ký sai, object không tồn
+    # tại và file vượt trần mà không phải truyền cả file. Tắt đi thì các lỗi đó lùi xuống callback.
+    EXCEL_DOWNLOAD_PROBE_ENABLED: bool = True
+    EXCEL_DOWNLOAD_PROBE_TIMEOUT: int = 3
+
     @field_validator('SQL_DEBUG',
                      'EMBEDDING_ENABLED',
                      'GENERATE_SQL_QUERY_LIMIT_ENABLED',
@@ -246,6 +271,7 @@ class Settings(BaseSettings):
                      'LLM_ANSWER_HISTORY_ENABLED',
                      'LLM_SQL_HISTORY_JSON_ONLY',
                      'GENERATE_CHART_ENABLED',
+                     'EXCEL_DOWNLOAD_PROBE_ENABLED',
                      mode='before')
     @classmethod
     def lowercase_bool(cls, v: Any) -> Any:

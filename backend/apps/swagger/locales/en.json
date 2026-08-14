@@ -34,6 +34,7 @@
   "ds_create_from_excel": "Create Datasource from Excel/CSV",
   "ds_create_from_excel_async": "Create Datasource from Excel/CSV (async, replies immediately)",
   "ds_excel_import_status": "Get Excel Import Status",
+  "ds_file_url": "Presigned URL of the source file (.xlsx/.xls/.csv)",
   "ds_name": "Datasource Name",
   "ds_sheet_names": "Sheet names, empty means all sheets",
   "ds_description": "Description",

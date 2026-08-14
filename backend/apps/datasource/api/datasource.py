@@ -33,10 +33,12 @@ from ..crud.field import get_fields_by_table_id
 from ..crud.table import get_tables_by_ds_id
 from ..models.datasource import CoreDatasource, CreateDatasource, TableObj, CoreTable, CoreField, FieldObj, \
     TableSchemaResponse, ColumnSchemaResponse, PreviewResponse, ImportRequest, SheetFields, FieldInfo, CreatedExcelTable, \
-    CreateFromExcelResponse, CreateFromExcelAcceptedResponse, DatasourceStatus, ExcelImportStatusResponse
+    CreateFromExcelResponse, CreateFromExcelAcceptedResponse, CreateFromExcelUrlRequest, DatasourceStatus, \
+    ExcelImportStatusResponse
 from ..task.excel_import_task import submit_import_job
-from ..utils.excel import parse_excel_preview, list_sheet_names
+from ..utils.excel import parse_excel_preview
 from ..utils.excel_import import ExcelImportError, import_sheets_to_db
+from ..utils.remote_file import probe_source, safe_stem, validate_source_url
 from ..utils.utils import normalize_configuration
 
 router = APIRouter(tags=["Datasource"], prefix="/datasource")
@@ -871,17 +873,14 @@ def _conflict_error(ds: CoreDatasource) -> HTTPException:
     })
 
 
-def _discard_temp_file(save_path: str) -> None:
-    """Xóa file tạm ở các nhánh lỗi của pha đồng bộ.
+def _bad_request(e: ExcelImportError) -> HTTPException:
+    """Dịch lỗi kiểm URL thành 400 mang theo ``code`` để hệ ngoài phân loại bằng máy.
 
-    Chỉ dùng TRƯỚC khi job được submit. Sau khi submit thì quyền sở hữu file đã chuyển sang worker
-    và chỉ worker được xóa; hai bên cùng xóa sinh ra lỗi khó truy.
+    Dùng lại đúng bộ mã của ``remote_file`` chứ không đặt bộ mã riêng cho HTTP: cùng một hỏng hóc
+    có thể lộ ra ở pha đồng bộ hoặc ở callback tùy thời điểm phát hiện, mà hai nơi trả hai tên khác
+    nhau cho cùng một chuyện thì phía đối tác phải viết hai nhánh xử lý.
     """
-    try:
-        if os.path.exists(save_path):
-            os.remove(save_path)
-    except Exception as e:
-        SQLBotLogUtil.warning(f"cannot remove temp excel file {save_path}: {e}")
+    return HTTPException(status_code=400, detail={"code": e.error_code, "message": e.message})
 
 
 @router.post(
@@ -899,83 +898,64 @@ def _discard_temp_file(save_path: str) -> None:
 async def create_from_excel_async(
     session: SessionDep,
     user: CurrentUser,
-    file: UploadFile = File(..., description=f"{PLACEHOLDER_PREFIX}ds_excel"),
-    name: str = Form(..., description=f"{PLACEHOLDER_PREFIX}ds_name"),
-    sheetNames: List[str] = Form([], description=f"{PLACEHOLDER_PREFIX}ds_sheet_names"),
-    description: str = Form('', description=f"{PLACEHOLDER_PREFIX}ds_description")
+    req: CreateFromExcelUrlRequest,
 ):
     """
-    Tạo nguồn dữ liệu từ file Excel/CSV, TRẢ NGAY và nạp dữ liệu ở nền — quyền ws_admin.
+    Tạo nguồn dữ liệu từ file Excel/CSV ở object storage, TRẢ NGAY và nạp ở nền — quyền ws_admin.
 
-    Bản bất đồng bộ của /createFromExcel. Trả 202 kèm ``dsId`` ngay sau khi nhận file; việc đọc file,
-    tạo bảng và đồng bộ metadata chạy ở thread nền, kết quả báo về bằng một callback HTTP.
+    Bản bất đồng bộ của /createFromExcel. Nhận một URL ký sẵn (presigned) trỏ tới file thay vì nhận
+    bytes: việc tải file, đọc file, tạo bảng và đồng bộ metadata đều chạy ở thread nền, kết quả báo
+    về bằng một callback HTTP. Trả 202 kèm ``dsId`` ngay.
 
     Nguồn dữ liệu tồn tại ngay từ lúc trả 202 nhưng ở trạng thái ``Importing`` nên chưa vào hỏi đáp
     được; nó chuyển sang ``Success`` hoặc ``Failed`` khi worker xong.
 
-    Nguyên tắc chia việc giữa hai pha: mọi thứ CLIENT CÓ THỂ GÕ SAI đều phải hỏng ở pha đồng bộ —
-    đuôi file, tên trùng, tên sheet không tồn tại — vì lỗi ở pha nền chỉ về được bằng callback, tức
-    là chậm hơn và kèm theo một nguồn dữ liệu rác phải dọn. Pha nền chỉ còn lại những lỗi mà không
-    ai đoán trước được: file hỏng, hết đĩa, DB chết.
-    """
-    ALLOWED_EXTENSIONS = (".xlsx", ".xls", ".csv")
-    if not file.filename or not file.filename.lower().endswith(ALLOWED_EXTENSIONS):
-        raise HTTPException(400, "Only support .xlsx/.xls/.csv")
+    Ranh giới giữa hai pha đã DỊCH so với bản multipart, và đây là điều dễ hiểu nhầm nhất ở endpoint
+    này. Trước kia pha đồng bộ cầm sẵn file nên đối chiếu được tên sheet; nay nó chưa có file, nên
+    chỉ giữ lại được những phép kiểm suy ra từ chính chuỗi URL (scheme, host trong allowlist, đuôi
+    file, hạn chữ ký) cộng một phép thăm dò một byte. Tên sheet gõ sai vì thế về bằng callback thất
+    bại chứ không còn là 400.
 
-    name = (name or '').strip()
+    Phép thăm dò chỉ chặn khi nguồn trả lời DỨT KHOÁT — 403/404 hoặc dung lượng vượt trần. Timeout
+    hay 5xx thì vẫn nhận việc: chặn ở đó là kéo đúng cái rủi ro truyền tải chậm trở lại pha đồng bộ,
+    thứ mà cả thiết kế này sinh ra để tránh.
+    """
+    name = (req.name or '').strip()
     if not name:
         raise HTTPException(400, "Datasource name is required")
 
-    # Vòng kiểm tra trùng tên SỚM, chưa cần khóa: chặn ở đây thì không phải ghi file lên đĩa rồi xóa
-    # đi. Vẫn phải kiểm lại lần nữa dưới khóa vì giữa hai thời điểm này có thể chen request khác.
+    # Kiểm URL bằng những gì đọc được từ chính chuỗi, không chạm mạng. Làm trước cả việc tra tên
+    # trùng vì nó rẻ hơn một câu SELECT.
+    try:
+        src = validate_source_url(req.fileUrl)
+    except ExcelImportError as e:
+        raise _bad_request(e)
+
+    # Vòng kiểm tra trùng tên SỚM, chưa cần khóa: chặn ở đây thì không phải đi hỏi object storage.
+    # Vẫn phải kiểm lại lần nữa dưới khóa vì giữa hai thời điểm này có thể chen request khác.
     existing = find_conflicting_ds(session, user.oid, name)
     if existing is not None:
         raise _conflict_error(existing)
 
+    if settings.EXCEL_DOWNLOAD_PROBE_ENABLED:
+        try:
+            # ``to_thread`` bắt buộc: probe là lời gọi mạng ĐỒNG BỘ, chạy thẳng trong ``async def``
+            # là chặn cả event loop của tiến trình trong suốt thời gian chờ.
+            await asyncio.to_thread(probe_source, src)
+        except ExcelImportError as e:
+            raise _bad_request(e)
+
+    # Đặt TRƯỚC tên file mà worker sẽ ghi vào. Pha này không tạo ra file nào; cái tên chỉ là chỗ hẹn
+    # giữa hai bên. Phần gốc lấy từ object key đã khử ký tự lái đường dẫn, chỉ để đọc log cho dễ —
+    # định danh thật nằm ở chuỗi băm ngẫu nhiên.
     os.makedirs(path, exist_ok=True)
-    suffix = file.filename.rsplit('.', 1)[-1]
-    stem = file.filename.rsplit('.', 1)[0].split('/')[-1]
-    filename = f"{stem}_{hashlib.sha256(uuid.uuid4().bytes).hexdigest()[:10]}.{suffix}"
+    filename = f"{safe_stem(src.object_key)}_{hashlib.sha256(uuid.uuid4().bytes).hexdigest()[:10]}.{src.extension}"
     save_path = os.path.join(path, filename)
 
-    # Ghi theo từng khối thay vì ``await file.read()`` một phát: bản đọc cả file dựng nguyên nội
-    # dung trong RAM, nên vài request file lớn cùng lúc là đủ giết tiến trình. Ở luồng bất đồng bộ
-    # điều đó càng nguy vì file lớn chính là lý do luồng này tồn tại.
+    # Một transaction duy nhất: khóa → kiểm lại → dòng nguồn dữ liệu → dòng job. Hai dòng phải
+    # cùng sinh ra hoặc cùng không: có nguồn dữ liệu mà không có job là một dòng Importing vĩnh
+    # viễn không ai nhặt; có job mà không có nguồn dữ liệu là worker chạy vào hư không.
     try:
-        with open(save_path, "wb") as f:
-            while True:
-                chunk = await file.read(1024 * 1024)
-                if not chunk:
-                    break
-                f.write(chunk)
-    except Exception as e:
-        _discard_temp_file(save_path)
-        raise HTTPException(500, f"Cannot store uploaded file: {e}")
-
-    try:
-        # Chỉ đọc mục lục sheet, không đọc ô dữ liệu — rẻ gần như không phụ thuộc kích thước file.
-        try:
-            available = await asyncio.to_thread(list_sheet_names, save_path)
-        except Exception as e:
-            raise HTTPException(400, f"Cannot read workbook: {e}")
-
-        if file.filename.lower().endswith('.csv') or not sheetNames:
-            wanted = available
-        else:
-            missing = [s for s in dict.fromkeys(sheetNames) if s not in available]
-            if missing:
-                raise HTTPException(
-                    400,
-                    f"Sheet not found: {', '.join(missing)}. Available: {', '.join(available)}"
-                )
-            wanted = [s for s in available if s in set(sheetNames)]
-
-        if not wanted:
-            raise HTTPException(400, "Workbook has no sheet to import")
-
-        # Một transaction duy nhất: khóa → kiểm lại → dòng nguồn dữ liệu → dòng job. Hai dòng phải
-        # cùng sinh ra hoặc cùng không: có nguồn dữ liệu mà không có job là một dòng Importing vĩnh
-        # viễn không ai nhặt; có job mà không có nguồn dữ liệu là worker chạy vào hư không.
         session.rollback()  # đóng transaction ngầm do các câu SELECT ở trên mở, để khóa giữ đúng phạm vi
 
         # Chờ khóa bằng cách thử-rồi-ngủ, KHÔNG dùng bản chờ sẵn của Postgres: câu lệnh chờ là lời
@@ -998,18 +978,19 @@ async def create_from_excel_async(
             session.rollback()
             raise _conflict_error(existing)
 
-        ds = await create_ds_importing(session, user, name, description)
+        ds = await create_ds_importing(session, user, name, req.description)
+        # Danh sách sheet ghi xuống NGUYÊN VĂN, chưa đối chiếu: pha này không có file để đối chiếu.
         job = create_job(session, ds_id=ds.id, oid=ds.oid, create_by=user.id, ds_name=ds.name,
-                         file_path=save_path, sheet_names=wanted)
+                         file_path=save_path, sheet_names=list(dict.fromkeys(req.sheetNames or [])),
+                         file_url=src.url)
         ds_id, ds_name, job_id = ds.id, ds.name, job.id
         session.commit()
     except Exception:
         session.rollback()
-        _discard_temp_file(save_path)
         raise
 
     # submit SAU commit, không bao giờ trước: worker mở session riêng, ở mức READ COMMITTED nó sẽ
-    # không thấy dòng job của một transaction chưa chốt. Kể từ dòng này file tạm thuộc về worker.
+    # không thấy dòng job của một transaction chưa chốt.
     submit_import_job(job_id)
 
     return CreateFromExcelAcceptedResponse(dsId=ds_id, name=ds_name, status=DatasourceStatus.IMPORTING)

@@ -34,6 +34,7 @@
   "ds_create_from_excel": "从Excel/CSV创建数据源",
   "ds_create_from_excel_async": "从Excel/CSV创建数据源（异步，立即返回）",
   "ds_excel_import_status": "查询Excel导入状态",
+  "ds_file_url": "源文件的预签名URL（.xlsx/.xls/.csv）",
   "ds_name": "数据源名称",
   "ds_sheet_names": "工作表名称，留空表示全部",
   "ds_description": "描述",

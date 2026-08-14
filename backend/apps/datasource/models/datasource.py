@@ -6,6 +6,8 @@ from sqlalchemy import Column, Text, BigInteger, DateTime, Identity
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlmodel import SQLModel, Field
 
+from apps.swagger.i18n import PLACEHOLDER_PREFIX
+
 
 class DatasourceStatus:
     """Tập giá trị của cột ``core_datasource.status``.
@@ -266,6 +268,28 @@ class CreateFromExcelResponse(BaseModel):
     dsId: int
     name: str
     tables: List[CreatedExcelTable]
+
+
+class CreateFromExcelUrlRequest(BaseModel):
+    """Body của luồng import bất đồng bộ: hệ ngoài đưa ĐƯỜNG DẪN tới file, không đưa bytes.
+
+    Vì sao không còn multipart: file nguồn nằm ở object storage của hệ ngoài, đẩy bytes qua đường
+    HTTP giữa hai bên là khoảng thời gian dài nhất và dễ đứt nhất của cả luồng — mà nó lại nằm
+    trong pha đồng bộ, nơi client đang giữ kết nối chờ. Chuyển sang URL ký sẵn thì pha đồng bộ chỉ
+    còn vài phép kiểm chuỗi, còn việc tải nằm ở worker nền, nơi chậm bao lâu cũng không ai chờ.
+
+    ``fileUrl`` là URL ký sẵn (presigned) — tức là một CREDENTIAL có hạn. Nó bị ghi xuống DB để
+    worker dùng lại, nên tuyệt đối không đưa nguyên văn vào log hay vào thông điệp lỗi.
+
+    ``sheetNames`` để trống nghĩa là lấy toàn bộ sheet. Khác bản multipart ở một điểm quan trọng:
+    tên sheet KHÔNG còn được đối chiếu ở pha đồng bộ (lúc đó chưa có file trong tay), nên gõ sai
+    tên sheet giờ về bằng callback thất bại chứ không phải 400.
+    """
+
+    fileUrl: str = Field(..., description=f"{PLACEHOLDER_PREFIX}ds_file_url")
+    name: str = Field(..., description=f"{PLACEHOLDER_PREFIX}ds_name")
+    sheetNames: List[str] = Field(default_factory=list, description=f"{PLACEHOLDER_PREFIX}ds_sheet_names")
+    description: str = Field('', description=f"{PLACEHOLDER_PREFIX}ds_description")
 
 
 class CreateFromExcelAcceptedResponse(BaseModel):

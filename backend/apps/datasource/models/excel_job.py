@@ -88,7 +88,20 @@ class ExcelImportJob(SQLModel, table=True):
     create_by: int = Field(sa_column=Column(BigInteger, nullable=True))
 
     # --- Đầu vào của worker. Worker không thấy biến trong RAM của request nên phải chép xuống đây.
+    # Nơi file NẰM hoặc SẼ NẰM. Từ khi bytes tới bằng đường tải từ presigned URL, pha đồng bộ chỉ
+    # đặt trước cái tên còn worker mới là bên ghi ra file — nên trong khoảng giữa hai việc đó, cột
+    # này trỏ tới một file chưa tồn tại. Đặt tên sẵn thay vì để rỗng là cố ý: giữ được ràng buộc
+    # NOT NULL, và mọi chỗ đang đọc cột này (nhất là nhánh dọn file của job chết trong
+    # ``excel_recovery``) không phải rải thêm phép kiểm rỗng.
     file_path: str = Field(sa_column=Column(Text, nullable=False))
+    # URL nguồn do hệ ngoài cung cấp. NULL nghĩa là job cũ theo đường multipart — nhánh đó vẫn phải
+    # chạy được, vì lúc deploy có thể còn job đang ``pending`` tạo từ bản trước.
+    #
+    # CẢNH BÁO: với presigned URL thì chuỗi này CHÍNH LÀ một credential có hạn. Không bao giờ log
+    # nguyên văn; dùng phần host cộng object key (xem ``remote_file.RemoteSource.safe_label``).
+    file_url: str | None = Field(default=None, sa_column=Column(Text, nullable=True))
+    # Nguyên văn danh sách sheet client gửi, CHƯA đối chiếu với file — pha đồng bộ không còn cầm
+    # file nên không kiểm được nữa. Việc đối chiếu là của worker, sau khi tải xong.
     sheet_names: list[str] = Field(default_factory=list, sa_column=Column(JSONB, nullable=False))
     ds_name: str = Field(sa_column=Column(String(128), nullable=False))
 
