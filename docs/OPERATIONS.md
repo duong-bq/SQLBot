@@ -77,7 +77,19 @@ dụng thật**, không theo thứ tự trong file.
 | `LLM_ANSWER_FALLBACK_ROUNDS` | `3` | Số lượt hỏi-đáp cũ đưa vào prompt fallback |
 | `LLM_ANSWER_FALLBACK_ROWS` | `20` | Số dòng dữ liệu tối đa của **mỗi** lượt cũ trong prompt fallback |
 
-### 2.2. Lịch sử hội thoại
+### 2.2. Pha sinh biểu đồ
+
+| Biến | Mặc định | Tác dụng |
+|---|---|---|
+| `GENERATE_CHART_ENABLED` | `True` | Chạy pha sinh biểu đồ sau pha answer trên `POST /chat/question`. Thực chất là chọn `finish_step` mặc định của endpoint đó: `True` → `GENERATE_CHART`, `False` → `GENERATE_ANSWER` |
+
+Cái giá khi bật: thêm **một** lượt gọi LLM cho mỗi câu hỏi (2 → 3). Lượt này chạy song song với pha
+answer nên độ trễ tới `finish` tăng ít hơn nhiều so với chi phí token.
+
+Không đụng tới nhánh MCP (tự truyền `QUERY_DATA`) lẫn nhánh hạ cấp — không có dữ liệu thì biểu đồ vô
+nghĩa, `run_task` bỏ qua bất kể biến này.
+
+### 2.3. Lịch sử hội thoại
 
 | Biến | Mặc định | Tác dụng |
 |---|---|---|
@@ -88,7 +100,7 @@ dụng thật**, không theo thứ tự trong file.
 | `LLM_ANSWER_HISTORY_ENABLED` | `True` | Đưa lịch sử vào cả nhánh answer **bình thường**, không chỉ fallback |
 | `LLM_ANSWER_HISTORY_ROUNDS` / `_ROWS` | `3` / `20` | Ngân sách lịch sử cho nhánh answer thường (tách riêng khỏi `FALLBACK_*` để A/B được) |
 
-### 2.3. Thinking
+### 2.4. Thinking
 
 | Biến | Mặc định | Tác dụng |
 |---|---|---|
@@ -96,7 +108,7 @@ dụng thật**, không theo thứ tự trong file.
 | `LLM_DISABLE_THINKING_EXTRA_BODY` | `{"chat_template_kwargs": {"enable_thinking": false}}` | Payload tiêm vào `extra_body`. Chuẩn vLLM/SGLang. API kiểu DashScope cần `{"enable_thinking": false}` — **đổi biến này, đừng sửa code** |
 | `PARSE_REASONING_BLOCK_ENABLED` | `True` | Tách khối `<think>…</think>` khỏi `content` |
 
-### 2.4. Embedding và top-K
+### 2.5. Embedding và top-K
 
 | Biến | Mặc định | Tác dụng |
 |---|---|---|
@@ -111,14 +123,14 @@ dụng thật**, không theo thứ tự trong file.
 **Đổi model embedding thì phải re-embed toàn bộ** (`scripts/eval_text2sql/21_reembed.py`), nếu không
 vector cũ và mới không cùng không gian.
 
-### 2.5. Giới hạn dòng
+### 2.6. Giới hạn dòng
 
 | Nơi | Giá trị | Ghi chú |
 |---|---|---|
 | `GENERATE_SQL_QUERY_LIMIT_ENABLED` | `True` | Ép LLM thêm `LIMIT` vào SQL |
 | `ANSWER_MAX_ROWS` (**hằng số trong code**, [llm.py:74](../backend/apps/chat/task/llm.py#L74)) | `100` | Trần số dòng nhồi vào prompt answer. Sửa thì **bắt buộc** giữ nguyên cặp với `build_data_scope_note` |
 
-### 2.6. Bảo mật và mạng
+### 2.7. Bảo mật và mạng
 
 | Biến | Mặc định | Tác dụng |
 |---|---|---|
@@ -129,7 +141,7 @@ vector cũ và mới không cùng không gian.
 | `BACKEND_CORS_ORIGINS` | `[]` | Danh sách origin, ngăn bằng dấu phẩy. Starlette so khớp **chuỗi chính xác** — khác scheme/host/port là bị chặn, không có wildcard theo domain |
 | `SQLBOT_DOC_ENABLED` | `True` | Bật `/docs` và `/openapi.json` |
 
-### 2.7. Nạp Excel bất đồng bộ và callback
+### 2.8. Nạp Excel bất đồng bộ và callback
 
 Chỉ ảnh hưởng `POST /datasource/createFromExcelAsync` và ba vòng nền đi kèm (worker nạp, vòng gửi
 callback, vòng quét phục hồi) — xem [BACKEND_ARCHITECTURE.md §5](BACKEND_ARCHITECTURE.md).
@@ -157,7 +169,7 @@ cần bắn lại tay, và không lần thử nào bị đốt trong lúc URL c�
 
 Chỉ `AI_CALLBACK_URL` là bắt buộc; các biến còn lại có mặc định dùng được ngay.
 
-### 2.8. Khác
+### 2.9. Khác
 
 `CACHE_TYPE` (`memory`/`redis`/`None`), `CACHE_REDIS_URL`, `LOG_LEVEL`, `LOG_DIR`, `SQL_DEBUG`,
 `PG_POOL_SIZE`/`PG_MAX_OVERFLOW`/`PG_POOL_RECYCLE`/`PG_POOL_PRE_PING` (pool của **DB metadata**),
@@ -335,7 +347,7 @@ GET /api/v1/chat/record/{record_id}/log      # toàn bộ bước xử lý
 GET /api/v1/chat/record/{record_id}/usage    # chỉ token usage
 ```
 
-([chat.py:194](../backend/apps/chat/api/chat.py#L194) và [chat.py:212](../backend/apps/chat/api/chat.py#L212))
+([chat.py:195](../backend/apps/chat/api/chat.py#L195) và [chat.py:213](../backend/apps/chat/api/chat.py#L213))
 
 ### Đọc thẳng bảng `chat_log`
 
@@ -422,6 +434,9 @@ kỳ tài liệu, log hay issue nào; nếu cần xoay vòng mật khẩu thì p
 | Không có license xpack thì các nhánh custom prompt **im lặng không chạy**, không báo lỗi | |
 | Một lượt có thể phát **nhiều** event `info: sql generated` | Retry cố ý không phát event riêng |
 | Event `sql` và `sql-data` **có thể không xuất hiện** | Lượt hạ cấp không có SQL. Client không được coi chúng là bắt buộc |
+| Số liệu nằm ở trường `data` của `sql-data`, **không** phải `content` | `content` vẫn là chuỗi `"execute-success"` — giữ nguyên để client cũ không vỡ |
+| Dựng payload `sql-data` **trước** `save_sql_data` → client nhận nhiều dòng hơn bản lưu DB | Bước lưu mới là chỗ cắt xuống 1000 dòng và gắn `limit`. Xem `build_sql_data_payload` |
+| Pha biểu đồ hỏng **không** giết lượt hỏi | Phát `info: chart failed` rồi đi tiếp; vẫn có `answer` + `finish`. Cố ý không gọi `save_error` vì web UI hiện khối lỗi đỏ với mọi record có `error` khác rỗng |
 | Lỗi giữa stream vẫn là **HTTP 200** | Phải đọc event `error`, không dựa vào status code |
 | Cắt dòng dữ liệu mà không kèm `build_data_scope_note` → LLM bịa số tổng | Xem [TEXT2SQL_PIPELINE.md §6](TEXT2SQL_PIPELINE.md) |
 | Không có cơ chế hủy | `AbortController` phía client chỉ ngắt kết nối; backend vẫn chạy tới hết và vẫn tính token |

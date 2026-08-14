@@ -4,7 +4,7 @@ Demo endpoint chat THƯỜNG: POST /api/v1/chat/question
 Đặc điểm cần thấy ở output:
   - Xác thực bằng header X-SQLBOT-TOKEN (middleware xử lý), body chỉ có chat_id + question.
   - Response luôn là SSE (text/event-stream), mỗi event là JSON có trường "type"
-    (id / question / datasource / sql-result / sql / sql-data / chart-result / chart / finish).
+    (id / question / datasource / sql-result / sql / sql-data / answer-result / chart / finish).
   - Không có JSON tổng hợp cuối cùng: client phải tự ráp các mảnh theo "type".
 
 Ghi ra:
@@ -59,9 +59,9 @@ def ask_standard(token: str, chat_id: int, question: str) -> list[str]:
 def group_events(events: list[dict]) -> list[tuple[str, int, str]]:
     """Gộp các event LIÊN TIẾP cùng type thành (type, số lượng, mẫu nội dung).
 
-    Cần gộp vì các pha sinh SQL/chart stream theo từng token: một lượt hỏi đẻ ra hàng nghìn event
-    'sql-result'/'chart-result' giống hệt nhau về cấu trúc, in hết ra thì trôi mất các mốc thật sự
-    đáng nhìn (id / question / sql / sql-data / chart / finish).
+    Cần gộp vì pha sinh SQL và pha trả lời stream theo từng token: một lượt hỏi đẻ ra hàng nghìn
+    event 'sql-result'/'answer-result' giống hệt nhau về cấu trúc, in hết ra thì trôi mất các mốc
+    thật sự đáng nhìn (id / question / sql / sql-data / chart / finish).
     """
     grouped: list[tuple[str, int, str]] = []
     for ev in events:

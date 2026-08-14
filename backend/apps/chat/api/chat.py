@@ -22,6 +22,7 @@ from apps.swagger.i18n import PLACEHOLDER_PREFIX
 from apps.system.schemas.permission import SqlbotPermission, require_permissions
 from common.audit.models.log_model import OperationType, OperationModules
 from common.audit.schemas.logger_decorator import LogConfig, system_log
+from common.core.config import settings
 from common.core.deps import CurrentAssistant, SessionDep, CurrentUser, Trans
 from common.utils.command_utils import parse_quick_command
 from common.utils.data_format import DataFormat
@@ -458,6 +459,22 @@ async def resolve_chat_for_question(
     )
 
 
+def default_finish_step() -> ChatFinishStep:
+    """Điểm dừng mặc định của ``POST /chat/question``, quyết định bởi ``GENERATE_CHART_ENABLED``.
+
+    Đọc setting trong thân hàm chứ không đặt làm giá trị mặc định của tham số: giá trị mặc định
+    được Python chốt lại một lần lúc import module, nên test nào monkeypatch ``settings`` sẽ không
+    có tác dụng và biến sẽ trở thành thứ chỉ đổi được bằng cách sửa code.
+
+    Chỉ chi phối endpoint này. Nhánh MCP tự truyền ``QUERY_DATA`` và không đi qua đây.
+    """
+    return (
+        ChatFinishStep.GENERATE_CHART
+        if settings.GENERATE_CHART_ENABLED
+        else ChatFinishStep.GENERATE_ANSWER
+    )
+
+
 @router.post("/question", summary=f"{PLACEHOLDER_PREFIX}ask_question")
 @require_permissions(
     permission=SqlbotPermission(type="chat", keyExpression="resolved_chat_id")
@@ -479,13 +496,20 @@ async def question_answer(
     Toàn bộ pipeline Text-to-SQL nằm trong ``LLMService.run_task`` (apps/chat/task/llm.py).
     Hỗ trợ quick command trong câu hỏi (regenerate / analysis / predict) — xem ``question_answer_inner``.
 
-    Pipeline dừng ở pha sinh câu trả lời bằng lời; pha sinh biểu đồ đã tắt trên toàn hệ thống.
+    Điểm dừng của pipeline do ``settings.GENERATE_CHART_ENABLED`` quyết định — xem
+    ``default_finish_step``. Bật (mặc định) thì có thêm pha sinh biểu đồ chạy song song với pha
+    answer; tắt thì dừng ngay sau câu trả lời bằng lời.
     """
     question = ChatQuestion(
         chat_id=resolved_chat_id, question=request_question.question
     )
     return await question_answer_inner(
-        session, current_user, question, current_assistant, embedding=True
+        session,
+        current_user,
+        question,
+        current_assistant,
+        finish_step=default_finish_step(),
+        embedding=True,
     )
 
 

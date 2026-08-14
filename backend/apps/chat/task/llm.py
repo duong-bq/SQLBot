@@ -1482,6 +1482,30 @@ class LLMService:
         except Exception as e:
             raise e
 
+    @staticmethod
+    def build_sql_data_payload(data_obj: Dict[str, Any]) -> Dict[str, Any]:
+        """Gọt khối kết quả SQL thành phần chở được trên event ``sql-data``.
+
+        Phải gọi SAU ``save_sql_data``: hàm đó sửa ``data_obj`` tại chỗ — cắt bớt dòng vượt trần
+        1000 và gắn khóa ``limit``. Gọi trước thì client nhận nhiều dòng hơn bản lưu trong
+        database, hai nguồn cùng một lượt hỏi lại nói khác nhau.
+
+        Bỏ hai khóa có trong bản lưu: ``sql`` (bản mã base64 của chính câu SQL đã phát ở event
+        ``sql``) và ``datasource`` (đã có event riêng). Chở lại chỉ tốn băng thông, mà đây là
+        event nặng nhất của cả lượt hỏi.
+
+        ``limit`` chỉ xuất hiện khi kết quả bị cắt, nên client thấy khóa này là biết dữ liệu
+        chưa đủ — vắng mặt nghĩa là trọn vẹn.
+        """
+        payload: Dict[str, Any] = {
+            'fields': data_obj.get('fields') or [],
+            'fields_info': data_obj.get('fields_info') or [],
+            'data': data_obj.get('data') or [],
+        }
+        if data_obj.get('limit'):
+            payload['limit'] = data_obj.get('limit')
+        return payload
+
     def finish(self, session: Session):
         return finish_record(session=session, record_id=self.record.id)
 
@@ -1748,8 +1772,17 @@ class LLMService:
 
                     self.save_sql_data(session=_session, data_obj=result)
                     if in_chat:
+                        # Chở luôn kết quả SQL trong `data` thay vì bắt client gọi thêm
+                        # `GET /chat/record/{id}/data`. Giữ nguyên `content` là chuỗi
+                        # 'execute-success' như hợp đồng cũ: client cũ chỉ đọc `type` nên không
+                        # vỡ, client mới thấy có `data` thì dùng thẳng.
+                        #
+                        # Phát ở đây là chỗ sớm nhất có thể, và cũng là lúc rẻ nhất: pha sinh
+                        # câu trả lời chưa khởi động nên đường truyền đang rỗng, khối dữ liệu
+                        # đi qua mà không chen ngang token nào.
                         yield 'data:' + orjson.dumps(
-                            {'content': 'execute-success', 'type': 'sql-data'}).decode() + '\n\n'
+                            {'content': 'execute-success', 'type': 'sql-data',
+                             'data': self.build_sql_data_payload(result)}).decode() + '\n\n'
                     if not stream:
                         json_result['data'] = get_chat_chart_data(_session, self.record.id)
                 except (SingleMessageError, SQLBotDBError, ParseSQLResultError, SQLBotDBConnectionError) as e:
@@ -1805,8 +1838,8 @@ class LLMService:
 
             # Sinh câu trả lời chữ SONG SONG với pha sinh chart: answer chỉ cần fields/data (đã có
             # ngay sau khi chạy SQL) nên không phải chờ chart, và chart cũng không phải chờ answer.
-            # Hai luồng event xen kẽ nhau trên cùng một stream — client phân biệt được vì mỗi event
-            # đã mang sẵn 'type' riêng (answer-result vs chart-result).
+            # Chỉ answer phát event token; chart về trọn gói một event ở cuối pha, nên trên dây chỉ
+            # thấy dòng `answer-result` bị chen ngang đúng hai event mốc của chart.
             # Hiện chỉ bật cho nhánh in_chat (SSE của UI); nhánh MCP (markdown / JSON tổng hợp) chưa
             # dùng tới nên chưa nối vào, tránh đổi hành vi của client MCP đang chạy.
             answer_queue: Optional[queue.Queue] = None
@@ -1837,39 +1870,61 @@ class LLMService:
                 return
 
             # generate chart
-            used_tables_schema, used_tables = self.out_ds_instance.get_db_schema(
-                self.ds.id, self.chat_question.question, embedding=False,
-                table_list=tables) if self.out_ds_instance else get_table_schema(
-                session=_session,
-                current_user=self.current_user,
-                ds=self.ds,
-                question=self.chat_question.question,
-                embedding=False, table_list=tables)
-            SQLBotLogUtil.info('used_tables_schema: \n' + used_tables_schema)
-            chart_res = self.generate_chart(_session, chart_type, used_tables_schema)
-            full_chart_text = ''
-            for chunk in chart_res:
-                full_chart_text += chunk.get('content')
-                if in_chat:
-                    yield 'data:' + orjson.dumps(
-                        {'content': chunk.get('content'), 'reasoning_content': chunk.get('reasoning_content'),
-                         'type': 'chart-result'}).decode() + '\n\n'
-                    # Vét không chặn: answer chảy ra cùng nhịp với chart thay vì dồn cục ở cuối.
-                    yield from self.drain_answer_queue(answer_queue, answer_state, block=False)
-            if in_chat:
-                yield 'data:' + orjson.dumps({'type': 'info', 'msg': 'chart generated'}).decode() + '\n\n'
+            #
+            # Cấu hình biểu đồ KHÔNG phát ra client theo từng token như `answer`. Lý do: answer là
+            # văn xuôi nên hiện dần vẫn có nghĩa, còn cái này là MỘT khối JSON — mảnh dở dang không
+            # parse được, client chẳng làm được gì với nó cho tới lúc nhận đủ. Vẫn lặp qua từng
+            # chunk vì vòng lặp này là chỗ vét queue answer xen giữa, giữ cho câu trả lời chảy đều
+            # trong lúc chờ pha biểu đồ thay vì dồn cục ở cuối.
+            chart: Optional[Dict[str, Any]] = None
+            chart_failed = False
+            try:
+                used_tables_schema, used_tables = self.out_ds_instance.get_db_schema(
+                    self.ds.id, self.chat_question.question, embedding=False,
+                    table_list=tables) if self.out_ds_instance else get_table_schema(
+                    session=_session,
+                    current_user=self.current_user,
+                    ds=self.ds,
+                    question=self.chat_question.question,
+                    embedding=False, table_list=tables)
+                SQLBotLogUtil.info('used_tables_schema: \n' + used_tables_schema)
+                chart_res = self.generate_chart(_session, chart_type, used_tables_schema)
+                full_chart_text = ''
+                for chunk in chart_res:
+                    full_chart_text += chunk.get('content')
+                    if in_chat:
+                        # Vét không chặn: answer chảy ra cùng nhịp với chart.
+                        yield from self.drain_answer_queue(answer_queue, answer_state, block=False)
 
-            # filter chart
-            SQLBotLogUtil.info(full_chart_text)
-            chart = self.check_save_chart(session=_session, res=full_chart_text)
-            SQLBotLogUtil.info(chart)
+                # filter chart
+                SQLBotLogUtil.info(full_chart_text)
+                chart = self.check_save_chart(session=_session, res=full_chart_text)
+                SQLBotLogUtil.info(chart)
+            except Exception as e:
+                # Pha biểu đồ hỏng KHÔNG được giết cả lượt hỏi. SQL đã chạy xong, câu trả lời chữ —
+                # thứ client thực sự tiêu thụ — có thể đã sinh xong và đang nằm chờ trong queue; ném
+                # tiếp ra ngoài ở đây là mất cả `answer` lẫn `finish` chỉ vì một pha phụ. Xử lý y hệt
+                # pha answer: báo bằng event `info` rồi đi tiếp, và KHÔNG gọi save_error vì web UI
+                # hiện khối lỗi đỏ với mọi record có `chat_record.error` khác rỗng.
+                #
+                # Nhánh ngoài app (MCP) vẫn ném như cũ: ở đó biểu đồ là sản phẩm chính chứ không
+                # phải pha phụ, và hợp đồng cũ của nó không có khái niệm "biểu đồ hỏng nhưng vẫn ok".
+                if not in_chat:
+                    raise
+                chart_failed = True
+                traceback.print_exc()
+                SQLBotLogUtil.warning(f'Generate chart failed, keeping the answer: {e}')
 
             if not stream:
                 json_result['chart'] = chart
 
             if in_chat:
-                yield 'data:' + orjson.dumps(
-                    {'content': orjson.dumps(chart).decode(), 'type': 'chart'}).decode() + '\n\n'
+                if chart_failed:
+                    yield 'data:' + orjson.dumps({'type': 'info', 'msg': 'chart failed'}).decode() + '\n\n'
+                else:
+                    yield 'data:' + orjson.dumps({'type': 'info', 'msg': 'chart generated'}).decode() + '\n\n'
+                    yield 'data:' + orjson.dumps(
+                        {'content': orjson.dumps(chart).decode(), 'type': 'chart'}).decode() + '\n\n'
             else:
                 if stream:
                     md_data, _fields_list = DataFormat.convert_data_fields_for_pandas(chart, result.get('fields'),

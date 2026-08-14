@@ -101,7 +101,8 @@ Chat (chat_id="7fa1a92e-…-1210897903e2", client tự sinh) ─┘
    └───────────────────────────────────────────────────
 ```
 
-Chỉ có vậy. Không cần gọi API tạo hội thoại, không cần gọi API lấy số liệu.
+Chỉ ba lời gọi, và không cần gọi API tạo hội thoại. Mọi thứ của một lượt hỏi — câu SQL, số liệu,
+câu trả lời bằng lời, cấu hình biểu đồ — đều về trên cùng một stream ở bước 3.
 
 ---
 
@@ -326,16 +327,26 @@ event `answer`. SQL vẫn dùng được bình thường.
 | `id` | `{type, id}` | **Record ID** — lưu lại để tra log |
 | `question` | `{type, question}` | Câu hỏi đã chuẩn hóa |
 | `sql-result` | `{type, content, reasoning_content}` | Đang sinh SQL, từng token |
-| `info` | `{type, msg: "sql generated"}` | Kết thúc **một lượt** sinh SQL — có thể xuất hiện nhiều lần, xem [§6.7](#67-sql-hỏng-không-phải-lúc-nào-cũng-thành-error) |
+| `info` | `{type, msg: "sql generated"}` | Kết thúc **một lượt** sinh SQL — có thể xuất hiện nhiều lần, xem [§6.8](#68-sql-hỏng-không-phải-lúc-nào-cũng-thành-error) |
 | `brief` | `{type, brief}` | Tiêu đề hội thoại LLM tự đặt. *Chỉ có ở câu hỏi đầu tiên* |
-| `sql` | `{type, content}` | **SQL chính thức**, đã qua kiểm duyệt và format. *Có thể không có* — xem [§6.7](#67-sql-hỏng-không-phải-lúc-nào-cũng-thành-error) |
-| `sql-data` | `{type, content: "execute-success"}` | **Tín hiệu: SQL chạy xong.** Không kèm số liệu. *Có thể không có* |
+| `sql` | `{type, content}` | **SQL chính thức**, đã qua kiểm duyệt và format. *Có thể không có* — xem [§6.8](#68-sql-hỏng-không-phải-lúc-nào-cũng-thành-error) |
+| `sql-data` | `{type, content: "execute-success", data}` | ★ **Số liệu** — kết quả chạy SQL, xem [§6.6](#66-số-liệu--event-sql-data). *Có thể không có* |
 | `answer-result` | `{type, content, reasoning_content}` | ★ **Câu trả lời**, từng token — cộng dồn `content` |
+| `info` | `{type, msg: "chart generated"}` | Pha biểu đồ xong |
+| `chart` | `{type, content}` | **Cấu hình biểu đồ**, `content` là **chuỗi JSON** — xem [§6.9](#69-cấu-hình-biểu-đồ) |
+| `info` | `{type, msg: "chart failed"}` | Pha biểu đồ lỗi — **không có** event `chart`, phần còn lại của lượt hỏi vẫn bình thường |
 | `info` | `{type, msg: "answer generated"}` | Kết thúc pha answer |
 | `info` | `{type, msg: "answer failed"}` | Pha answer lỗi — sẽ **không có** event `answer` |
 | `answer` | `{type, content}` | Cùng câu trả lời đó, gộp sẵn một chuỗi — tùy chọn |
 | `finish` | `{type}` | Kết thúc |
-| `error` | `{type, content}` | Lỗi pipeline — xem [§6.6](#66--lỗi-giữa-stream-vẫn-là-http-200) |
+| `error` | `{type, content}` | Lỗi pipeline — xem [§6.7](#67--lỗi-giữa-stream-vẫn-là-http-200) |
+
+Nhóm event biểu đồ (`info: chart generated` + `chart`, hoặc `info: chart failed`) **chỉ có khi hệ
+thống bật pha sinh biểu đồ** (mặc định bật). Không dùng biểu đồ thì bỏ qua cả nhóm, phần còn lại của
+hợp đồng không đổi.
+
+Cấu hình biểu đồ **không** được stream theo từng token: nó là một khối JSON, mảnh dở dang thì không
+parse được nên chẳng dùng vào việc gì. Client nhận trọn gói ở event `chart`.
 
 ### 6.4. Trình tự thực tế
 
@@ -361,6 +372,30 @@ Capture thật, câu hỏi *"Có tổng số bao nhiêu Nghị quyết"* trên d
 Câu hỏi thứ hai trên cùng `chat_id` (*"Trong đó bảng nào nhiều nhất"*, **5 giây**) cho đúng bộ event
 trên, **trừ `brief`** — tiêu đề chỉ sinh một lần cho cả hội thoại.
 
+#### Khi bật pha sinh biểu đồ
+
+Phần đầu (tới `sql-data`) không đổi. Chỉ thêm hai event mốc chen vào giữa dòng `answer-result`:
+
+```
+sql-data            1
+answer-result  ×M         câu trả lời chảy về trong lúc biểu đồ đang được sinh
+info                1     {"msg":"chart generated"}   ← hoặc {"msg":"chart failed"}
+chart               1     ★ cấu hình biểu đồ          ← không có nếu chart failed
+answer-result  ×K         phần câu trả lời còn lại
+info                1     {"msg":"answer generated"}
+answer              1     ★ câu trả lời gộp sẵn
+finish              1
+```
+
+Biểu đồ và câu trả lời được sinh **song song**, nên `answer-result` xuất hiện ở cả hai phía của cặp
+event biểu đồ. Tỷ lệ trước/sau phụ thuộc pha nào xong trước, đừng dựa vào nó.
+
+Ba điều **giữ nguyên** so với khi tắt biểu đồ, dựa vào được:
+
+- `answer` vẫn là event áp chót, ngay trước `finish`.
+- `chart` luôn đứng ngay sau `info: chart generated`.
+- Không có event token nào mới — chỉ `sql-result` và `answer-result` như cũ.
+
 #### Mốc thời gian thực đo — dữ liệu về **dần theo pha**
 
 | Thời điểm | Event | Client có được gì |
@@ -379,8 +414,13 @@ trên, **trừ `brief`** — tiêu đề chỉ sinh một lần cho cả hội t
 - Pha answer lỗi → không có `answer`, chỉ có `info: answer failed`
 - Pipeline lỗi → `error` thay thế toàn bộ phần còn lại
 - SQL sinh hỏng, server sinh lại → **`sql-result` và `info: sql generated` về thành nhiều đợt**
-  (xem [§6.7](#67-sql-hỏng-không-phải-lúc-nào-cũng-thành-error))
-- SQL hỏng hẳn → không có `sql` / `sql-data`, nhưng **vẫn có `answer-result` + `answer` + `finish`**
+  (xem [§6.8](#68-sql-hỏng-không-phải-lúc-nào-cũng-thành-error))
+- SQL hỏng hẳn → không có `sql` / `sql-data`, nhưng **vẫn có `answer-result` + `answer` + `finish`**;
+  lượt đó cũng **không có** nhóm event biểu đồ dù hệ thống đang bật biểu đồ — không có dữ liệu thì
+  không vẽ được gì
+- Pha biểu đồ lỗi → `info: chart failed` thay cho `info: chart generated` + `chart`; **mọi thứ khác
+  giữ nguyên**, vẫn có đủ `answer` và `finish`
+- Hệ thống tắt pha biểu đồ → không có `info: chart generated` / `chart` / `info: chart failed`
 
 ### 6.5. Nội dung câu trả lời và câu SQL
 
@@ -405,7 +445,41 @@ trên, **trừ `brief`** — tiêu đề chỉ sinh một lần cho cả hội t
 | Số liệu | Trích từ dữ liệu thật, giữ nguyên độ chính xác gốc (không làm tròn, không định dạng theo locale) |
 | Không có dữ liệu | Trả về câu báo rõ, ví dụ `"Không tìm thấy dữ liệu phù hợp với câu hỏi."` |
 
-### 6.6. ⚠ Lỗi giữa stream vẫn là HTTP 200
+### 6.6. Số liệu — event `sql-data`
+
+Kết quả chạy SQL về trọn gói trong trường `data` của event `sql-data`. Đây là event nặng nhất của
+lượt hỏi, nhưng cũng về sớm — ngay sau khi SQL chạy xong, trước cả token đầu tiên của câu trả lời.
+
+```json
+{"type": "sql-data", "content": "execute-success",
+ "data": {"fields": ["linh_vuc", "so_luong"],
+          "fields_info": [{"name": "linh_vuc", "is_numeric": false},
+                          {"name": "so_luong", "is_numeric": true}],
+          "data": [{"linh_vuc": "Kinh tế", "so_luong": 83},
+                   {"linh_vuc": "Văn hóa", "so_luong": 45}]}}
+```
+
+| Trường | Ý nghĩa |
+|---|---|
+| `content` | Luôn là chuỗi `"execute-success"`. Giữ lại cho tương thích ngược, không mang thông tin gì |
+| `data.fields` | Tên các cột, đúng thứ tự cột trong kết quả |
+| `data.fields_info` | Mỗi cột một phần tử: `name` và `is_numeric`. Dùng để biết cột nào là số |
+| `data.data` | Danh sách **dòng**. Mỗi dòng là một object, khóa là tên cột |
+| `data.limit` | **Chỉ xuất hiện khi kết quả bị cắt bớt.** Giá trị là số dòng tối đa được trả (1000). Vắng mặt nghĩa là dữ liệu trọn vẹn |
+
+⚠ **Số quá lớn về dưới dạng chuỗi.** Số nguyên vượt ngưỡng an toàn của JSON, và số thập phân quá
+lớn hoặc quá nhỏ, được server chuyển thành chuỗi trước khi gửi — nếu để nguyên dạng số thì nhiều
+client sẽ tự làm tròn và mất chữ số cuối mà không báo lỗi. Hệ quả: **cùng một cột có thể lẫn cả số
+lẫn chuỗi giữa các dòng**. Hãy ép kiểu trước khi cộng dồn, so sánh hay định dạng, đừng tin vào kiểu
+của giá trị ở dòng đầu tiên.
+
+Trần **1000 dòng** áp cho mọi lượt hỏi. Câu hỏi quét cả bảng sẽ bị cắt, và `data.limit` là dấu hiệu
+duy nhất để biết điều đó — nên hiện một dòng ghi chú cho người dùng khi thấy nó.
+
+Event này **có thể không xuất hiện**, khi câu hỏi không chạy được SQL nào — xem
+[§6.8](#68-sql-hỏng-không-phải-lúc-nào-cũng-thành-error).
+
+### 6.7. ⚠ Lỗi giữa stream vẫn là HTTP 200
 
 Nếu pipeline hỏng (LLM lỗi, SQL sai, DB mất kết nối), server gửi `{"type": "error", "content": "..."}`
 rồi đóng stream bình thường — status code vẫn **200**. Client bắt buộc có nhánh xử lý
@@ -415,7 +489,7 @@ Trường `content` của event `error` **không có schema cố định**: khi 
 JSON `{"message": ..., "traceback": ...}`. Hãy hiển thị nó như text; nếu muốn bóc `message` thì thử
 `JSON.parse` trong `try/catch` rồi fallback về chuỗi gốc.
 
-### 6.7. SQL hỏng không phải lúc nào cũng thành `error`
+### 6.8. SQL hỏng không phải lúc nào cũng thành `error`
 
 Khi pha sinh SQL hỏng, server **tự sinh lại một lần** trước khi bỏ cuộc. Việc này **không sinh ra
 event mới nào** — client chỉ thấy pha sinh SQL lặp lại:
@@ -447,6 +521,94 @@ trả lời đã có từ lượt trước, chỉ là không diễn đạt đư�
 - Lý do hỏng **không được gửi qua stream** — nó chỉ nằm trong log server. Người dùng cuối chỉ thấy
   câu trả lời trong `answer-result`.
 
+### 6.9. Cấu hình biểu đồ
+
+Khi hệ thống bật pha sinh biểu đồ (mặc định bật), server đề xuất một cách **trực quan hóa** kết quả
+truy vấn. Nó cho bạn *vẽ cái gì, từ cột nào* — **không kèm số liệu**. Số liệu nằm ở event `sql-data`
+([§6.6](#66-số-liệu--event-sql-data)); ghép hai thứ lại bằng tên cột thì ra biểu đồ.
+
+#### 6.9.1. Event `chart`
+
+```json
+{"type": "chart", "content": "{\"type\":\"pie\",\"title\":\"Số nghị quyết theo lĩnh vực\",\"axis\":{\"y\":{\"name\":\"Số lượng\",\"value\":\"so_luong\"},\"series\":{\"name\":\"Lĩnh vực\",\"value\":\"linh_vuc\"}}}"}
+```
+
+⚠ `content` là **chuỗi JSON đã escape**, không phải object lồng. Phải `JSON.parse(event.content)`
+thêm một lần nữa mới ra cấu hình. Đây là điểm khác với các event khác, rất dễ vấp.
+
+Event này về **trọn gói một lần**, không stream từng token.
+
+#### 6.9.2. Năm loại biểu đồ
+
+Trường `type` nhận đúng một trong năm giá trị: `table`, `column` (cột dọc), `bar` (cột ngang),
+`line` (đường), `pie` (tròn). Mọi cấu hình đều có `title` — một tiêu đề ngắn do bot đặt.
+
+**`table`** — dùng `columns`, không có `axis`:
+
+```json
+{"type":"table","title":"Danh sách nghị quyết",
+ "columns":[{"name":"Số nghị quyết","value":"so_nghi_quyet"},
+            {"name":"Ngày ban hành","value":"ngay_ban_hanh"}]}
+```
+
+**`column` / `bar` / `line`** — cùng **một** schema, chỉ khác cách vẽ. Trục `x` là chiều (thời gian
+hoặc phân loại), `y` là **mảng** các chỉ số số:
+
+```json
+{"type":"line","title":"Xu hướng thu chi",
+ "axis":{"x":{"name":"Tháng","value":"thang"},
+         "y":[{"name":"Thu","value":"thu"},{"name":"Chi","value":"chi"}]}}
+```
+
+> `bar` là `column` xoay ngang về mặt **hiển thị**; ánh xạ dữ liệu giữ nguyên — `x` vẫn là chiều,
+> `y` vẫn là số. Đừng hoán đổi hai trục khi render `bar`.
+
+Với ba loại này, `axis.y` **nên** là mảng nhưng thỉnh thoảng về dưới dạng một object đơn
+(`{"name":..., "value":...}`) — server chấp nhận cả hai. Hãy chuẩn hóa về mảng ngay khi nhận:
+`const y = Array.isArray(axis.y) ? axis.y : [axis.y]`.
+
+**`pie`** — không có trục `x`; `y` là **object** (không phải mảng) chỉ kích thước từng phần, `series`
+chỉ tên từng phần:
+
+```json
+{"type":"pie","title":"Tỷ trọng theo lĩnh vực",
+ "axis":{"y":{"name":"Số lượng","value":"so_luong"},
+         "series":{"name":"Lĩnh vực","value":"linh_vuc"}}}
+```
+
+#### 6.9.3. Hai trường tùy chọn — `series` và `multi-quota`
+
+Cả hai nằm trong `axis`, và **loại trừ lẫn nhau**: một cấu hình chỉ có tối đa một trong hai.
+
+| Trường | Có khi | Ý nghĩa | Dạng |
+|---|---|---|---|
+| `series` | kết quả có cột phân loại (rời rạc, không phải số/thời gian) | nhóm dữ liệu thành nhiều chuỗi | `{"name": "...", "value": "ten_cot"}` |
+| `multi-quota` | **không** có cột phân loại nhưng có **nhiều** cột số | gộp nhiều chỉ số lên cùng một biểu đồ | `{"name": "...", "value": ["cot_1", "cot_2"]}` |
+
+Không có cột phân loại và chỉ có một cột số thì **cả hai đều vắng mặt** — đây là ca phổ biến nhất.
+`pie` luôn có `series` (nó chính là tên từng phần).
+
+Client phải coi `series` và `multi-quota` là **có thể không tồn tại**, đừng đọc thẳng
+`axis.series.value`.
+
+#### 6.9.4. Biểu đồ là pha phụ — hỏng thì bỏ qua, không mất lượt hỏi
+
+Nếu bot không dựng được cấu hình biểu đồ hợp lệ (dữ liệu không có cột nào hợp làm phân loại, JSON
+trả về sai định dạng…), server phát:
+
+```
+info  {"msg":"chart failed"}
+```
+
+rồi **đi tiếp bình thường**: vẫn có `answer`, vẫn có `finish`, vẫn HTTP 200 và **không** có event
+`error`. Chỉ thiếu đúng event `chart`.
+
+Client chỉ cần: nhận `chart failed` thì ẩn khu vực biểu đồ và hiển thị câu trả lời bằng lời như một
+lượt hỏi bình thường. Không cần báo lỗi cho người dùng — với họ, lượt hỏi này đã thành công.
+
+Quy ước này giống hệt `info: answer failed` ở pha answer: **một pha phụ hỏng không được giết cả lượt
+hỏi.** Chỉ có `type: "error"` mới nghĩa là cả lượt hỏi thất bại.
+
 ---
 
 ## 7. Giới hạn hệ thống — cần biết trước khi thiết kế UI
@@ -471,10 +633,15 @@ timeout sẽ cắt nhầm những câu vẫn đang chạy tốt.
 Ngữ cảnh multi-turn đọc từ lịch sử record. Hai câu hỏi chồng nhau trên cùng `chat_id` cho kết quả
 khó đoán — xếp hàng tuần tự, hoặc dùng `chat_id` khác nhau.
 
-### 7.5. Không trả về số liệu thô
+### 7.5. Số liệu thô bị cắt ở 1000 dòng
 
-API chỉ trả **câu trả lời bằng lời** và **câu SQL**. Không có bảng số liệu, không có cấu hình biểu
-đồ. Nếu về sau cần hiển thị bảng/biểu đồ, phải mở thêm endpoint — trao đổi trước với đội SQLBot.
+Stream của `POST /chat/question` trả đủ cả bốn thứ trong một lần gọi: **câu trả lời bằng lời**,
+**câu SQL**, **số liệu** và **cấu hình biểu đồ**. Nhưng số liệu bị cắt ở **1000 dòng** — câu hỏi
+quét cả bảng sẽ không về đủ. Client biết được điều đó qua khóa `data.limit` của event `sql-data`
+([§6.6](#66-số-liệu--event-sql-data)), và nên báo cho người dùng thay vì hiển thị như thể trọn vẹn.
+
+Vì vậy đừng thiết kế màn hình theo hướng xuất/duyệt toàn bộ dữ liệu. SQLBot phục vụ hỏi đáp và tổng
+hợp, không phải công cụ trích xuất dữ liệu.
 
 ---
 
@@ -489,6 +656,11 @@ API chỉ trả **câu trả lời bằng lời** và **câu SQL**. Không có b
 - [ ] Có nhánh xử lý `type == "error"` (HTTP vẫn 200)
 - [ ] Câu trả lời render từ **`answer-result` cộng dồn**; gặp `info: answer failed` thì báo lỗi
 - [ ] Câu trả lời render được cả trường hợp có Markdown / xuống dòng
+- [ ] Đọc số liệu từ `data` của event `sql-data`; ép kiểu trước khi tính vì **số lớn về dạng chuỗi**
+- [ ] Thấy `data.limit` thì báo cho người dùng biết kết quả đã bị cắt (§6.6)
+- [ ] Dùng biểu đồ: `JSON.parse` **hai lần** để bóc event `chart` (§6.9.1)
+- [ ] Dùng biểu đồ: coi `series` / `multi-quota` là có thể vắng mặt, `axis.y` chuẩn hóa về mảng
+- [ ] Dùng biểu đồ: `info: chart failed` chỉ ẩn biểu đồ, **không** báo lỗi cả lượt hỏi (§6.9.4)
 - [ ] Read timeout 30–60s, không dùng total timeout
 - [ ] Không gửi hai câu hỏi song song trên cùng `chat_id`
 - [ ] Xử lý 401 → đăng nhập lại (không có refresh token)

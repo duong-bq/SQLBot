@@ -20,9 +20,9 @@ mạng) sẽ dẫn bạn đi sai ở đúng bốn chỗ này:
 
 | Điểm | Upstream | Repo này |
 |---|---|---|
-| Pha cuối pipeline | Sinh **biểu đồ** (chart JSON) | Sinh **câu trả lời bằng lời** (answer). Chart mặc định không chạy |
+| Pha cuối pipeline | Sinh **biểu đồ** (chart JSON) | Sinh **câu trả lời bằng lời** (answer), rồi chart chạy **song song** với nó. Bật/tắt chart bằng `GENERATE_CHART_ENABLED` |
 | Khi pha SQL hỏng | Trả event `error`, hết lượt | Sinh lại SQL (`LLM_SQL_MAX_RETRY`), vẫn hỏng thì **hạ cấp** sang trả lời dựa trên lịch sử hội thoại |
-| Đối tượng dùng | Web UI là chính | **API-first**: đối tác tích hợp gọi thẳng `POST /chat/question` qua SSE và chỉ tiêu thụ `answer` + `sql` |
+| Đối tượng dùng | Web UI là chính | **API-first**: đối tác tích hợp gọi thẳng `POST /chat/question` qua SSE. Một lời gọi trả đủ `sql`, số liệu, `answer`, `chart` — không phải gọi thêm API nào |
 | Ngôn ngữ prompt | Tiếng Trung | Tiếng Việt (`backend/templates/template.yaml` đã dịch và viết lại) |
 
 Hệ quả cụ thể: `ChatFinishStep` đã bị **đánh số lại** để chèn `GENERATE_ANSWER` vào giữa
@@ -32,10 +32,15 @@ Hệ quả cụ thể: `ChatFinishStep` đã bị **đánh số lại** để ch
 
 - Nhánh làm việc: `feature/sqlbot-HDNDtpHN`. Nhánh gốc để mở PR: `main`.
 - Đối tác tích hợp: HĐND TP Hà Nội. Họ gọi API, không dùng web UI.
-- `finish_step` mặc định của `POST /chat/question` là `GENERATE_ANSWER`
-  ([chat.py:499](../backend/apps/chat/api/chat.py#L499)); nhánh MCP truyền `QUERY_DATA`
+- `finish_step` mặc định của `POST /chat/question` là `GENERATE_CHART`, do `GENERATE_CHART_ENABLED`
+  quyết định (mặc định bật) qua `default_finish_step`
+  ([chat.py:462](../backend/apps/chat/api/chat.py#L462)); nhánh MCP truyền `QUERY_DATA`
   ([mcp.py:258](../backend/apps/mcp/mcp.py#L258)).
-- Số lần gọi LLM cho một lượt hỏi bình thường: **2** (sinh SQL + sinh answer).
+- Số lần gọi LLM cho một lượt hỏi bình thường: **3** (sinh SQL + answer + chart; hai lần sau chạy
+  song song). Tắt chart thì còn 2.
+- Kết quả SQL đi kèm luôn trong event `sql-data` của stream. Endpoint
+  `GET /chat/record/{id}/data` vẫn còn để web UI dựng lại hội thoại cũ, nhưng đối tác không cần
+  dùng tới và `API_SPEC.md` đã bỏ mô tả nó.
 - Backend Python 3.11 + FastAPI, quản lý dependency bằng `uv`; frontend Vue 3 + TypeScript.
 - Có cổng `POST /hooks/ai-sync` (`apps/hooks/`) nhận bản tin đồng bộ quyền user từ hệ thống SW, ghi
   vào `ai_user_permissions`. **Chưa** nối vào pipeline Text2SQL — LLM chưa dùng dữ liệu này để giới
