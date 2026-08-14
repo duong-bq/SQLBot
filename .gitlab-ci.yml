@@ -3,7 +3,7 @@ stages:
 
 variables:
   IMAGE_NAME: "$HARBOR_REGISTRY/ai-sqlbot/sqlbot-backend"
-  IMAGE_TAG: "test-v0.0.1"
+  IMAGE_TAG: "test-$CI_COMMIT_SHORT_SHA"
 
 build-test:
   stage: build
@@ -13,7 +13,5 @@ build-test:
 
   script:
     - echo "$HARBOR_PASSWORD" | docker login "$HARBOR_REGISTRY" -u "$HARBOR_USERNAME" --password-stdin
-
-    - docker build -t "$IMAGE_NAME:$IMAGE_TAG" .
-
+    - docker build -f Dockerfile.backend -t "$IMAGE_NAME:$IMAGE_TAG" .
     - docker push "$IMAGE_NAME:$IMAGE_TAG"
