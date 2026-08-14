@@ -26,6 +26,32 @@ def get_user_by_account(*, session: Session, account: str) -> BaseUserDTO | None
     return BaseUserDTO.model_validate(db_user.model_dump())
 
 
+def resolve_uid_by_account(*, session: Session, account: str,
+                           trans: Optional[I18n | I18nHelper] = None) -> int:
+    """
+    Đổi ``account`` (tên đăng nhập, duy nhất toàn hệ thống) thành ``id`` nội bộ.
+
+    Cầu nối giữa hai không gian định danh: hệ thống tích hợp bên ngoài đặt ``account`` bằng đúng
+    định danh người dùng bên họ nên không giữ ``id`` snowflake của SQLBot, trong khi mọi handler
+    quản trị lại nhận ``id``. Nhóm route ``/user/by-account/*`` dùng hàm này làm bước đầu tiên.
+
+    Chặn luôn tài khoản quản trị hệ thống (``id == 1``). Các handler quản trị không tự chặn vì giao
+    diện SQLBot không bao giờ hiển thị tài khoản này, nên nếu để lọt thì bên tích hợp có thể xoá
+    hoặc khoá nhầm nó và mất luôn đường vào hệ thống.
+
+    Ném lỗi ngay tại đây khi không tìm thấy thay vì trả ``None`` cho handler: ``None`` đi tiếp sẽ nổ
+    ở một tầng khác với thông báo không liên quan gì tới nguyên nhân thật.
+    """
+    db_user = get_user_by_account(session=session, account=account)
+    if not db_user:
+        if trans:
+            raise Exception(trans('i18n_not_exist', msg=f"{trans('i18n_user.account')} [{account}]"))
+        raise Exception(f"Account [{account}] not found!")
+    if db_user.id == 1:
+        raise Exception(f"System admin account [{account}] cannot be managed through this API!")
+    return db_user.id
+
+
 @cache(namespace=CacheNamespace.AUTH_INFO, cacheName=CacheName.USER_INFO, keyExpression="user_id")
 async def get_user_info(*, session: Session, user_id: int) -> UserInfoDTO | None:
     db_user: UserModel = get_db_user(session=session, user_id=user_id)

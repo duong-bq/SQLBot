@@ -30,7 +30,7 @@ Hệ quả cụ thể: `ChatFinishStep` đã bị **đánh số lại** để ch
 
 ## 3. Trạng thái hiện tại
 
-- Nhánh làm việc: `feature/sqlbot-HDNDtpHN`. Nhánh gốc để mở PR: `main`.
+- Nhánh làm việc: `feature/ai-permission-answer`. Nhánh gốc để mở PR: `main`.
 - Đối tác tích hợp: HĐND TP Hà Nội. Họ gọi API, không dùng web UI.
 - `finish_step` mặc định của `POST /chat/question` là `GENERATE_CHART`, do `GENERATE_CHART_ENABLED`
   quyết định (mặc định bật) qua `default_finish_step`
@@ -45,10 +45,16 @@ Hệ quả cụ thể: `ChatFinishStep` đã bị **đánh số lại** để ch
 - Có cổng `POST /hooks/ai-sync` (`apps/hooks/`) nhận bản tin đồng bộ quyền user từ hệ thống SW, ghi
   vào `ai_user_permissions`. **Chưa** nối vào pipeline Text2SQL — LLM chưa dùng dữ liệu này để giới
   hạn quyền truy vấn.
+- Nhóm endpoint quản trị tài khoản định danh bằng **`account`** thay vì `id`: `/user/by-account/*`
+  ([user.py:215](../backend/apps/system/api/user.py#L215)). Tồn tại vì SW đặt `account` bằng đúng
+  `userId` bên họ nên không giữ id snowflake của SQLBot — cùng một định danh dùng cho cả API quản
+  trị lẫn `POST /hooks/ai-sync`. Sáu route chỉ phân giải `account` → `id` rồi gọi lại handler cũ.
 - Nạp nguồn dữ liệu từ file Excel/CSV có đường **bất đồng bộ**: `POST
-  /datasource/createFromExcelAsync` trả `202` ngay rồi nạp ở nền, báo kết quả về SW bằng callback
-  HTTP. Cần đặt `AI_CALLBACK_URL`, để rỗng là tắt gửi. Kiến trúc ở
-  [BACKEND_ARCHITECTURE.md](BACKEND_ARCHITECTURE.md) §5, hợp đồng ở `DATASOURCE_API_SPEC.md` §9.
+  /datasource/createFromExcelAsync` nhận một **presigned URL** trỏ tới file (không nhận bytes), trả
+  `202` ngay, rồi tự tải và nạp ở nền, báo kết quả về SW bằng callback HTTP. Cần đặt
+  `AI_CALLBACK_URL` (rỗng là tắt gửi) và `EXCEL_DOWNLOAD_ALLOWED_HOSTS` (rỗng là **chặn hết**).
+  Kiến trúc ở [BACKEND_ARCHITECTURE.md](BACKEND_ARCHITECTURE.md) §5, hợp đồng ở
+  `DATASOURCE_API_SPEC.md` §9.
 
 ## 4. Bản đồ tài liệu — hỏi gì thì đọc file nào
 
@@ -69,6 +75,8 @@ Hệ quả cụ thể: `ChatFinishStep` đã bị **đánh số lại** để ch
 | [backend/scripts/chat_stream_demo/API_SPEC.md](../backend/scripts/chat_stream_demo/API_SPEC.md) | Hợp đồng tích hợp chat: login, list datasource, `POST /chat/question` (SSE) — đủ catalog event, bảng lỗi, giới hạn hệ thống |
 | [backend/scripts/chat_stream_demo/DATASOURCE_API_SPEC.md](../backend/scripts/chat_stream_demo/DATASOURCE_API_SPEC.md) | 26 endpoint quản trị datasource — tạo/sync/chọn bảng/sửa chú thích/quan hệ bảng, cho cả database quan hệ lẫn file Excel/CSV; §9 là luồng nạp Excel bất đồng bộ + hợp đồng callback |
 | [backend/scripts/ai_sync_hook/AI_SYNC_HOOK_API_SPEC.md](../backend/scripts/ai_sync_hook/AI_SYNC_HOOK_API_SPEC.md) | Cổng `POST /hooks/ai-sync` nhận bản tin đồng bộ quyền từ SW — actionType, full-snapshot, idempotency, bảng lỗi |
+| [backend/scripts/ai_sync_hook/AI_PERMISSION_QUERY_API_SPEC.md](../backend/scripts/ai_sync_hook/AI_PERMISSION_QUERY_API_SPEC.md) | 2 endpoint GET đọc lại quyền đã đồng bộ (dev/test), tách khỏi spec ghi ở trên |
+| [backend/scripts/ai_sync_hook/USER_ADMIN_API_SPEC.md](../backend/scripts/ai_sync_hook/USER_ADMIN_API_SPEC.md) | Quản trị tài khoản cho SW: đăng nhập, tạo/sửa/khoá/xoá user, đổi mật khẩu. Mọi endpoint định danh bằng `account`. Bản `..._LITE.md` cạnh đó là bản rút gọn gửi đối tác — sửa cái nào thì sửa cả hai |
 | [backend/scripts/eval_text2sql/README.md](../backend/scripts/eval_text2sql/README.md) | Cách dùng harness đánh giá chất lượng |
 
 ### Tài liệu ở repo root — biết để **khỏi mở nhầm**

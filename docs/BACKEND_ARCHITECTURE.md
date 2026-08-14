@@ -104,8 +104,10 @@ một route trả **JSON thô** thì cách duy nhất là khai path pattern củ
 `shutdown_resources()` gọi `stop_datasource_background_tasks()` **trước** `SingleWorkerGuard.release()`
 — các vòng nền còn đang giữ session DB.
 
-Migration mới nhất: `076_excel_import_jobs.py` (tạo `excel_import_jobs` + backfill
-`core_datasource.status`). Trước đó: `075_ai_user_permissions_domain_info.py`, `074_ai_sync_hook.py`
+Migration mới nhất: `078_excel_import_jobs_file_url.py` (thêm cột `file_url` — nguồn file chuyển từ
+multipart sang presigned URL). Trước đó: `077_ai_user_permissions_queries.py`,
+`076_excel_import_jobs.py` (tạo `excel_import_jobs` + backfill
+`core_datasource.status`), `075_ai_user_permissions_domain_info.py`, `074_ai_sync_hook.py`
 (tạo `ai_sync_hook_logs` + `ai_user_permissions`), `073_merge_heads_071.py` (gộp hai head `071` phát
 sinh khi merge nhánh), `072_add_chat_external_id.py`.
 
@@ -128,9 +130,10 @@ sinh khi merge nhánh), `072_add_chat_external_id.py`.
 | Thêm một loại database | [db/constant.py](../backend/apps/db/constant.py) enum `DB` + [db.py](../backend/apps/db/db.py) + một file `templates/sql_examples/*.yaml` |
 | Sửa endpoint hỏi đáp | [chat.py:478](../backend/apps/chat/api/chat.py#L478) |
 | Sửa quản trị datasource | [apps/datasource/api/datasource.py](../backend/apps/datasource/api/datasource.py) |
-| Sửa luồng nạp Excel bất đồng bộ | `apps/datasource/task/` (3 vòng nền, §5) + `crud/excel_job.py` (mọi câu SQL của hàng đợi) + `utils/excel_import.py` (hàm thuần nạp file) |
+| Sửa luồng nạp Excel bất đồng bộ | `apps/datasource/task/` (3 vòng nền, §5) + `crud/excel_job.py` (mọi câu SQL của hàng đợi) + `utils/excel_import.py` (hàm thuần nạp file) + `utils/remote_file.py` (kiểm URL nguồn và tải file) |
 | Sửa hợp đồng callback với hệ ngoài | [callback_sender.py](../backend/apps/datasource/task/callback_sender.py) `send_callback` — **rồi cập nhật `DATASOURCE_API_SPEC.md` §9.3** |
 | Sửa auth / token | [apps/system/middleware/auth.py](../backend/apps/system/middleware/auth.py) + [apps/system/api/login.py](../backend/apps/system/api/login.py) |
+| Sửa quản trị tài khoản người dùng | [apps/system/api/user.py](../backend/apps/system/api/user.py) — nhóm `/user/by-account/*` ở đầu file, handler gốc theo `id` ở dưới. **Rồi cập nhật `USER_ADMIN_API_SPEC.md` và bản `_LITE`** |
 | Đổi cấu hình mặc định | [common/core/config.py](../backend/common/core/config.py) — bảng đầy đủ ở [OPERATIONS.md §2](OPERATIONS.md) |
 | Thêm bảng DB mới | model trong `apps/<domain>/models/` + migration trong `alembic/versions/` |
 | Sửa cách gọi LLM | [model_factory.py](../backend/apps/ai_model/model_factory.py) |
@@ -187,7 +190,7 @@ hộp thư đi (outbox) của callback. Ràng buộc `UNIQUE(ds_id)` nên mỗi 
 
 | Nhóm cột | Dùng để |
 |---|---|
-| `ds_id`, `oid`, `create_by`, `ds_name`, `file_path`, `sheet_names` | Đủ để worker làm việc mà không cần request context |
+| `ds_id`, `oid`, `create_by`, `ds_name`, `file_path`, `file_url`, `sheet_names` | Đủ để worker làm việc mà không cần request context |
 | `status`, `worker_id`, `heartbeat_at`, `created_at`/`started_at`/`finished_at` | Vòng đời job và phát hiện worker chết |
 | `created_tables` | Danh sách bảng đã tạo, để dọn khi job hỏng giữa chừng |
 | `error_code`, `error_message` | Trả lại cho `GET /datasource/excelImportStatus/{ds_id}` |
@@ -197,11 +200,18 @@ hộp thư đi (outbox) của callback. Ràng buộc `UNIQUE(ds_id)` nên mỗi 
 cùng sinh ra trong một transaction. Tách bảng thì có thể nạp xong mà thư không được ghi (hoặc ngược
 lại), và không có transaction phân tán nào ở đây để cứu.
 
+**Hai cột file, đọc kỹ kẻo hiểu ngược.** `file_url` là nơi file **đến từ**, `file_path` là nơi nó
+**sẽ nằm**. Từ khi endpoint nhận presigned URL thay vì bytes, pha đồng bộ chỉ đặt trước cái tên ở
+`file_path` chứ không tạo ra file nào — worker mới là bên ghi. Trong khoảng giữa hai việc đó,
+`file_path` trỏ tới một file chưa tồn tại. Đặt tên sẵn (thay vì để cột rỗng) giữ được ràng buộc
+`NOT NULL` và giữ cho nhánh dọn file của `excel_recovery` không phải thêm phép kiểm rỗng.
+`file_url` rỗng nghĩa là job cũ theo đường multipart — nhánh đó vẫn chạy được.
+
 Ba vòng nền, mỗi vòng một file trong `apps/datasource/task/`:
 
 | Vòng | File | Việc |
 |---|---|---|
-| Worker nạp | `excel_import_task.py` | `ThreadPoolExecutor` riêng (`EXCEL_IMPORT_WORKERS`). Endpoint `submit` một job **sau khi commit**, worker mở session riêng, đập heartbeat theo chu kỳ, kết thúc bằng `finish_job` (ghi kết quả + xếp thư vào outbox trong cùng transaction) |
+| Worker nạp | `excel_import_task.py` | `ThreadPoolExecutor` riêng (`EXCEL_IMPORT_WORKERS`). Endpoint `submit` một job **sau khi commit**, worker mở session riêng, đập heartbeat theo chu kỳ, kết thúc bằng `finish_job` (ghi kết quả + xếp thư vào outbox trong cùng transaction). Hai bước đầu của worker là **tải file** từ `file_url` và **đối chiếu tên sheet** — cả hai nằm trong khối heartbeat vì tải một file lớn có thể lâu hơn ngưỡng phát hiện job chết |
 | Vòng gửi | `callback_sender.py` | Ba pha: nhặt thư bằng `FOR UPDATE SKIP LOCKED` (transaction ngắn) → gọi HTTP **ngoài mọi transaction** → ghi kết quả (transaction ngắn). Không giữ transaction mở trong lúc chờ mạng — đó là lý do tách ba pha |
 | Vòng phục hồi | `excel_recovery.py` | Bốn việc độc lập, mỗi việc try/except riêng: nhặt job mồ côi (`pending` quá lâu), chôn job chết (heartbeat hết hạn → drop bảng dở, ds `Failed`, xếp thư báo hỏng), gỡ thư kẹt ở `sending`, dọn file tạm quá hạn không ai dùng |
 
@@ -277,6 +287,21 @@ danh sách trắng và preflight OPTIONS.
 
 `POST /hooks/ai-sync` **không** nằm trong danh sách trắng — dùng chung JWT `X-SQLBOT-TOKEN` và
 `require_permissions(role=['ws_admin'])` như các API quản trị khác, không có static token riêng.
+
+### Hai không gian định danh người dùng
+
+Khoá nội bộ là `sys_user.id` (snowflake 19 chữ số), nhưng hệ ngoài SW không giữ nó. Cầu nối là cột
+**`account`**: SW đặt `account` bằng đúng `userId` bên họ, nên một định danh duy nhất chạy suốt cả
+API quản trị lẫn `POST /hooks/ai-sync`.
+
+Nhóm route `/user/by-account/*` ([user.py:215](../backend/apps/system/api/user.py#L215)) phục vụ
+việc đó — sáu route ánh xạ 1-1 với các handler theo `id`. Mỗi route chỉ gọi `resolve_uid_by_account`
+([crud/user.py:29](../backend/apps/system/crud/user.py#L29)) rồi **gọi lại chính handler cũ** thay vì
+chép thân hàm, nên ba lớp decorator của handler gốc (kiểm quyền, xoá cache, ghi log kiểm toán) vẫn
+chạy đúng cấu hình gốc. `resolve_uid_by_account` chặn sẵn admin `id == 1` vì các handler gốc không tự
+chặn.
+
+Hai cái bẫy đi kèm nằm ở [OPERATIONS.md §7.9](OPERATIONS.md).
 
 ### Ba lớp phân quyền
 
@@ -386,5 +411,8 @@ Router đăng ký ở [apps/api.py](../backend/apps/api.py), prefix `settings.AP
   bản tin đồng bộ từ hệ thống SW (`POST /hooks/ai-sync`).
 - [AI_PERMISSION_QUERY_API_SPEC.md](../backend/scripts/ai_sync_hook/AI_PERMISSION_QUERY_API_SPEC.md)
   — 2 endpoint GET đọc lại quyền đã đồng bộ (dev/test), tách riêng khỏi spec ghi ở trên.
+- [USER_ADMIN_API_SPEC.md](../backend/scripts/ai_sync_hook/USER_ADMIN_API_SPEC.md) — quản trị tài
+  khoản cho SW (đăng nhập, tạo/sửa/khoá/xoá user, mật khẩu), định danh bằng `account`. Bản
+  `USER_ADMIN_API_SPEC_LITE.md` là bản rút gọn gửi đối tác; sửa thì sửa cả hai.
 
 Swagger: `GET /docs` (bật/tắt bằng `SQLBOT_DOC_ENABLED`), có i18n qua `?lang=zh|en`.

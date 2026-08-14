@@ -79,6 +79,12 @@
   "update_status": "Toggle Status",
   "origin_pwd": "Original Password",
   "new_pwd": "New Password",
+  "user_detail_by_account_api": "Get User Details by Account",
+  "user_update_by_account_api": "Update User by Account",
+  "user_del_by_account_api": "Delete User by Account",
+  "user_batchdel_by_account_api": "Batch Delete Users by Account",
+  "reset_pwd_by_account": "Reset Password by Account",
+  "update_status_by_account": "Toggle Status by Account",
 
   "system_ws_api": "Workspace APIs",
   "ws_user_grid_api": "Get Workspace User List",

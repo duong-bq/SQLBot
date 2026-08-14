@@ -78,6 +78,12 @@
   "update_status": "切换状态",
   "origin_pwd": "原始密码",
   "new_pwd": "新密码",
+  "user_detail_by_account_api": "按账号查询用户详情",
+  "user_update_by_account_api": "按账号修改用户",
+  "user_del_by_account_api": "按账号删除用户",
+  "user_batchdel_by_account_api": "按账号批量删除用户",
+  "reset_pwd_by_account": "按账号重置密码",
+  "update_status_by_account": "按账号切换状态",
 
   "system_ws_api": "工作空间接口",
   "ws_user_grid_api": "查询工作空间下用户列表",

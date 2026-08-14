@@ -22,6 +22,17 @@ class UserStatus(BaseCreatorDTO):
     status: int = Field(default=1, description=f"{PLACEHOLDER_PREFIX}status")
 
 
+class UserStatusByAccount(BaseModel):
+    """
+    Body của ``PATCH /user/by-account/status`` — đổi trạng thái khi bên gọi chỉ có ``account``.
+
+    Không kế thừa ``UserStatus`` được vì ``BaseCreatorDTO`` bắt buộc có ``id``, mà đó đúng là thứ
+    bên tích hợp ngoài không giữ.
+    """
+    account: str = Field(min_length=1, max_length=100, description=f"{PLACEHOLDER_PREFIX}user_account")
+    status: int = Field(default=1, description=f"{PLACEHOLDER_PREFIX}status")
+
+
 class UserLanguage(BaseModel):
     language: str = Field(description=f"{PLACEHOLDER_PREFIX}language")
 

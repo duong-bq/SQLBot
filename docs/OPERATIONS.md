@@ -162,6 +162,20 @@ callback, vòng quét phục hồi) — xem [BACKEND_ARCHITECTURE.md §5](BACKEN
 | `EXCEL_IMPORT_RECOVERY_SECONDS` | `60` | Chu kỳ vòng quét phục hồi |
 | `EXCEL_IMPORT_TEMP_TTL_HOURS` | `24` | File tạm quá hạn này mà không job nào đang dùng thì xóa. Đặt dài vì thư mục dùng chung với luồng `/parseExcel` → `/importToDb` của web, nơi người dùng để giữa chừng khá lâu |
 
+**Tải file nguồn từ URL.** `createFromExcelAsync` không nhận bytes nữa: hệ ngoài đưa một presigned
+URL, worker tự tải. Nhóm biến này chi phối bước tải đó
+([remote_file.py](../backend/apps/datasource/utils/remote_file.py)).
+
+| Biến | Mặc định | Tác dụng |
+|---|---|---|
+| `EXCEL_DOWNLOAD_ALLOWED_HOSTS` | `''` | Danh sách host được phép tải về, ngăn cách bằng dấu phẩy. **Rỗng = chặn tất cả**, không phải cho phép tất cả — xem bẫy ở §7.3. Ghi được cả `host`, `host:port` lẫn URL đầy đủ |
+| `EXCEL_DOWNLOAD_MAX_MB` | `100` | Trần dung lượng file nguồn. Ép **hai lần**: theo `Content-Length` khai báo, rồi theo số byte thật đếm trong lúc tải |
+| `EXCEL_DOWNLOAD_MIN_TTL_SECONDS` | `300` | Hạn chữ ký còn lại tối thiểu để nhận việc. Job có thể xếp hàng sau job khác nên URL sắp hết hạn phải bị từ chối ngay chứ không để hỏng ở nền. **Đối tác được yêu cầu ký ≥ 1 giờ** |
+| `EXCEL_DOWNLOAD_CONNECT_TIMEOUT` / `_READ_TIMEOUT` | `5` / `30` | Timeout bắt tay và timeout giữa hai lần đọc |
+| `EXCEL_DOWNLOAD_TOTAL_TIMEOUT` | `1800` | Trần cho **cả** lượt tải. Không thừa: timeout đọc chỉ bắt được kết nối đứng im, một nguồn nhỏ giọt đều đặn sẽ giữ worker vô hạn mà không lần đọc nào quá hạn |
+| `EXCEL_DOWNLOAD_RETRIES` | `2` | Số lần tải lại, **chỉ** với lỗi mạng và `5xx`. Mọi `4xx` là câu trả lời dứt khoát, thử lại vô nghĩa và chỉ đẩy job tới gần hạn chữ ký hơn |
+| `EXCEL_DOWNLOAD_PROBE_ENABLED` / `_PROBE_TIMEOUT` | `true` / `3` | Hỏi nguồn 1 byte ngay trong pha đồng bộ để bắt sớm `403`/`404`/quá cỡ. Tắt đi thì các lỗi đó lùi xuống callback chứ không mất |
+
 **Bật callback ở deployment Docker**: `docker-compose.backend.yml` truyền `AI_CALLBACK_URL` xuống
 container, giá trị lấy từ file `.env` **cạnh compose file**. Chạy backend thẳng trên host thì đặt
 trong `.env` ở repo root như mọi biến khác. Điền URL rồi restart là các thư đang chờ tự đi — không
@@ -176,7 +190,7 @@ Chỉ `AI_CALLBACK_URL` là bắt buộc; các biến còn lại có mặc đị
 `ORACLE_CLIENT_PATH`, `CONTEXT_PATH` (prefix URL, mặc định rỗng).
 
 Biến bool nhận cả `"true"`/`"True"`/`"false"` nhờ validator `lowercase_bool`
-([config.py:189](../backend/common/core/config.py#L189)).
+([config.py:277](../backend/common/core/config.py#L277)).
 
 ---
 
@@ -462,8 +476,12 @@ kỳ tài liệu, log hay issue nào; nếu cần xoay vòng mật khẩu thì p
 | **`NULL < x` cho UNKNOWN, không phải TRUE** | Mọi điều kiện lọc theo ngưỡng trên cột nullable (`heartbeat_at`, `callback_claimed_at`, `next_attempt_at`, `status`) phải có nhánh `is_(None)` đi kèm. Thiếu nhánh đó thì đúng những dòng cần cứu nhất — dòng chưa kịp ghi mốc thời gian — lại vĩnh viễn không được nhặt. Đã dính hai lần: `usable_ds_condition` và `requeue_stale_callbacks` |
 | **`AI_CALLBACK_URL` rỗng thì im lặng không gửi** | Không có log lỗi, không có lần thử nào bị đốt. Job vẫn `success`, thư vẫn nằm chờ trong `excel_import_jobs`, và hệ ngoài chờ mãi. Triệu chứng: `SELECT count(*) FROM excel_import_jobs WHERE callback_status='pending'` tăng dần |
 | **Callback là "ít nhất một lần"** | Bên nhận trả 2xx chậm hơn timeout thì lá thư đó vẫn được gửi lại. Không có cách nào biến thành "đúng một lần" — bên nhận phải idempotent theo `externalId` |
-| **Nguồn dữ liệu `Failed` vẫn chiếm tên** | Nạp hỏng để lại một dòng `core_datasource` trạng thái `Failed`: không vào hỏi đáp nhưng tạo lại đúng tên đó sẽ bị `409`. Bên tích hợp phải gọi endpoint xóa. Kiểm tra tồn đọng: `SELECT id, name FROM core_datasource WHERE status = 'Failed'` |
-| **Khối `COPY` chết ở `uploadExcel`** | [datasource.py:558](../backend/apps/datasource/api/datasource.py#L558) có một khối `COPY FROM STDIN` chạy sau `to_sql` nhưng thiếu `seek(0)`, nên nó đọc chuỗi rỗng và nạp 0 dòng. Vô hại đúng vì lỗi đó — ai "sửa" bằng cách thêm `seek(0)` sẽ làm **mọi bảng nhân đôi dữ liệu**. Đường mới (`utils/excel_import.py`) đã bỏ hẳn khối này |
+| **Nguồn dữ liệu `Failed` tồn đọng, và tự nhân lên** | Nạp hỏng để lại một dòng `core_datasource` trạng thái `Failed`. Nó **không** chiếm tên (`find_conflicting_ds` loại trừ `FAILED`), nên gọi lại cùng tên vẫn ra `202` — chính vì thế mỗi lần thử lại đẻ thêm một dòng nữa, và không có lỗi nào báo cho ai biết. Chúng vẫn hiện trong `GET /datasource/list` vì hàm đó không lọc theo status. Kiểm tra tồn đọng: `SELECT id, name FROM core_datasource WHERE status = 'Failed'` |
+| **`EXCEL_DOWNLOAD_ALLOWED_HOSTS` rỗng chặn sạch, không phải mở sạch** | Hỏng theo hướng đóng là cố ý — đây là allowlist chống SSRF, mà mặc định "mở" của một biến chưa ai điền thì nguy hiểm hơn hẳn một endpoint chết. Triệu chứng khi quên điền: **mọi** lời gọi `createFromExcelAsync` trả `400 URL_HOST_NOT_ALLOWED` với thông điệp nói thẳng là chưa cấu hình |
+| **URL ký sẵn là credential, không phải đường dẫn** | Chữ ký nằm trong query string và nó được ghi nguyên văn xuống cột `excel_import_jobs.file_url`. Không bao giờ log cả URL, không dán vào issue hay chat: dùng `RemoteSource.safe_label` (host + object key). Hệ quả vận hành: ai đọc được bảng đó là đọc được file nguồn cho tới khi chữ ký hết hạn |
+| **Hạn chữ ký tính từ lúc ký, không phải từ lúc worker chạy** | Job xếp hàng sau các job khác, hoặc được vòng phục hồi nhặt lại sau khi tiến trình chết, đều có thể tới lượt tải hàng chục phút sau khi nhận việc. Vì vậy URL được kiểm hạn **lại lần nữa** ngay trước khi tải, và đối tác được yêu cầu ký ≥ 1 giờ. Triệu chứng khi ký quá ngắn: `400 URL_EXPIRED` ở pha đồng bộ, hoặc `DOWNLOAD_FORBIDDEN` trong callback |
+| **`status` thành `Failed` trước khi `error_code` được ghi** | `fail_import_job` đổi trạng thái nguồn dữ liệu rồi mới ghi dòng job. Hệ ngoài hỏi `excelImportStatus` đúng khe giữa hai bước sẽ thấy `Failed` kèm `errorCode: null`. Khe này rất hẹp và tự khỏi ở lần hỏi sau, nhưng đủ để một client hỏi liên tục gặp phải |
+| **Khối `COPY` chết ở `uploadExcel`** | [datasource.py:563](../backend/apps/datasource/api/datasource.py#L563) có một khối `COPY FROM STDIN` chạy sau `to_sql` nhưng thiếu `seek(0)`, nên nó đọc chuỗi rỗng và nạp 0 dòng. Vô hại đúng vì lỗi đó — ai "sửa" bằng cách thêm `seek(0)` sẽ làm **mọi bảng nhân đôi dữ liệu**. Đường mới (`utils/excel_import.py`) đã bỏ hẳn khối này |
 | **`sessionmaker.close()` không đóng pool** | `ConnectionPoolManager` lưu `sessionmaker`, và `sessionmaker` không có `close()` thật — engine bên dưới sống mãi cùng toàn bộ connection. Muốn giải phóng phải `engine.dispose()`. Cùng lớp lỗi với `get_engine_conn()` gọi xong không `dispose` |
 
 Đọc trạng thái hàng đợi khi cần chẩn đoán:
@@ -512,3 +530,13 @@ Hai lý do bẫy này khó phát hiện:
 |---|---|
 | Lỗi vẫn "đúng" format | `ResponseMiddleware` bỏ qua mọi response **ngoài dải 2xx**, nên 4xx/5xx thoát envelope sẵn. Test một vài ca lỗi rồi kết luận "không bị bọc" là sai — chỉ nhánh thành công mới lộ vấn đề |
 | Test không bắt được | Fixture e2e ở [tests/test_ai_sync_e2e.py:56](../tests/test_ai_sync_e2e.py#L56) chỉ gắn `RequestContextMiddleware` + auth giả, **không** có `ResponseMiddleware` — về cấu trúc không thể phát hiện lớp lỗi này. Thêm endpoint đối tác mới thì phải kiểm bằng request thật vào app đã chạy |
+
+### 7.9. Quản trị người dùng và định danh theo `account`
+
+| Bẫy | Chi tiết |
+|---|---|
+| **`unique=True` trong model SQLModel không tới được DB** | `sys_user.account` và `sys_user.name` đều khai `unique=True` ([models/user.py:11-13](../backend/apps/system/models/user.py#L11)), nhưng bảng được tạo bằng DDL viết tay ở [001_ddl.py:23](../backend/alembic/versions/001_ddl.py#L23) và **không có ràng buộc duy nhất nào**. Đọc model rồi kết luận DB có ràng buộc là sai — đã sai một lần khi soạn spec |
+| `account` duy nhất chỉ nhờ kiểm ở tầng ứng dụng | `check_account_exists` ([crud/user.py:120](../backend/apps/system/crud/user.py#L120)) chạy lúc tạo, không có index duy nhất đỡ phía sau — một check-then-act kinh điển, hai request đồng thời vẫn tạo được hai `account` trùng. Hệ quả nặng hơn bình thường vì `resolve_uid_by_account` dùng `.first()`: có trùng thì nó **im lặng chọn một trong hai**. `name` thì không duy nhất, và không cần duy nhất |
+| Route `/user/by-account/*` phải đăng ký **trước** `/user/{id}` | Starlette khớp route theo thứ tự đăng ký, `{param}` ăn trọn một đoạn đường dẫn. Đặt sau thì `DELETE /user/by-account` rơi vào `DELETE /user/{id}` rồi chết ở bước ép kiểu int với thông báo không liên quan tới nguyên nhân. Thêm route `/user/...` mới thì kiểm lại vị trí |
+| `status = 0` giết luôn token **đang sống**, không chỉ chặn lần đăng nhập sau | `TokenMiddleware` đọc lại `status` ở **mỗi** request ([auth.py:156](../backend/apps/system/middleware/auth.py#L156), và 125 / 236 cho API key / token nhúng), còn handler đổi trạng thái xoá cache `USER_INFO` nên hiệu lực tức thì. Ngoại lệ duy nhất: luồng SSE đang chạy dở vẫn chạy tới hết, vì middleware chỉ chạy lúc mở request |
+| Thừa field trong body thì **bị bỏ qua im lặng**, không 422 | Mặc định `extra='ignore'` của pydantic; không schema nào trong repo bật `extra='forbid'`. Gửi kèm `id` vào `POST /user` cũng bị bỏ, hệ thống vẫn tự sinh id. Ngoại lệ cố ý: object `configuration` của datasource có kiểm tên key và trả 422 ([utils.py:26](../backend/apps/datasource/utils/utils.py#L26)) |

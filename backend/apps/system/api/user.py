@@ -2,13 +2,13 @@ from collections import defaultdict
 from typing import Optional
 from fastapi import APIRouter, File, Path, Query, UploadFile
 from sqlmodel import SQLModel, or_, select, delete as sqlmodel_delete
-from apps.system.crud.user import check_account_exists, check_email_exists, check_email_format, check_pwd_format, get_db_user, single_delete, user_ws_options
+from apps.system.crud.user import check_account_exists, check_email_exists, check_email_format, check_pwd_format, get_db_user, resolve_uid_by_account, single_delete, user_ws_options
 from apps.system.crud.user_excel import batchUpload, downTemplate, download_error_file
 from apps.system.models.system_model import UserWsModel, WorkspaceModel
 from apps.system.models.user import UserModel
 from apps.system.schemas.auth import CacheName, CacheNamespace
 from apps.system.schemas.permission import SqlbotPermission, require_permissions
-from apps.system.schemas.system_schema import PwdEditor, UserCreator, UserEditor, UserGrid, UserInfoDTO, UserLanguage, UserStatus, UserWs
+from apps.system.schemas.system_schema import PwdEditor, UserCreator, UserEditor, UserGrid, UserInfoDTO, UserLanguage, UserStatus, UserStatusByAccount, UserWs
 from common.audit.models.log_model import OperationType, OperationModules
 from common.audit.schemas.logger_decorator import LogConfig, system_log
 from common.core.deps import CurrentUser, SessionDep, Trans
@@ -211,6 +211,101 @@ async def ws_change(session: SessionDep, current_user: CurrentUser, trans:Trans,
     user_model: UserModel = get_db_user(session = session, user_id = current_user.id)
     user_model.oid = oid
     session.add(user_model)
+
+# ---------------------------------------------------------------------------
+# Nhóm route định danh theo ``account``
+#
+# Hệ thống tích hợp bên ngoài đặt ``account`` bằng đúng định danh người dùng bên họ, nên không giữ
+# ``id`` snowflake của SQLBot. Mỗi route dưới đây chỉ làm một việc: phân giải ``account`` thành
+# ``id`` rồi gọi lại chính handler cũ. Vì gọi lại handler chứ không chép phần thân, ba lớp decorator
+# của handler gốc (kiểm quyền, xoá cache, ghi log kiểm toán) vẫn chạy đúng cấu hình gốc và không bị
+# lệch đi khi handler gốc thay đổi.
+#
+# Các handler được gọi lại (``query``, ``update``, ``delete``...) định nghĩa ở phía dưới trong cùng
+# module — hợp lệ vì tên chỉ được phân giải lúc gọi, không phải lúc định nghĩa hàm.
+#
+# ⚠ Khối này phải đứng TRƯỚC ``/{id}``: ``DELETE /user/by-account`` và ``DELETE /user/{id}`` cùng
+# khớp một đoạn đường dẫn sau ``/user``, mà Starlette chọn route theo thứ tự đăng ký — đặt sau thì
+# request rơi vào ``/{id}`` và chết ở bước ép kiểu int.
+# ---------------------------------------------------------------------------
+
+@router.get("/by-account/{account}", response_model=UserEditor, summary=f"{PLACEHOLDER_PREFIX}user_detail_by_account_api")
+@require_permissions(permission=SqlbotPermission(role=['admin']))
+async def query_by_account(session: SessionDep, trans: Trans, account: str = Path(description=f"{PLACEHOLDER_PREFIX}user_account")) -> UserEditor:
+    """
+    Như ``GET /user/{id}`` nhưng định danh bằng ``account``.
+
+    Vẫn giữ ``require_permissions`` ở lớp ngoài dù handler gốc cũng có, để chặn trước khi tra cứu:
+    nếu không, người không phải admin vẫn dò được một ``account`` có tồn tại hay không qua nội dung
+    thông báo lỗi.
+    """
+    uid = resolve_uid_by_account(session=session, account=account, trans=trans)
+    return await query(session=session, trans=trans, id=uid)
+
+
+@router.put("/by-account", summary=f"{PLACEHOLDER_PREFIX}user_update_by_account_api")
+@require_permissions(permission=SqlbotPermission(role=['admin']))
+async def update_by_account(session: SessionDep, editor: UserCreator, trans: Trans):
+    """
+    Như ``PUT /user`` nhưng lấy ``account`` trong body làm định danh.
+
+    Body dùng ``UserCreator`` (tức ``UserEditor`` bỏ ``id``) rồi tự gắn ``id`` phân giải được vào.
+    Cách này còn khép luôn một kẽ hở của bản gốc: ở đó ``id`` và ``account`` do client gửi độc lập
+    nhau, gửi lệch một cặp là sửa nhầm sang người khác.
+
+    Chỉ chuyển tiếp các trường client thực sự gửi (``exclude_unset``) để giữ nguyên ngữ nghĩa cập
+    nhật một phần của handler gốc — nếu dựng lại đủ mọi trường thì giá trị mặc định của trường bị
+    bỏ trống sẽ ghi đè dữ liệu đang có.
+    """
+    data = editor.model_dump(exclude_unset=True)
+    data['id'] = resolve_uid_by_account(session=session, account=editor.account, trans=trans)
+    return await update(session=session, editor=UserEditor.model_validate(data), trans=trans)
+
+
+@router.patch("/by-account/status", summary=f"{PLACEHOLDER_PREFIX}update_status_by_account")
+@require_permissions(permission=SqlbotPermission(role=['admin']))
+async def status_change_by_account(session: SessionDep, current_user: CurrentUser, trans: Trans, statusDto: UserStatusByAccount):
+    """
+    Như ``PATCH /user/status`` nhưng định danh bằng ``account``.
+    """
+    uid = resolve_uid_by_account(session=session, account=statusDto.account, trans=trans)
+    return await statusChange(session=session, current_user=current_user, trans=trans,
+                              statusDto=UserStatus(id=uid, status=statusDto.status))
+
+
+@router.delete("/by-account", summary=f"{PLACEHOLDER_PREFIX}user_batchdel_by_account_api")
+@require_permissions(permission=SqlbotPermission(role=['admin']))
+async def batch_del_by_account(session: SessionDep, trans: Trans, account_list: list[str]):
+    """
+    Như ``DELETE /user`` nhưng body là mảng ``account``.
+
+    Phân giải trọn mảng trước rồi mới xoá: nếu vừa phân giải vừa xoá thì một ``account`` sai ở giữa
+    mảng sẽ để lại trạng thái xoá dở, trong khi phía gọi chỉ nhận đúng một thông báo lỗi chung và
+    không biết ai đã bị xoá.
+    """
+    uid_list = [resolve_uid_by_account(session=session, account=account, trans=trans) for account in account_list]
+    return await batch_del(session=session, id_list=uid_list)
+
+
+@router.delete("/by-account/{account}", summary=f"{PLACEHOLDER_PREFIX}user_del_by_account_api")
+@require_permissions(permission=SqlbotPermission(role=['admin']))
+async def delete_by_account(session: SessionDep, trans: Trans, account: str = Path(description=f"{PLACEHOLDER_PREFIX}user_account")):
+    """
+    Như ``DELETE /user/{id}`` nhưng định danh bằng ``account``. Không hoàn tác được.
+    """
+    uid = resolve_uid_by_account(session=session, account=account, trans=trans)
+    return await delete(session=session, id=uid)
+
+
+@router.patch("/by-account/pwd/{account}", summary=f"{PLACEHOLDER_PREFIX}reset_pwd_by_account")
+@require_permissions(permission=SqlbotPermission(role=['admin']))
+async def pwd_reset_by_account(session: SessionDep, current_user: CurrentUser, trans: Trans, account: str = Path(description=f"{PLACEHOLDER_PREFIX}user_account")):
+    """
+    Như ``PATCH /user/pwd/{id}`` nhưng định danh bằng ``account``: đưa mật khẩu về giá trị mặc định.
+    """
+    uid = resolve_uid_by_account(session=session, account=account, trans=trans)
+    return await pwdReset(session=session, current_user=current_user, trans=trans, id=uid)
+
 
 @router.get("/{id}", response_model=UserEditor, summary=f"{PLACEHOLDER_PREFIX}user_detail_api")
 @require_permissions(permission=SqlbotPermission(role=['admin']))
