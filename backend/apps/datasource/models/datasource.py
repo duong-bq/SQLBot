@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import List, Optional, Union
 
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 from sqlalchemy import Column, Text, BigInteger, DateTime, Identity
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlmodel import SQLModel, Field
@@ -137,6 +137,69 @@ class RecommendedProblemBaseChat:
 class TableObj(BaseModel):
     table: CoreTable = None
     fields: List[CoreField] = []
+
+
+class TableCommentByName(BaseModel):
+    """Một phần tử bảng trong body của ``POST /datasource/editTableCommentsByName``.
+
+    ``custom_comment`` cố ý bắt buộc: bảng đã được liệt kê thì phải nói rõ ghi gì (chuỗi rỗng nghĩa
+    là xóa chú thích); muốn giữ nguyên bảng nào thì không liệt kê bảng đó. Nhờ vậy không cần gán
+    nghĩa ngầm cho ``null``/vắng mặt như nhóm endpoint sửa theo id.
+    """
+    table_name: str
+    custom_comment: str
+
+
+class EditTableCommentsByNameRequest(BaseModel):
+    """Body của ``POST /datasource/editTableCommentsByName``: ghi chú thích nhiều bảng theo tên.
+
+    Dùng BaseModel thuần (không tái dùng ``CoreTable``) để FastAPI validate body và trả 422 chuẩn —
+    model SQLModel ``table=True`` không được validate.
+    """
+    ds_id: int
+    tables: List[TableCommentByName]
+
+    @field_validator("tables")
+    @classmethod
+    def _validate_tables(cls, v: List[TableCommentByName]):
+        """Chặn mảng rỗng (request vô nghĩa) và tên bảng lặp (hai phần tử cùng ghi một bản ghi
+        thì kết quả phụ thuộc thứ tự — bắt client nói rõ ý định thay vì chọn hộ)."""
+        if not v:
+            raise ValueError("tables must not be empty")
+        names = [t.table_name for t in v]
+        duplicated = sorted({n for n in names if names.count(n) > 1})
+        if duplicated:
+            raise ValueError(f"duplicated table_name: {duplicated}")
+        return v
+
+
+class FieldCommentByName(BaseModel):
+    """Một phần tử cột trong body của ``POST /datasource/editFieldCommentsByName``.
+
+    ``custom_comment`` bắt buộc với cùng lý do như ``TableCommentByName``.
+    """
+    field_name: str
+    custom_comment: str
+
+
+class EditFieldCommentsByNameRequest(BaseModel):
+    """Body của ``POST /datasource/editFieldCommentsByName``: ghi chú thích nhiều cột của MỘT bảng,
+    định danh bảng và cột bằng tên; mọi id được phân giải phía server."""
+    ds_id: int
+    table_name: str
+    fields: List[FieldCommentByName]
+
+    @field_validator("fields")
+    @classmethod
+    def _validate_fields(cls, v: List[FieldCommentByName]):
+        """Chặn mảng rỗng và tên cột lặp — cùng lý do với ``EditTableCommentsByNameRequest``."""
+        if not v:
+            raise ValueError("fields must not be empty")
+        names = [f.field_name for f in v]
+        duplicated = sorted({n for n in names if names.count(n) > 1})
+        if duplicated:
+            raise ValueError(f"duplicated field_name: {duplicated}")
+        return v
 
 
 # datasource config info

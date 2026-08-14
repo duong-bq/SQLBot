@@ -24,6 +24,8 @@
   "ds_field_list": "获取字段列表",
   "ds_edit_table": "编辑表信息",
   "ds_edit_field": "编辑字段信息",
+  "ds_edit_table_comments_by_name": "按表名批量编辑表注释",
+  "ds_edit_field_comments_by_name": "按字段名批量编辑字段注释",
   "ds_preview_data": "预览数据",
   "ds_upload_excel": "上传Excel",
   "ds_excel": "文件",

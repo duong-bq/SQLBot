@@ -538,6 +538,82 @@ def updateField(session: SessionDep, field: CoreField):
     run_save_ds_embeddings([field.ds_id])
 
 
+def update_table_comments_by_name(session: SessionDep, payload) -> dict:
+    """Ghi chú thích cho nhiều bảng của một nguồn dữ liệu, định danh bảng bằng TÊN thay vì id.
+
+    Khác nhóm ``update_table``/``update_field`` cũ ở ba điểm cố ý:
+    - Chỉ ghi ``custom_comment``, không đụng ``checked`` — tránh bẫy "thiếu checked thì tự bật lại".
+    - Id bảng/nguồn phân giải phía server nên embedding luôn được tính lại đúng, client không thể
+      quên gửi id như nhóm cũ.
+    - All-or-nothing: tra đủ tên trước, chỉ cần một tên không khớp là 404 kèm danh sách tên hỏng và
+      KHÔNG ghi gì (một commit duy nhất ở cuối). Tên so khớp chính xác, phân biệt hoa thường.
+
+    Body 404 là object phẳng (không bọc ``{"detail": ...}``) vì exception handler của repo trả
+    thẳng ``exc.detail`` làm body.
+    """
+    names = [t.table_name for t in payload.tables]
+    records = session.query(CoreTable).filter(
+        and_(CoreTable.ds_id == payload.ds_id, CoreTable.table_name.in_(names))).all()
+    by_name = {r.table_name: r for r in records}
+    missing = [n for n in names if n not in by_name]
+    if missing:
+        raise HTTPException(status_code=404, detail={
+            "message": "Some tables not found in datasource",
+            "tables_not_found": missing,
+        })
+
+    for item in payload.tables:
+        record = by_name[item.table_name]
+        record.custom_comment = item.custom_comment
+        session.add(record)
+    session.commit()
+
+    # do table embedding
+    run_save_table_embeddings([r.id for r in records])
+    run_save_ds_embeddings([payload.ds_id])
+    return {"tables_updated": len(records)}
+
+
+def update_field_comments_by_name(session: SessionDep, payload) -> dict:
+    """Ghi chú thích cho nhiều cột của MỘT bảng, định danh bảng và cột bằng tên.
+
+    Cùng ngữ nghĩa với ``update_table_comments_by_name`` (chỉ ghi ``custom_comment``, all-or-nothing,
+    404 có cấu trúc). Bảng không tồn tại trong nguồn cũng trả 404 với ``tables_not_found`` — body
+    luôn đủ cả hai danh sách để client parse một khuôn duy nhất.
+    """
+    table = session.query(CoreTable).filter(
+        and_(CoreTable.ds_id == payload.ds_id, CoreTable.table_name == payload.table_name)).first()
+    if table is None:
+        raise HTTPException(status_code=404, detail={
+            "message": "Table not found in datasource",
+            "tables_not_found": [payload.table_name],
+            "fields_not_found": [],
+        })
+
+    names = [f.field_name for f in payload.fields]
+    records = session.query(CoreField).filter(
+        and_(CoreField.table_id == table.id, CoreField.field_name.in_(names))).all()
+    by_name = {r.field_name: r for r in records}
+    missing = [n for n in names if n not in by_name]
+    if missing:
+        raise HTTPException(status_code=404, detail={
+            "message": "Some fields not found in table",
+            "tables_not_found": [],
+            "fields_not_found": missing,
+        })
+
+    for item in payload.fields:
+        record = by_name[item.field_name]
+        record.custom_comment = item.custom_comment
+        session.add(record)
+    session.commit()
+
+    # do table embedding
+    run_save_table_embeddings([table.id])
+    run_save_ds_embeddings([payload.ds_id])
+    return {"fields_updated": len(records)}
+
+
 def preview(session: SessionDep, current_user: CurrentUser, id: int, table_id: int):
     """Lấy 100 dòng dữ liệu đầu của một bảng để xem trước.
 

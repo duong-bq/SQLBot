@@ -27,14 +27,15 @@ from common.utils.distributed_lock import try_acquire_xact_lock
 from common.utils.utils import SQLBotLogUtil
 from ..crud.datasource import get_datasource_list, check_status, create_ds, update_ds, delete_ds, getTables, getFields, \
     update_table_and_fields, getTablesByDs, chooseTables, preview, updateTable, updateField, get_ds, fieldEnum, \
-    check_status_by_id, sync_single_fields, check_name, create_ds_importing, find_conflicting_ds
+    check_status_by_id, sync_single_fields, check_name, create_ds_importing, find_conflicting_ds, \
+    update_table_comments_by_name, update_field_comments_by_name
 from ..crud.excel_job import create_job, get_job_by_ds_id, resend_callback
 from ..crud.field import get_fields_by_table_id
 from ..crud.table import get_tables_by_ds_id
 from ..models.datasource import CoreDatasource, CreateDatasource, TableObj, CoreTable, CoreField, FieldObj, \
     TableSchemaResponse, ColumnSchemaResponse, PreviewResponse, ImportRequest, SheetFields, FieldInfo, CreatedExcelTable, \
     CreateFromExcelResponse, CreateFromExcelAcceptedResponse, CreateFromExcelUrlRequest, DatasourceStatus, \
-    ExcelImportStatusResponse
+    ExcelImportStatusResponse, EditTableCommentsByNameRequest, EditFieldCommentsByNameRequest
 from ..task.excel_import_task import submit_import_job
 from ..utils.excel import parse_excel_preview
 from ..utils.excel_import import ExcelImportError, import_sheets_to_db
@@ -388,6 +389,36 @@ async def edit_field(session: SessionDep, field: CoreField):
     Body ``CoreField``. Chú thích cột giúp LLM hiểu ý nghĩa cột khi sinh SQL; thay đổi sẽ cập nhật embedding.
     """
     updateField(session, field)
+
+
+@router.post("/editTableCommentsByName", response_model=None,
+             summary=f"{PLACEHOLDER_PREFIX}ds_edit_table_comments_by_name")
+@require_permissions(permission=SqlbotPermission(role=['ws_admin'], type='ds', keyExpression="payload.ds_id"))
+async def edit_table_comments_by_name(session: SessionDep, payload: EditTableCommentsByNameRequest):
+    """
+    Ghi chú thích tùy chỉnh cho nhiều bảng của một nguồn dữ liệu, định danh bảng bằng TÊN — quyền
+    ws_admin và nguồn phải thuộc workspace hiện tại (kiểm qua ``keyExpression``, chặt hơn nhóm
+    editTable/editField cũ vốn chỉ kiểm vai trò).
+
+    Sinh ra cho đối tác tích hợp: họ chỉ có ``ds_id`` và tên bảng, không phải gọi chuỗi
+    tableList/fieldList để lấy id. Chỉ ghi ``custom_comment`` (không đụng ``checked``);
+    ``"" `` nghĩa là xóa chú thích. Một tên không khớp là 404 kèm danh sách, không ghi gì.
+    """
+    return update_table_comments_by_name(session, payload)
+
+
+@router.post("/editFieldCommentsByName", response_model=None,
+             summary=f"{PLACEHOLDER_PREFIX}ds_edit_field_comments_by_name")
+@require_permissions(permission=SqlbotPermission(role=['ws_admin'], type='ds', keyExpression="payload.ds_id"))
+async def edit_field_comments_by_name(session: SessionDep, payload: EditFieldCommentsByNameRequest):
+    """
+    Ghi chú thích tùy chỉnh cho nhiều cột của MỘT bảng, định danh bảng và cột bằng TÊN — quyền
+    ws_admin và nguồn phải thuộc workspace hiện tại.
+
+    Cùng hợp đồng với ``editTableCommentsByName``: chỉ ghi ``custom_comment``, all-or-nothing,
+    404 có cấu trúc khi tên bảng/cột không tồn tại trong nguồn.
+    """
+    return update_field_comments_by_name(session, payload)
 
 
 @router.get("/previewData/{id}", response_model=PreviewResponse, summary=f"{PLACEHOLDER_PREFIX}ds_preview_data")
