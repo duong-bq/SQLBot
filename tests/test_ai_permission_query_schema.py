@@ -22,7 +22,6 @@ def _row(**overrides) -> AiUserPermission:
         domain_uuid="lv-uuid-5678",
         domain_name="Lĩnh vực Dân cư",
         domain_description="Mô tả lĩnh vực",
-        fields=[{"id": "a", "name": "A", "description": None}],
         queries=[{"datasourceId": "d1", "datasourceType": "postgresql", "query": "SELECT 1"}],
         sync_version=100,
         synced_at=datetime(2026, 8, 12, 10, 0, tzinfo=timezone.utc),
@@ -60,7 +59,6 @@ def test_co_du_lieu_map_dung_field():
     assert form.tableInfo.linhVucUuid == "lv-uuid-5678"
     assert form.tableInfo.linhVucName == "Lĩnh vực Dân cư"
     assert form.tableInfo.linhVucDescription == "Mô tả lĩnh vực"
-    assert form.tableInfo.fields == [{"id": "a", "name": "A", "description": None}]
     assert form.tableInfo.queries == [{"datasourceId": "d1", "datasourceType": "postgresql", "query": "SELECT 1"}]
 
 

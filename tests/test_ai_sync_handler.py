@@ -27,7 +27,6 @@ def _user(user_id="u1", forms=(("f1", "t1"),)):
                 "formUuid": form_uuid,
                 "tableInfo": {
                     "databaseTableName": table,
-                    "fields": [{"id": "a"}],
                     "queries": [{"datasourceId": f"ds-{form_uuid}", "datasourceType": "postgresql", "query": f"SELECT * FROM {table}"}],
                 },
             }
@@ -120,7 +119,7 @@ def test_trung_datasource_id_trong_1_form_raise_duplicate_datasource_id(db_sessi
         "formQueries": [{
             "formUuid": "f1",
             "tableInfo": {
-                "databaseTableName": "t1", "fields": [{"id": "a"}],
+                "databaseTableName": "t1",
                 "queries": [
                     {"datasourceId": "d1", "datasourceType": "postgresql", "query": "SELECT 1"},
                     {"datasourceId": "d1", "datasourceType": "clickhouse", "query": "SELECT 2"},

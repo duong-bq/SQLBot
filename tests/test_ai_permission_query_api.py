@@ -130,7 +130,7 @@ def test_detail_co_domain_fields_trong_table_info(client, crud_patches):
             user_id="usr-1", full_name="A", is_admin=False, form_uuid="f1",
             database_table_name="t1", table_display_name="Bảng 1", table_description="Mô tả",
             domain_code="LV_DAN_CU", domain_uuid="lv-uuid-5678", domain_name="Lĩnh vực Dân cư",
-            domain_description="Mô tả lĩnh vực", fields=[],
+            domain_description="Mô tả lĩnh vực",
             queries=[{"datasourceId": "d1", "datasourceType": "postgresql", "query": "SELECT 1"}],
             sync_version=100,
             synced_at=datetime(2026, 8, 12, 10, 0, tzinfo=timezone.utc),

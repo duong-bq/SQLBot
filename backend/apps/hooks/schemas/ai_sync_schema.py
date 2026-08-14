@@ -28,16 +28,6 @@ class SyncEnvelope(BaseModel):
     data: dict[str, Any]
 
 
-class FieldItem(BaseModel):
-    """Một cột mà user được đọc. Chỉ `id` bắt buộc."""
-
-    model_config = ConfigDict(populate_by_name=True, extra="ignore")
-
-    id: str = Field(min_length=1)
-    name: str | None = None
-    description: str | None = None
-
-
 class QueryItem(BaseModel):
     """Một phần tử trong `tableInfo.queries[]` — gắn 1 datasource cụ thể với query giới hạn phạm vi
     dữ liệu trên đúng datasource đó. Thay thế 2 field cố định `postgresQuery`/`clickHouseQuery` cũ
@@ -52,14 +42,12 @@ class QueryItem(BaseModel):
 
 
 class TableInfo(BaseModel):
-    """Bảng nghiệp vụ kèm danh sách field và danh sách query theo từng datasource.
+    """Bảng nghiệp vụ kèm danh sách query theo từng datasource.
 
-    Thuộc tính đặt tên `field_list` chứ không phải `fields` để tránh đụng vào không gian tên của
-    Pydantic BaseModel; alias JSON vẫn là `fields`.
+    Không còn nhận `fields` từ AUTHORIZATION_SYNC — field-level metadata đã chuyển sang endpoint
+    edit field/table riêng, gửi kèm ở đây (nếu có) bị bỏ qua âm thầm nhờ `extra="ignore"`.
 
-    `fields` rỗng được chấp nhận: việc thu hồi quyền diễn ra ở mức form (form biến mất khỏi
-    snapshot), không phải ở mức field. Ngược lại `queries` KHÔNG được rỗng: một form không biết lấy
-    dữ liệu từ nguồn nào thì vô nghĩa.
+    `queries` KHÔNG được rỗng/thiếu: một form không biết lấy dữ liệu từ nguồn nào thì vô nghĩa.
 
     `domain_*` (alias `linhVucMa`/`linhVucUuid`/`linhVucName`/`linhVucDescription`) là metadata
     lĩnh vực nghiệp vụ của bảng, optional — SW cũ chưa gửi vẫn parse hợp lệ.
@@ -75,7 +63,6 @@ class TableInfo(BaseModel):
     domain_name: str | None = Field(default=None, alias="linhVucName")
     domain_description: str | None = Field(default=None, alias="linhVucDescription")
     queries: list[QueryItem] = Field(alias="queries", min_length=1)
-    field_list: list[FieldItem] = Field(alias="fields")
 
 
 class FormQuery(BaseModel):
@@ -158,15 +145,6 @@ def to_sync_version(ts: datetime) -> int:
     if ts.tzinfo is None:
         ts = ts.replace(tzinfo=timezone.utc)
     return int(ts.timestamp() * 1000)
-
-
-def normalize_fields(items: list[FieldItem]) -> list[dict[str, Any]]:
-    """Chuẩn hoá danh sách field về list dict đúng 3 khoá để ghi vào cột JSONB.
-
-    Luôn giữ đủ `id`/`name`/`description` (thiếu thì để None) để bên đọc không phải kiểm tra sự tồn
-    tại của khoá.
-    """
-    return [{"id": item.id, "name": item.name, "description": item.description} for item in items]
 
 
 def normalize_queries(items: list[QueryItem]) -> list[dict[str, Any]]:

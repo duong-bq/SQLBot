@@ -76,9 +76,10 @@ class AiSyncHookLog(SQLModel, table=True):
 class AiUserPermission(SQLModel, table=True):
     """Trạng thái quyền HIỆN TẠI của user sau khi parse bản tin AUTHORIZATION_SYNC.
 
-    Một dòng = một user + một form + một bảng nghiệp vụ + danh sách field + danh sách query theo
-    từng datasource. `queries` lưu nguyên mảng `{datasourceId, datasourceType, query}`, phase này
-    không parse và không chạy — giữ khoá camelCase để output API đọc thẳng không cần remap.
+    Một dòng = một user + một form + một bảng nghiệp vụ + danh sách query theo từng datasource.
+    `queries` lưu nguyên mảng `{datasourceId, datasourceType, query}`, phase này không parse và
+    không chạy — giữ khoá camelCase để output API đọc thẳng không cần remap. Không còn field-level
+    metadata (`fields`) — đã chuyển sang endpoint edit field/table riêng, ngoài phạm vi sync này.
 
     `domain_*` là metadata lĩnh vực (linh vực nghiệp vụ) của bảng do SW gửi kèm `tableInfo`, chỉ để
     đọc lại khi truy vấn quyền — không dùng để lọc/join gì trong phase này nên không chuẩn hoá
@@ -110,9 +111,6 @@ class AiUserPermission(SQLModel, table=True):
     domain_uuid: str | None = Field(default=None, sa_column=Column(String(100), nullable=True))
     domain_name: str | None = Field(default=None, sa_column=Column(String(255), nullable=True))
     domain_description: str | None = Field(default=None, sa_column=Column(Text, nullable=True))
-    fields: list[dict[str, Any]] = Field(
-        default_factory=list, sa_column=Column(JSONB, nullable=False, server_default=text("'[]'::jsonb"))
-    )
     queries: list[dict[str, Any]] = Field(
         default_factory=list, sa_column=Column(JSONB, nullable=False, server_default=text("'[]'::jsonb"))
     )

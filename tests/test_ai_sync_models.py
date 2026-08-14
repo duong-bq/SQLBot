@@ -38,10 +38,11 @@ def test_permission_co_du_cot_va_unique_user_form():
     for name in (
         "id", "user_id", "full_name", "is_admin", "form_uuid", "database_table_name",
         "table_display_name", "table_description", "domain_code", "domain_uuid",
-        "domain_name", "domain_description", "fields", "queries",
+        "domain_name", "domain_description", "queries",
         "sync_version", "synced_at", "created_at", "updated_at",
     ):
         assert name in cols, f"thiếu cột {name}"
+    assert "fields" not in cols, "cột fields đã bị xoá — field-level metadata chuyển sang endpoint riêng"
     assert cols["sync_version"].nullable is False
     assert cols["domain_code"].nullable is True
     constraint_cols = {

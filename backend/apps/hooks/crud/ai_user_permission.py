@@ -8,7 +8,7 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlmodel import Session
 
 from apps.hooks.models.ai_sync_model import AiUserPermission
-from apps.hooks.schemas.ai_sync_schema import FormQuery, normalize_fields, normalize_queries
+from apps.hooks.schemas.ai_sync_schema import FormQuery, normalize_queries
 
 
 def replace_user_permissions(
@@ -61,7 +61,6 @@ def replace_user_permissions(
             "domain_uuid": form.table_info.domain_uuid,
             "domain_name": form.table_info.domain_name,
             "domain_description": form.table_info.domain_description,
-            "fields": normalize_fields(form.table_info.field_list),
             "queries": normalize_queries(form.table_info.queries),
             "sync_version": sync_version,
             "synced_at": now,

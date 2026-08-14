@@ -14,7 +14,10 @@ from apps.hooks.models.ai_sync_model import AiUserPermission
 
 
 class PermissionTableInfoOut(BaseModel):
-    """Bảng nghiệp vụ kèm field, đọc lại từ 1 dòng `ai_user_permissions`."""
+    """Bảng nghiệp vụ, đọc lại từ 1 dòng `ai_user_permissions`.
+
+    Không còn `fields` — field-level metadata đã chuyển sang endpoint edit field/table riêng.
+    """
 
     model_config = ConfigDict(populate_by_name=True)
 
@@ -25,7 +28,6 @@ class PermissionTableInfoOut(BaseModel):
     linhVucUuid: str | None = None
     linhVucName: str | None = None
     linhVucDescription: str | None = None
-    fields: list[dict[str, Any]]
     queries: list[dict[str, Any]]
 
 
@@ -93,7 +95,6 @@ def to_permission_detail(user_id: str, rows: list[AiUserPermission]) -> UserPerm
                     linhVucUuid=row.domain_uuid,
                     linhVucName=row.domain_name,
                     linhVucDescription=row.domain_description,
-                    fields=row.fields,
                     queries=row.queries,
                 ),
             )

@@ -42,9 +42,6 @@ def _body(user_id: str, timestamp: str, form_uuids: list[str]) -> dict:
                                 "databaseTableName": "kdl_nhan_khau_row_values",
                                 "tableDisplayName": "Dữ liệu Nhân khẩu",
                                 "tableDescription": "Bảng lưu trữ thông tin cư trú của công dân",
-                                "fields": [
-                                    {"id": "province_id", "name": "Mã Tỉnh/Thành", "description": "Mã định danh"},
-                                ],
                                 "queries": [
                                     {"datasourceId": "ds-pg", "datasourceType": "postgresql", "query": "SELECT * FROM kdl_nhan_khau_row_values WHERE province_id = '01'"},
                                 ],
@@ -194,7 +191,7 @@ def test_e2e_batch_nhieu_user_1_thanh_cong_1_stale(e2e_client, db_session):
                         {
                             "formUuid": "form-y",
                             "tableInfo": {
-                                "databaseTableName": "t", "fields": [{"id": "a"}],
+                                "databaseTableName": "t",
                                 "queries": [{"datasourceId": "d1", "datasourceType": "postgresql", "query": "SELECT 1"}],
                             },
                         }
@@ -230,7 +227,7 @@ def test_e2e_batch_1_user_loi_thi_khong_ai_duoc_ap_dung(e2e_client, db_session):
                         {
                             "formUuid": "form-1",
                             "tableInfo": {
-                                "databaseTableName": "t", "fields": [],
+                                "databaseTableName": "t",
                                 "queries": [{"datasourceId": "d1", "datasourceType": "postgresql", "query": "SELECT 1"}],
                             },
                         }
