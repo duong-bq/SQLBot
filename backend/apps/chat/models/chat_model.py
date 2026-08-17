@@ -150,6 +150,29 @@ class ChatRecord(SQLModel, table=True):
     regenerate_record_id: int = Field(sa_column=Column(BigInteger, nullable=True))
 
 
+class ChatAttachment(SQLModel, table=True):
+    """Text đã trích từ file .docx đính kèm một lượt hỏi (`fileUrl` của `POST /chat/question`).
+
+    Lưu bản trích chứ không lưu URL: presigned URL hết hạn sau ít phút nên bản text này là bản gốc
+    duy nhất cho các lượt hỏi sau. Tách khỏi `chat_record.question` để cột đó giữ sạch câu người
+    dùng gõ (UI, /regenerate, sinh brief đều tiêu thụ nó).
+
+    Tài liệu là MESSAGE, không phải hạ tầng: nó vào prompt theo cơ chế lịch sử hội thoại, chịu cắt
+    trần ký tự và trôi theo cửa sổ. Bảng này chỉ giữ bản gốc cho các chính sách render tự quyết.
+    """
+    __tablename__ = "chat_attachment"
+    id: Optional[int] = Field(sa_column=Column(BigInteger, Identity(always=True), primary_key=True))
+    chat_id: int = Field(sa_column=Column(BigInteger, nullable=False, index=True))
+    # Lượt hỏi ĐÍNH file. Không unique: hợp đồng hiện tại một lượt một file, nhưng chừa đường mở rộng.
+    record_id: int = Field(sa_column=Column(BigInteger, nullable=False, index=True))
+    filename: Optional[str] = Field(sa_column=Column(Text, nullable=True))
+    content: str = Field(sa_column=Column(Text, nullable=False))
+    # Bản trích đã bị cắt ngay từ lúc đọc file (trần ký tự chống zip bomb). Phải lưu để mọi lần
+    # render sau còn nhắc được LLM là tài liệu không đầy đủ.
+    truncated: bool = Field(sa_column=Column(Boolean, nullable=False, default=False))
+    create_time: datetime = Field(sa_column=Column(DateTime(timezone=False), nullable=True))
+
+
 class ChatRecordResult(BaseModel):
     id: Optional[int] = None
     chat_id: Optional[int] = None
@@ -278,6 +301,10 @@ class AiModelQuestion(BaseModel):
     regenerate_record_id: Optional[int] = None
     sample_data: str = ""
     sqlbot_name: str = "SQLBot"
+    # Khối <attached-document> ĐÃ RENDER của tài liệu docx đính kèm lượt này; rỗng khi không đính.
+    # Chỉ được ghép vào câu hỏi ở tầng render prompt (question_for_prompt) — cột question trong DB
+    # và mọi consumer khác của `question` (UI, /regenerate, brief, RAG) luôn thấy câu hỏi sạch.
+    attached_doc: str = ""
     # Dùng cho nhánh answer fallback (pha SQL hỏng hẳn): lý do hỏng và tóm tắt các lượt hỏi-đáp cũ.
     fallback_reason: str = ""
     fallback_history: str = ""
@@ -285,6 +312,21 @@ class AiModelQuestion(BaseModel):
     # nhiêu bảng") — loại câu hỏi mà pha SQL gần như luôn hỏng vì không bảng nghiệp vụ nào chứa
     # thông tin đó, còn schema thì hệ thống nắm sẵn.
     fallback_schema: str = ""
+
+    def question_for_prompt(self) -> str:
+        """Câu hỏi dùng để RENDER PROMPT: có tài liệu đính kèm thì tài liệu đứng trước câu hỏi.
+
+        Tách thành method để ba chỗ render câu hỏi hiện hành (pha SQL, pha answer, nhánh fallback)
+        cùng một hành vi. Tài liệu đứng TRƯỚC vì câu hỏi thường tham chiếu vào nó ("theo tài liệu
+        trên..."); LLM đọc theo thứ tự thì phải gặp tài liệu trước.
+
+        Khối ghép này đi vào chat_log như phần nội dung message bình thường (không mang cờ
+        sqlbot_system), nên các lượt sau pha SQL tự thấy lại tài liệu qua cơ chế replay lịch sử —
+        và cũng tự chịu cắt trần, trôi cửa sổ như mọi message. Đó là hành vi cố ý.
+        """
+        if self.attached_doc:
+            return f'{self.attached_doc}\n{self.question}'
+        return self.question
 
     def sql_sys_question(self, db_type: Union[str, DB], enable_query_limit: bool = True):
         templates: dict[str, str] = {}
@@ -332,9 +374,11 @@ class AiModelQuestion(BaseModel):
         return templates
 
     def sql_user_question(self, current_time: str, change_title: bool):
-        _question = self.question
+        """Dựng user prompt của pha sinh SQL. Câu hỏi lấy qua ``question_for_prompt`` để lượt có
+        tài liệu đính kèm mang theo khối <attached-document> ngay trong <user-question>."""
+        _question = self.question_for_prompt()
         if self.regenerate_record_id:
-            _question = get_sql_template()['regenerate_hint'] + self.question
+            _question = get_sql_template()['regenerate_hint'] + _question
         return get_sql_template()['user'].format(lang=self.lang, engine=self.engine, schema=self.db_schema,
                                                  question=_question,
                                                  rule=self.rule, current_time=current_time, error_msg=self.error_msg,
@@ -391,7 +435,8 @@ class AiModelQuestion(BaseModel):
         `answer_history` đã bao gồm sẵn cặp thẻ `<history>` (hoặc rỗng hẳn) — xem build_answer_prompts.
         """
         return get_answer_template()['user'].format(history=self.answer_history,
-                                                    question=self.question, sql=self.sql,
+                                                    question=self.question_for_prompt(),
+                                                    sql=self.sql,
                                                     fields=self.fields, data=self.data,
                                                     data_scope=self.data_scope)
 
@@ -409,7 +454,7 @@ class AiModelQuestion(BaseModel):
 
     def answer_fallback_user_question(self):
         """User prompt cho nhánh fallback: câu hỏi + lý do hỏng + danh sách bảng + các lượt hỏi-đáp cũ."""
-        return get_answer_template()['fallback_user'].format(question=self.question,
+        return get_answer_template()['fallback_user'].format(question=self.question_for_prompt(),
                                                              reason=self.fallback_reason,
                                                              schema=self.fallback_schema,
                                                              history=self.fallback_history)
@@ -452,6 +497,12 @@ class AiModelQuestion(BaseModel):
 class ChatQuestion(AiModelQuestion):
     chat_id: int
     datasource_id: Optional[int] = None
+    # Bản GỐC của tài liệu docx đính kèm lượt này (đã trích thành markdown, chưa cắt theo ngân
+    # sách prompt) — dùng để ghi bảng chat_attachment sau khi record của lượt được tạo. Bản đưa
+    # vào prompt là `attached_doc` (kế thừa từ AiModelQuestion), đã render và áp trần riêng.
+    attachment_filename: Optional[str] = None
+    attachment_content: Optional[str] = None
+    attachment_truncated: bool = False
 
 
 class ChatMcp(ChatQuestion):
@@ -486,6 +537,11 @@ class ChatQuestionBase(BaseModel):
     # datasource gắn cứng lúc tạo, đổi giữa chừng sẽ làm hỏng ngữ cảnh multi-turn.
     datasource: Optional[int] = Body(description='数据源ID，仅当 chat_id 尚不存在、需要自动创建会话时必填',
                                      default=None)
+    # Presigned URL trỏ tới file .docx đính kèm lượt hỏi này. Nội dung file được trích text và
+    # trở thành một phần ngữ cảnh của câu hỏi (cả pha sinh SQL lẫn pha answer). Host phải nằm
+    # trong EXCEL_DOWNLOAD_ALLOWED_HOSTS; URL chỉ cần sống qua một lần tải ngay trong request.
+    fileUrl: Optional[str] = Body(description='Presigned URL của file .docx đính kèm câu hỏi',
+                                  default=None)
 
 
 class McpQuestion(ChatQuestionBase):

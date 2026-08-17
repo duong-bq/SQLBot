@@ -183,7 +183,29 @@ cần bắn lại tay, và không lần thử nào bị đốt trong lúc URL c�
 
 Chỉ `AI_CALLBACK_URL` là bắt buộc; các biến còn lại có mặc định dùng được ngay.
 
-### 2.9. Khác
+### 2.9. Tài liệu `.docx` đính kèm câu hỏi
+
+Chi phối trường `fileUrl` của `POST /chat/question` — xem
+[TEXT2SQL_PIPELINE.md §10](TEXT2SQL_PIPELINE.md).
+
+| Biến | Mặc định | Tác dụng |
+|---|---|---|
+| `CHAT_DOC_MAX_MB` | `15` | Trần dung lượng file. Ép trên **số byte thật** đếm trong lúc tải, không tin `Content-Length`. Thấp hơn hẳn trần Excel vì file tải thẳng vào **RAM** (client đang chờ trên connection, không có worker nền để ghi đĩa) — trần này nhân với số request đồng thời chính là chi phí RAM |
+| `CHAT_DOC_DOWNLOAD_TIMEOUT` | `30` | Trần cho cả lượt tải. Người dùng đang ngồi đợi, không có chỗ nào để lùi lại làm sau |
+| `CHAT_DOC_EXTRACT_MAX_CHARS` | `200000` | Trần ký tự lúc trích, ép **trong lúc duyệt** chứ không cắt sau — docx là file zip, không chặn sớm thì một file 1 MB bung ra hàng trăm MB text. Đây cũng là bản được lưu xuống `chat_attachment` |
+| `CHAT_DOC_PROMPT_MAX_CHARS` | `30000` | Phần tài liệu đưa vào prompt của **chính lượt đính kèm** |
+| `CHAT_DOC_HISTORY_MAX_CHARS` | `10000` | Phần tài liệu đưa vào prompt của các **lượt sau**, qua lịch sử answer |
+
+**Không có biến allowlist riêng**: dùng chung `EXCEL_DOWNLOAD_ALLOWED_HOSTS` ở §2.8 vì cùng trỏ về
+một MinIO. Rỗng vẫn là **chặn tất cả** — chưa khai host thì tính năng đính kèm coi như chưa mở, mọi
+`fileUrl` trả `400 URL_HOST_NOT_ALLOWED`. Timeout bắt tay và timeout đọc cũng lấy từ nhóm
+`EXCEL_DOWNLOAD_*`; riêng `EXCEL_DOWNLOAD_RETRIES` **không** áp dụng — luồng này không thử lại, việc
+người dùng bấm gửi lại chính là vòng retry.
+
+Hai trần cuối ảnh hưởng trực tiếp tới prompt nhưng **chưa được đo bằng harness** (§4) — đổi thì phải
+đo lại chứ đừng tin cảm giác.
+
+### 2.10. Khác
 
 `CACHE_TYPE` (`memory`/`redis`/`None`), `CACHE_REDIS_URL`, `LOG_LEVEL`, `LOG_DIR`, `SQL_DEBUG`,
 `PG_POOL_SIZE`/`PG_MAX_OVERFLOW`/`PG_POOL_RECYCLE`/`PG_POOL_PRE_PING` (pool của **DB metadata**),
@@ -439,6 +461,7 @@ kỳ tài liệu, log hay issue nào; nếu cần xoay vòng mật khẩu thì p
 | `BACKEND_CORS_ORIGINS='*'` không dùng được | Kiểu là `AnyUrl`. Muốn mở hết thì đặt `CORS_ALLOW_ALL_ORIGINS=True` |
 | Sửa `template.yaml` mà không restart | `apps/template/template.py` có `@cache` |
 | Đổi cấu hình model trong DB mà không restart | `LLMFactory.create_llm` có `@lru_cache(maxsize=32)` |
+| `EXCEL_DOWNLOAD_ALLOWED_HOSTS` rỗng làm chết **cả** đính kèm `.docx` của chat | Một biến chi phối hai tính năng (§2.9). Triệu chứng phía client là `400 URL_HOST_NOT_ALLOWED` chứ không phải lỗi cấu hình — dễ đi tìm nhầm phía đối tác |
 
 ### 7.4. Hành vi pipeline
 
@@ -450,6 +473,7 @@ kỳ tài liệu, log hay issue nào; nếu cần xoay vòng mật khẩu thì p
 | Event `sql` và `sql-data` **có thể không xuất hiện** | Lượt hạ cấp không có SQL. Client không được coi chúng là bắt buộc |
 | Số liệu nằm ở trường `data` của `sql-data`, **không** phải `content` | `content` vẫn là chuỗi `"execute-success"` — giữ nguyên để client cũ không vỡ |
 | Dựng payload `sql-data` **trước** `save_sql_data` → client nhận nhiều dòng hơn bản lưu DB | Bước lưu mới là chỗ cắt xuống 1000 dòng và gắn `limit`. Xem `build_sql_data_payload` |
+| Tài liệu `.docx` đính kèm **biến mất** khỏi ngữ cảnh sau vài lượt | Cố ý: nó là message, không phải hạ tầng, nên trôi theo cửa sổ lịch sử như câu hỏi thường. Người dùng báo "hỏi lại thì bot quên file" là đúng thiết kế, không phải bug — xem TEXT2SQL_PIPELINE.md §10 |
 | Pha biểu đồ hỏng **không** giết lượt hỏi | Phát `info: chart failed` rồi đi tiếp; vẫn có `answer` + `finish`. Cố ý không gọi `save_error` vì web UI hiện khối lỗi đỏ với mọi record có `error` khác rỗng |
 | Lỗi giữa stream vẫn là **HTTP 200** | Phải đọc event `error`, không dựa vào status code |
 | Cắt dòng dữ liệu mà không kèm `build_data_scope_note` → LLM bịa số tổng | Xem [TEXT2SQL_PIPELINE.md §6](TEXT2SQL_PIPELINE.md) |

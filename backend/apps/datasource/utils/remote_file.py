@@ -113,7 +113,8 @@ def _parse_sigv4_expiry(query: dict[str, list[str]]) -> datetime | None:
         return None
 
 
-def validate_source_url(url: str) -> RemoteSource:
+def validate_source_url(url: str, allowed_extensions: tuple[str, ...] = ALLOWED_EXTENSIONS,
+                        min_ttl_seconds: int | None = None) -> RemoteSource:
     """Kiểm URL nguồn bằng những gì suy được từ chính chuỗi URL, không chạm mạng.
 
     Gọi ở pha đồng bộ để mọi thứ hệ ngoài có thể gõ sai đều hỏng ngay trong response thay vì lùi
@@ -121,6 +122,11 @@ def validate_source_url(url: str) -> RemoteSource:
 
     Đuôi file lấy từ path đã cắt query — presigned URL luôn kết thúc bằng chuỗi ký, nên kiểm đuôi
     trên URL thô thì mọi file hợp lệ đều trượt.
+
+    ``allowed_extensions``/``min_ttl_seconds`` tham số hóa được vì module này giờ phục vụ hai luồng:
+    import excel bất đồng bộ (mặc định — đuôi excel, TTL tối thiểu dài vì job còn xếp hàng chờ
+    worker) và tài liệu docx đính kèm chat (tải ngay trong request nên chỉ cần URL còn sống).
+    Allowlist host thì cố ý dùng CHUNG một biến cấu hình: cả hai luồng cùng trỏ về một MinIO.
     """
     if not url or not url.strip():
         raise ExcelImportError(ERR_URL_INVALID, "fileUrl is required")
@@ -150,22 +156,22 @@ def validate_source_url(url: str) -> RemoteSource:
 
     object_key = unquote(parsed.path)
     extension = object_key.rsplit('.', 1)[-1].lower() if '.' in object_key else ''
-    if extension not in ALLOWED_EXTENSIONS:
+    if extension not in allowed_extensions:
         raise ExcelImportError(
             ERR_URL_BAD_EXTENSION,
-            f"Only support .{'/.'.join(ALLOWED_EXTENSIONS)}, got '{os.path.basename(object_key)}'"
+            f"Only support .{'/.'.join(allowed_extensions)}, got '{os.path.basename(object_key)}'"
         )
 
+    min_ttl = settings.EXCEL_DOWNLOAD_MIN_TTL_SECONDS if min_ttl_seconds is None else min_ttl_seconds
     expires_at = _parse_sigv4_expiry(parse_qs(parsed.query))
     if expires_at is not None:
         remaining = (expires_at - datetime.now(timezone.utc)).total_seconds()
         if remaining <= 0:
             raise ExcelImportError(ERR_URL_EXPIRED, "fileUrl has already expired")
-        if remaining < settings.EXCEL_DOWNLOAD_MIN_TTL_SECONDS:
+        if remaining < min_ttl:
             raise ExcelImportError(
                 ERR_URL_EXPIRED,
-                f"fileUrl expires in {int(remaining)}s, needs at least "
-                f"{settings.EXCEL_DOWNLOAD_MIN_TTL_SECONDS}s"
+                f"fileUrl expires in {int(remaining)}s, needs at least {min_ttl}s"
             )
 
     return RemoteSource(url=url, host=netloc, object_key=object_key,
@@ -349,6 +355,59 @@ def download_to(src: RemoteSource, dest_path: str) -> int:
         ERR_DOWNLOAD_FAILED,
         f"Cannot download after {attempts} attempts: {last_error}"
     )
+
+
+def download_bytes(src: RemoteSource, limit: int, connect_timeout: int = 5,
+                   read_timeout: int = 30, total_timeout: int = 60) -> bytes:
+    """Tải file nhỏ thẳng vào RAM, trả về bytes. Biến thể của ``download_to`` cho luồng đồng bộ.
+
+    Dùng cho tài liệu đính kèm chat: file bé, xử lý ngay trong request, không có worker nào đứng
+    sau. Vì thế khác ``download_to`` ở hai chỗ có chủ ý:
+
+    - KHÔNG ghi đĩa, không file ``.part``: kết quả sống chết cùng request, không cần ai phục hồi.
+    - KHÔNG tự tải lại: client đang chờ trên một kết nối HTTP mở; lặp lại chỉ kéo dài cái chờ đó.
+      Hỏng thì báo ngay để người dùng gửi lại — đó chính là vòng retry, do người dùng cầm.
+
+    Trần ``limit`` vẫn ép trên byte thật trong lúc stream (Content-Length là lời khai), và vẫn có
+    trần tổng thời gian để chặn nguồn nhỏ giọt. Ném ``ExcelImportError`` với cùng bộ mã lỗi.
+    """
+    deadline = time.monotonic() + total_timeout
+    timeout = httpx.Timeout(connect=connect_timeout, read=read_timeout,
+                            write=read_timeout, pool=connect_timeout)
+    chunks: list[bytes] = []
+    written = 0
+    try:
+        with httpx.Client(timeout=timeout, follow_redirects=False) as client:
+            with client.stream("GET", src.url) as resp:
+                err = _definitive_error(resp.status_code, src.safe_label)
+                if err is not None:
+                    raise err
+                if resp.status_code >= 300:
+                    raise ExcelImportError(
+                        ERR_DOWNLOAD_FAILED,
+                        f"Object storage returned {resp.status_code}: {src.safe_label}")
+
+                declared = resp.headers.get("Content-Length")
+                if declared and declared.isdigit() and int(declared) > limit:
+                    raise ExcelImportError(
+                        ERR_FILE_TOO_LARGE, f"File is {declared} bytes, limit is {limit} bytes")
+
+                for chunk in resp.iter_bytes(_CHUNK_SIZE):
+                    written += len(chunk)
+                    if written > limit:
+                        raise ExcelImportError(
+                            ERR_FILE_TOO_LARGE, f"File exceeds limit of {limit} bytes")
+                    if time.monotonic() > deadline:
+                        raise ExcelImportError(
+                            ERR_DOWNLOAD_FAILED, f"Download exceeded {total_timeout}s")
+                    chunks.append(chunk)
+    except ExcelImportError:
+        raise
+    except httpx.HTTPError as e:
+        raise ExcelImportError(ERR_DOWNLOAD_FAILED, f"Cannot download: {type(e).__name__}: {e}")
+
+    SQLBotLogUtil.info(f"[remote] downloaded {written} bytes (in-memory) from {src.safe_label}")
+    return b"".join(chunks)
 
 
 def _discard(part_path: str) -> None:

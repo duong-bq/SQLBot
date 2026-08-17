@@ -260,6 +260,23 @@ class Settings(BaseSettings):
     EXCEL_DOWNLOAD_PROBE_ENABLED: bool = True
     EXCEL_DOWNLOAD_PROBE_TIMEOUT: int = 3
 
+    # --- Tài liệu .docx đính kèm lượt hỏi chat (`fileUrl` của POST /chat/question) ---
+    # Allowlist host dùng CHUNG EXCEL_DOWNLOAD_ALLOWED_HOSTS (cùng một MinIO), rỗng vẫn là cấm tất.
+    # Trần dung lượng file tải về. Nhỏ hơn hẳn trần excel có chủ ý: docx là zip, trần byte này đồng
+    # thời là chốt đầu tiên chống zip bomb (chốt thứ hai là trần ký tự lúc trích).
+    CHAT_DOC_MAX_MB: int = 15
+    # Trần tổng thời gian tải. Tải chạy NGAY TRONG request /chat/question (client đang chờ SSE mở),
+    # nên tính bằng chục giây chứ không phải chục phút như luồng excel, và không tự tải lại.
+    CHAT_DOC_DOWNLOAD_TIMEOUT: int = 30
+    # Trần ký tự LÚC TRÍCH — cũng là trần của bản lưu trong bảng chat_attachment.
+    CHAT_DOC_EXTRACT_MAX_CHARS: int = 200_000
+    # Trần ký tự của khối tài liệu trong prompt của LƯỢT ĐÍNH FILE (cả pha SQL lẫn pha answer).
+    # Chưa đo bằng eval harness — đặt theo ngân sách context, đổi thì nên chạy lại harness.
+    CHAT_DOC_PROMPT_MAX_CHARS: int = 30_000
+    # Trần ký tự của khối tài liệu khi nó xuất hiện lại trong <history> của pha answer các lượt
+    # sau. Chặt hơn trần trên vì lịch sử nhiều lượt còn phải nhường chỗ cho <data> lượt hiện tại.
+    CHAT_DOC_HISTORY_MAX_CHARS: int = 10_000
+
     @field_validator('SQL_DEBUG',
                      'EMBEDDING_ENABLED',
                      'GENERATE_SQL_QUERY_LIMIT_ENABLED',

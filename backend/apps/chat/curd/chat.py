@@ -9,8 +9,11 @@ from sqlalchemy import desc, func
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import aliased
 
+from apps.chat.curd.attachment import get_attachments_by_record_ids
 from apps.chat.models.chat_model import Chat, ChatRecord, CreateChat, ChatInfo, RenameChat, ChatQuestion, ChatLog, \
     TypeEnum, OperationEnum, ChatRecordResult, ChatLogHistory, ChatLogHistoryItem, ChatItem
+from apps.chat.utils.attachment import render_attachment_block
+from common.core.config import settings
 from apps.datasource.crud.datasource import get_ds, is_ds_usable
 from apps.datasource.crud.recommended_problem import get_datasource_recommended_chart
 from apps.datasource.models.datasource import CoreDatasource
@@ -218,6 +221,12 @@ def get_recent_qa_history(session: SessionDep, chat_id: int, exclude_record_id: 
 
     Bỏ qua lượt hiện tại (`exclude_record_id`) và các lượt không có dữ liệu lẫn câu trả lời: chúng
     chỉ làm loãng ngữ cảnh. Trả về chuỗi rỗng khi không có gì đáng đưa vào, để caller tự quyết định.
+
+    Lượt nào có tài liệu docx đính kèm (bảng chat_attachment) thì khối <attached-document> được
+    chèn lại vào round của lượt đó, với trần ký tự riêng CHAT_DOC_HISTORY_MAX_CHARS. Đây là điểm
+    móc chính sách duy nhất cho tài liệu ở pha answer các lượt sau — các chính sách tương lai
+    (tóm tắt, bỏ qua theo độ liên quan, graph-memory) sửa đúng chỗ này. Tài liệu là message: lượt
+    đính file trôi khỏi cửa sổ `rounds` thì tài liệu biến mất theo, cố ý không có ngoại lệ.
     """
     stmt = select(ChatRecord.id, ChatRecord.question, ChatRecord.sql, ChatRecord.data,
                   ChatRecord.answer).where(and_(ChatRecord.chat_id == chat_id))
@@ -225,10 +234,13 @@ def get_recent_qa_history(session: SessionDep, chat_id: int, exclude_record_id: 
         stmt = stmt.where(ChatRecord.id != exclude_record_id)
     stmt = stmt.order_by(ChatRecord.create_time.desc()).limit(rounds)
 
+    rows = session.execute(stmt).all()
+    attachments = get_attachments_by_record_ids(session, [row.id for row in rows])
+
     blocks: List[str] = []
     # Đảo ngược để lượt cũ nhất nằm trên: LLM đọc theo thứ tự thời gian mới hiểu được các câu hỏi
     # tham chiếu ngược kiểu "trong đó cái nào lớn nhất".
-    for row in reversed(session.execute(stmt).all()):
+    for row in reversed(rows):
         _question, _sql, _data, _answer = row.question, row.sql, row.data, row.answer
         fields_text = ''
         rows_text = ''
@@ -247,6 +259,12 @@ def get_recent_qa_history(session: SessionDep, chat_id: int, exclude_record_id: 
         if not rows_text and not _answer:
             continue
         parts = [f'  <user-question>\n{_question or ""}\n  </user-question>']
+        _attachment = attachments.get(row.id)
+        if _attachment:
+            parts.append(render_attachment_block(_attachment.filename, _attachment.content,
+                                                 _attachment.truncated,
+                                                 max_chars=settings.CHAT_DOC_HISTORY_MAX_CHARS,
+                                                 indent='  '))
         if _sql:
             parts.append(f'  <executed-sql>\n{_sql}\n  </executed-sql>')
         if fields_text:

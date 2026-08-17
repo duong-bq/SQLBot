@@ -34,7 +34,7 @@ Hệ quả cụ thể: `ChatFinishStep` đã bị **đánh số lại** để ch
 - Đối tác tích hợp: HĐND TP Hà Nội. Họ gọi API, không dùng web UI.
 - `finish_step` mặc định của `POST /chat/question` là `GENERATE_CHART`, do `GENERATE_CHART_ENABLED`
   quyết định (mặc định bật) qua `default_finish_step`
-  ([chat.py:462](../backend/apps/chat/api/chat.py#L462)); nhánh MCP truyền `QUERY_DATA`
+  ([chat.py:465](../backend/apps/chat/api/chat.py#L465)); nhánh MCP truyền `QUERY_DATA`
   ([mcp.py:258](../backend/apps/mcp/mcp.py#L258)).
 - Số lần gọi LLM cho một lượt hỏi bình thường: **3** (sinh SQL + answer + chart; hai lần sau chạy
   song song). Tắt chart thì còn 2.
@@ -55,6 +55,15 @@ Hệ quả cụ thể: `ChatFinishStep` đã bị **đánh số lại** để ch
   `AI_CALLBACK_URL` (rỗng là tắt gửi) và `EXCEL_DOWNLOAD_ALLOWED_HOSTS` (rỗng là **chặn hết**).
   Kiến trúc ở [BACKEND_ARCHITECTURE.md](BACKEND_ARCHITECTURE.md) §5, hợp đồng ở
   `DATASOURCE_API_SPEC.md` §9.
+- `POST /chat/question` nhận thêm `fileUrl` — presigned URL của một file `.docx` đính kèm câu hỏi.
+  File được tải và trích text ngay trong request, ghép vào **trước** câu hỏi thành khối
+  `<attached-document>`, lưu ở bảng `chat_attachment`. Dùng chung
+  `EXCEL_DOWNLOAD_ALLOWED_HOSTS` với luồng Excel. Thiết kế cốt lõi: tài liệu là **message**, không
+  phải hạ tầng — nó trôi theo cửa sổ lịch sử chứ không sống mãi trong hội thoại. Chi tiết ở
+  [TEXT2SQL_PIPELINE.md](TEXT2SQL_PIPELINE.md) §10.
+- Có thư mục test đầu tiên: `backend/tests/` (`uv run pytest tests/`), hiện chỉ phủ phần trích
+  `.docx`. Phần còn lại của backend vẫn **không có test tự động** — đo chất lượng pipeline bằng
+  harness ở `scripts/eval_text2sql/`, không phải bằng unit test.
 
 ## 4. Bản đồ tài liệu — hỏi gì thì đọc file nào
 

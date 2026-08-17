@@ -32,9 +32,9 @@ lấy từ DB, không dựa trên tài liệu truy hồi.
 
 ```mermaid
 flowchart TD
-    A[POST /chat/question] --> B[resolve_chat_for_question<br/>chat.py:437]
-    B --> C[question_answer_inner<br/>chat.py:516]
-    C --> D[stream_sql<br/>chat.py:701]
+    A[POST /chat/question] --> B[resolve_chat_for_question<br/>chat.py:440]
+    B --> C[question_answer_inner<br/>chat.py:552]
+    C --> D[stream_sql<br/>chat.py:737]
     D --> E[LLMService.run_task<br/>llm.py:1564]
 
     E --> F[RAG: terminology · data_training · custom_prompt]
@@ -70,7 +70,7 @@ flowchart TD
 
 **Nhánh chart mặc định CÓ chạy.** `POST /chat/question` lấy điểm dừng từ `GENERATE_CHART_ENABLED`
 (mặc định `True` → `GENERATE_CHART`), qua hàm `default_finish_step`
-([chat.py:462](../backend/apps/chat/api/chat.py#L462)). Đặt biến đó về `False` thì luồng dừng ở ô
+([chat.py:465](../backend/apps/chat/api/chat.py#L465)). Đặt biến đó về `False` thì luồng dừng ở ô
 `W`. Nhánh MCP không đi qua đây, nó tự truyền `QUERY_DATA`.
 
 Hai chỗ chart **không** chạy bất kể cấu hình: lượt hạ cấp (không có dữ liệu thì biểu đồ vô nghĩa),
@@ -82,10 +82,10 @@ và khi pha SQL hỏng hẳn.
 
 | Bước | Vị trí | Việc |
 |---|---|---|
-| Route | [chat.py:478](../backend/apps/chat/api/chat.py#L478) | `POST /chat/question` |
-| Giải nghĩa chat | [chat.py:437](../backend/apps/chat/api/chat.py#L437) `resolve_chat_for_question` | Chuyển `chat_id` (int nội bộ **hoặc** `external_id` dạng UUID) thành id nội bộ. **Bắt buộc là FastAPI dependency**, không được gọi trong thân hàm, vì `require_permissions` cần thấy id nội bộ đã giải nghĩa |
-| Điều phối | [chat.py:516](../backend/apps/chat/api/chat.py#L516) `question_answer_inner` | Tách quick-command (`/regenerate`, `/analysis`, `/predict`) khỏi câu hỏi thường |
-| Dựng stream | [chat.py:701](../backend/apps/chat/api/chat.py#L701) `stream_sql` | Tạo `LLMService`, trả `StreamingResponse`. Docstring ở đây giải thích từng tham số, kể cả "núm vặn" `finish_step` |
+| Route | [chat.py:485](../backend/apps/chat/api/chat.py#L485) | `POST /chat/question` |
+| Giải nghĩa chat | [chat.py:440](../backend/apps/chat/api/chat.py#L440) `resolve_chat_for_question` | Chuyển `chat_id` (int nội bộ **hoặc** `external_id` dạng UUID) thành id nội bộ. **Bắt buộc là FastAPI dependency**, không được gọi trong thân hàm, vì `require_permissions` cần thấy id nội bộ đã giải nghĩa |
+| Điều phối | [chat.py:552](../backend/apps/chat/api/chat.py#L552) `question_answer_inner` | Tách quick-command (`/regenerate`, `/analysis`, `/predict`) khỏi câu hỏi thường |
+| Dựng stream | [chat.py:737](../backend/apps/chat/api/chat.py#L737) `stream_sql` | Tạo `LLMService`, trả `StreamingResponse`. Docstring ở đây giải thích từng tham số, kể cả "núm vặn" `finish_step` |
 | Chạy pipeline | [llm.py:1564](../backend/apps/chat/task/llm.py#L1564) `run_task` | Toàn bộ pipeline, dạng generator yield từng dòng SSE |
 
 `run_task` chạy trong thread riêng (`run_task_async`, [llm.py:1553](../backend/apps/chat/task/llm.py#L1553)),
@@ -112,7 +112,7 @@ không chờ chart xong.
 
 | Ai gọi | Giá trị | Vì sao |
 |---|---|---|
-| `POST /chat/question` (web + đối tác) | `GENERATE_CHART` khi `GENERATE_CHART_ENABLED=True` (mặc định), ngược lại `GENERATE_ANSWER` — `default_finish_step` ([chat.py:462](../backend/apps/chat/api/chat.py#L462)) | Client cần câu trả lời chữ; biểu đồ là phần thêm, bật/tắt được mà không sửa code |
+| `POST /chat/question` (web + đối tác) | `GENERATE_CHART` khi `GENERATE_CHART_ENABLED=True` (mặc định), ngược lại `GENERATE_ANSWER` — `default_finish_step` ([chat.py:465](../backend/apps/chat/api/chat.py#L465)) | Client cần câu trả lời chữ; biểu đồ là phần thêm, bật/tắt được mà không sửa code |
 | MCP | `QUERY_DATA` ([mcp.py:258](../backend/apps/mcp/mcp.py#L258)) | MCP tự trả markdown/JSON tổng hợp, không tiêu thụ answer |
 
 `default_finish_step` đọc setting **trong thân hàm**, không đặt làm giá trị mặc định của tham số:
@@ -231,6 +231,9 @@ không bịa số"* của `scripts/eval_text2sql/run_eval_http.py`, không đoá
 
 Không dùng chung biến với `LLM_ANSWER_FALLBACK_*` vì hai nhánh có ngân sách token khác hẳn nhau —
 nhánh này còn phải chứa `<data>` của chính lượt hiện tại.
+
+Chính hàm dựng lịch sử này cũng là nơi tài liệu `.docx` đính kèm ở lượt trước quay lại prompt — xem
+§10, mục *Tài liệu đính kèm*.
 
 ---
 
@@ -385,6 +388,50 @@ Lịch sử cho pha **answer** thì lấy từ `chat_record` qua `get_recent_qa_
 ([curd/chat.py:211](../backend/apps/chat/curd/chat.py#L211)), không lấy từ `sql_message` — vì
 `sql_message` mang theo cả m-schema nặng vài chục KB.
 
+### Tài liệu đính kèm — khối `<attached-document>`
+
+`POST /chat/question` nhận thêm `fileUrl` (presigned URL của một `.docx`). File được tải và trích
+text **ngay trong request**, trước khi pipeline chạy ([chat.py:517](../backend/apps/chat/api/chat.py#L517)),
+rồi ghép vào **trước** câu hỏi qua `question_for_prompt`
+([chat_model.py:316](../backend/apps/chat/models/chat_model.py#L316)):
+
+```
+<attached-document filename="bao-cao.docx">
+… đoạn văn và bảng, bảng ở dạng Markdown …
+</attached-document>
+<câu hỏi của người dùng>
+```
+
+Ghép ở **thời điểm render prompt**, không ghép vào `chat_question.question`. Nhờ vậy cột
+`chat_record.question`, tiêu đề hội thoại, `/regenerate` và các bộ lọc RAG vẫn thấy câu hỏi sạch.
+Ba chỗ dùng bản đã ghép: `sql_user_question`, `answer_user_question` và
+`answer_fallback_user_question`. **Pha chart cố ý không dùng** — nó chỉ cần biết dữ liệu có những
+cột gì.
+
+Đây là một **message**, không phải hạ tầng: khối này không mang cờ `sqlbot_system`, nên nó chịu
+đúng luật của lịch sử hội thoại như mọi câu hỏi khác. Hai pha thừa hưởng nó theo hai đường khác nhau:
+
+- **Pha SQL các lượt sau** — tự động, không có dòng code nào riêng. Bản đã ghép đi vào `chat_log`
+  như nội dung message bình thường rồi được phát lại, chịu cả cửa sổ 5 lượt lẫn trần ký tự ở trên.
+- **Pha answer các lượt sau** — phải join tay, vì lịch sử answer dựng lại từ cột của `chat_record`
+  chứ không phát lại message. Chỗ join là `get_recent_qa_history`
+  ([curd/chat.py:238](../backend/apps/chat/curd/chat.py#L238)). **Đây là điểm móc chính sách duy
+  nhất**: muốn tóm tắt tài liệu, lọc theo độ liên quan, hay ghim nó lại thì sửa ở đây.
+
+Hệ quả đã biết và chấp nhận: lượt đính kèm trôi khỏi cửa sổ thì mô hình mất tài liệu. Đổi lại, tài
+liệu không chiếm chỗ vĩnh viễn trong mọi prompt về sau.
+
+**Ba trần ký tự khác nhau, đừng gộp** ([config.py:264](../backend/common/core/config.py#L264)):
+
+| Trần | Mặc định | Chặn cái gì |
+|---|---|---|
+| `CHAT_DOC_EXTRACT_MAX_CHARS` | 200.000 | Lúc trích. Chống zip bomb, và đây cũng là bản lưu xuống `chat_attachment` |
+| `CHAT_DOC_PROMPT_MAX_CHARS` | 30.000 | Bản vào prompt của **chính lượt đính kèm** |
+| `CHAT_DOC_HISTORY_MAX_CHARS` | 10.000 | Bản vào prompt của các **lượt sau**, qua lịch sử answer |
+
+Cả ba tầng cắt đều **nói thẳng cho mô hình biết là đã cắt** — cùng một luật với `<data-scope>` ở §6:
+dữ liệu bị cắt mà không báo là công thức sinh ra câu trả lời bịa số.
+
 ### `template.yaml` — bản đồ khối
 
 File duy nhất: [backend/templates/template.yaml](../backend/templates/template.yaml), một key gốc
@@ -480,6 +527,7 @@ Chi tiết đầy đủ (schema từng event, ví dụ capture thật, bảng l�
 | Định dạng dây | Chỉ `data:` + JSON, **không có dòng `event:`**, **không có `[DONE]`** |
 | Kết thúc | Luôn là `{"type":"finish"}` hoặc `{"type":"error"}` — `finish` phải là event **cuối cùng**, client dừng đọc ngay khi thấy nó |
 | Lỗi giữa stream | Vẫn trả HTTP **200**; lỗi nằm trong event `error` |
+| Lỗi file đính kèm | Ngoại lệ của dòng trên: bắt được **trước khi** stream mở nên trả `HTTP 400` + `{code, message}`, không có event nào. Chưa `yield` byte đầu tiên thì status code còn nói được sự thật — đừng chuyển nó vào event `error` |
 | Event tùy chọn | `sql`, `sql-data`, `brief` **có thể không xuất hiện** (hạ cấp / không phải lượt đầu) |
 | Event token | `sql-result`, `answer-result` — cộng dồn `content`. `reasoning_content` luôn rỗng vì đã tắt thinking |
 | Số liệu | Nằm trong trường `data` của event `sql-data` ([llm.py:1784](../backend/apps/chat/task/llm.py#L1784)), **không** phải trong `content` — `content` vẫn là chuỗi `"execute-success"` như hợp đồng cũ |

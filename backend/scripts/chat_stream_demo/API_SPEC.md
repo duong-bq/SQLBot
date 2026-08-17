@@ -159,6 +159,28 @@ Luôn kiểm tra `status_code` trước khi bóc `.data`. Ngoại lệ: lỗi va
 
 > Truy cập trái phép trả về **500**, không phải 403 — hành vi hiện tại của hệ thống.
 
+**Lỗi của file đính kèm** (`fileUrl` trong `POST /chat/question`, xem
+[§6.10](#610-gửi-kèm-tài-liệu-docx--fileurl)) đều trả **`400`** với body có cấu trúc:
+
+```json
+{"code": "URL_EXPIRED", "message": "fileUrl has already expired"}
+```
+
+| `code` | Nguyên nhân |
+|---|---|
+| `URL_INVALID` | `fileUrl` không phải URL `http(s)` |
+| `URL_HOST_NOT_ALLOWED` | Host không nằm trong danh sách cho phép của SQLBot |
+| `URL_BAD_EXTENSION` | Đuôi file không phải `.docx` |
+| `URL_EXPIRED` | Chữ ký đã hết hạn, hoặc hạn còn lại quá ngắn |
+| `DOWNLOAD_FORBIDDEN` | Kho đối tượng từ chối (`403`) — chữ ký sai hoặc hết hạn |
+| `DOWNLOAD_NOT_FOUND` | Kho đối tượng báo không có object (`404`) |
+| `DOWNLOAD_FAILED` | Không tải được vì lý do khác (mạng, kho đối tượng lỗi, file rỗng) |
+| `FILE_TOO_LARGE` | File vượt trần **15 MB** |
+| `DOC_PARSE_FAILED` | Tải về được nhưng không đọc được như một file `.docx` |
+
+Bộ mã này dùng chung với luồng nạp Excel (`DATASOURCE_API_SPEC.md`) — cùng một hỏng hóc thì cùng
+một tên, dù lộ ra ở endpoint nào.
+
 ---
 
 ## 4. `POST /login/access-token` — Đăng nhập
@@ -276,6 +298,7 @@ Accept: text/event-stream
 | `chat_id` | string (UUID) | ✔ | Do client tự sinh, xem [§1.2](#12-chat-hội-thoại--chat_id) |
 | `question` | string | ✔ | Câu hỏi bằng tiếng Việt |
 | `datasource` | int | chỉ lần đầu | Bắt buộc khi `chat_id` chưa tồn tại; các lần sau có thể không cần gửi |
+| `fileUrl` | string | ✗ | Presigned URL của một file `.docx` gửi kèm câu hỏi — xem [§6.10](#610-gửi-kèm-tài-liệu-docx--fileurl) |
 
 Câu hỏi **tiếp theo** trên cùng hội thoại dùng `chat_id` cũ:
 
@@ -489,6 +512,9 @@ Trường `content` của event `error` **không có schema cố định**: khi 
 JSON `{"message": ..., "traceback": ...}`. Hãy hiển thị nó như text; nếu muốn bóc `message` thì thử
 `JSON.parse` trong `try/catch` rồi fallback về chuỗi gốc.
 
+Lỗi của file đính kèm **không** thuộc nhóm này: chúng bị bắt trước khi stream mở nên trả về
+`HTTP 400` như một response bình thường ([§3.4](#34-bảng-mã-lỗi)), không có event nào cả.
+
 ### 6.8. SQL hỏng không phải lúc nào cũng thành `error`
 
 Khi pha sinh SQL hỏng, server **tự sinh lại một lần** trước khi bỏ cuộc. Việc này **không sinh ra
@@ -609,6 +635,44 @@ lượt hỏi bình thường. Không cần báo lỗi cho người dùng — v�
 Quy ước này giống hệt `info: answer failed` ở pha answer: **một pha phụ hỏng không được giết cả lượt
 hỏi.** Chỉ có `type: "error"` mới nghĩa là cả lượt hỏi thất bại.
 
+### 6.10. Gửi kèm tài liệu `.docx` — `fileUrl`
+
+Người dùng có thể đính một văn bản Word vào câu hỏi: client đẩy file lên kho đối tượng, ký một
+presigned URL rồi gửi URL đó trong trường `fileUrl`. SQLBot **tải và đọc file ngay trong request**,
+trước khi stream mở, rồi đưa nội dung vào ngữ cảnh của lượt hỏi.
+
+```json
+{
+  "chat_id": "7fa1a92e-a07b-442b-bade-1210897903e2",
+  "question": "Đối chiếu số liệu trong văn bản này với dữ liệu thu ngân sách năm 2024",
+  "fileUrl": "https://minio.example.com/bucket/bao-cao.docx?X-Amz-Algorithm=..."
+}
+```
+
+**Hợp đồng stream không đổi.** Không có event mới nào. Gửi kèm file thành công thì stream chạy y hệt
+mọi lượt hỏi khác — chỉ khác ở chỗ câu trả lời có thêm ngữ cảnh từ tài liệu.
+
+**Yêu cầu với URL**
+
+| | |
+|---|---|
+| Đuôi file | chỉ `.docx` (không nhận `.doc`, `.pdf`) |
+| Dung lượng | tối đa **15 MB** |
+| Host | phải nằm trong danh sách cho phép của SQLBot — liên hệ bên vận hành để khai báo |
+| Hạn chữ ký | còn ít nhất **10 giây** khi gọi API |
+
+**Nội dung được lấy ra**: đoạn văn và bảng, theo đúng thứ tự trong tài liệu; bảng chuyển thành bảng
+Markdown. **Bỏ qua**: ảnh, header/footer, chú thích, hình vẽ. Tài liệu quá dài bị cắt bớt, và phần
+bị cắt được nói rõ cho mô hình biết chứ không lặng lẽ mất.
+
+**Thời gian chờ**: client sẽ thấy stream mở chậm hơn bình thường vài giây — đó là lúc server tải và
+đọc file. Timeout phía client nên tính cả khoảng này.
+
+**Lỗi**: trả `HTTP 400` với `{"code", "message"}` ([§3.4](#34-bảng-mã-lỗi)), **không** có event SSE.
+Lúc đó chưa có lượt hỏi nào được tạo — người dùng sửa file rồi gửi lại là được, không mất gì.
+
+**Tài liệu không sống mãi trong hội thoại** — xem [§7.6](#76-tài-liệu-đính-kèm-trôi-theo-cửa-sổ-hội-thoại).
+
 ---
 
 ## 7. Giới hạn hệ thống — cần biết trước khi thiết kế UI
@@ -643,6 +707,17 @@ quét cả bảng sẽ không về đủ. Client biết được điều đó qu
 Vì vậy đừng thiết kế màn hình theo hướng xuất/duyệt toàn bộ dữ liệu. SQLBot phục vụ hỏi đáp và tổng
 hợp, không phải công cụ trích xuất dữ liệu.
 
+### 7.6. Tài liệu đính kèm trôi theo cửa sổ hội thoại
+
+File `.docx` gửi kèm ([§6.10](#610-gửi-kèm-tài-liệu-docx--fileurl)) là **một phần của lượt hỏi đó**,
+không phải kiến thức gắn vào hội thoại. Nó theo lịch sử sang các lượt sau đúng như câu hỏi và câu
+trả lời — nghĩa là cũng bị cắt bớt khi lịch sử dài, và **biến mất khỏi ngữ cảnh** khi lượt đính kèm
+đã lùi ra ngoài cửa sổ vài lượt gần nhất.
+
+Hệ quả cho UI: hỏi sâu về tài liệu thì hỏi liền mạch ngay sau khi đính kèm. Nếu người dùng quay lại
+tài liệu sau một hồi bàn chuyện khác, **đính kèm lại** — đừng cho rằng model vẫn còn nhớ. Muốn một
+tài liệu luôn có mặt thì đó là bài toán kho tri thức, không phải đính kèm.
+
 ---
 
 ## Phụ lục: checklist tích hợp
@@ -661,6 +736,8 @@ hợp, không phải công cụ trích xuất dữ liệu.
 - [ ] Dùng biểu đồ: `JSON.parse` **hai lần** để bóc event `chart` (§6.9.1)
 - [ ] Dùng biểu đồ: coi `series` / `multi-quota` là có thể vắng mặt, `axis.y` chuẩn hóa về mảng
 - [ ] Dùng biểu đồ: `info: chart failed` chỉ ẩn biểu đồ, **không** báo lỗi cả lượt hỏi (§6.9.4)
+- [ ] Dùng đính kèm: bắt `HTTP 400` + `code` **trước khi** mở stream (§6.10)
+- [ ] Dùng đính kèm: nhắc người dùng gửi lại file nếu quay lại chủ đề đó sau nhiều lượt (§7.6)
 - [ ] Read timeout 30–60s, không dùng total timeout
 - [ ] Không gửi hai câu hỏi song song trên cùng `chat_id`
 - [ ] Xử lý 401 → đăng nhập lại (không có refresh token)

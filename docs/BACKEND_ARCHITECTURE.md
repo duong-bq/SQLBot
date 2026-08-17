@@ -42,7 +42,7 @@ backend/
 
 | Thư mục | Trách nhiệm | File cần biết |
 |---|---|---|
-| `apps/chat/` | Hội thoại + **toàn bộ pipeline** | `task/llm.py` (2.4K dòng, trái tim hệ thống), `api/chat.py`, `curd/chat.py`, `models/chat_model.py` |
+| `apps/chat/` | Hội thoại + **toàn bộ pipeline** | `task/llm.py` (2.4K dòng, trái tim hệ thống), `api/chat.py`, `curd/chat.py`, `models/chat_model.py`, `utils/attachment.py` (đọc file `.docx` đính kèm) |
 | `apps/datasource/` | Datasource, bảng, cột, quan hệ, M-Schema | `crud/datasource.py`, `api/datasource.py`, `api/table_relation.py`, `embedding/table_embedding.py`, `crud/permission.py` |
 | `apps/datasource/task/` | Ba vòng chạy nền của luồng nạp Excel bất đồng bộ (xem §5) | `excel_import_task.py`, `callback_sender.py`, `excel_recovery.py` |
 | `apps/db/` | Tầng truy cập DB nghiệp vụ đa engine | `db.py` (1.3K dòng), `constant.py` (enum `DB`) |
@@ -104,8 +104,11 @@ một route trả **JSON thô** thì cách duy nhất là khai path pattern củ
 `shutdown_resources()` gọi `stop_datasource_background_tasks()` **trước** `SingleWorkerGuard.release()`
 — các vòng nền còn đang giữ session DB.
 
-Migration mới nhất: `078_excel_import_jobs_file_url.py` (thêm cột `file_url` — nguồn file chuyển từ
-multipart sang presigned URL). Trước đó: `077_ai_user_permissions_queries.py`,
+Migration mới nhất: `081_chat_attachment.py` (tạo `chat_attachment` — text trích từ file `.docx`
+đính kèm câu hỏi). Trước đó: `080_excel_import_jobs_file_url.py` (thêm cột `file_url` — nguồn file
+chuyển từ multipart sang presigned URL; đánh số 080 vì revision id của bản 079 cũ trùng với một
+migration đã có trên `main`), `079_ai_user_permissions_drop_table_description.py`,
+`078_ai_user_permissions_drop_fields.py`, `077_ai_user_permissions_queries.py`,
 `076_excel_import_jobs.py` (tạo `excel_import_jobs` + backfill
 `core_datasource.status`), `075_ai_user_permissions_domain_info.py`, `074_ai_sync_hook.py`
 (tạo `ai_sync_hook_logs` + `ai_user_permissions`), `073_merge_heads_071.py` (gộp hai head `071` phát
@@ -128,7 +131,8 @@ sinh khi merge nhánh), `072_add_chat_external_id.py`.
 | Đổi cách chọn bảng theo embedding | [table_embedding.py:43](../backend/apps/datasource/embedding/table_embedding.py#L43) |
 | Sửa kiểm tra an toàn SQL | [llm.py:102](../backend/apps/chat/task/llm.py#L102) (whitelist bảng) + [db.py:1084](../backend/apps/db/db.py#L1084) (`check_sql_read`) |
 | Thêm một loại database | [db/constant.py](../backend/apps/db/constant.py) enum `DB` + [db.py](../backend/apps/db/db.py) + một file `templates/sql_examples/*.yaml` |
-| Sửa endpoint hỏi đáp | [chat.py:478](../backend/apps/chat/api/chat.py#L478) |
+| Sửa endpoint hỏi đáp | [chat.py:485](../backend/apps/chat/api/chat.py#L485) |
+| Sửa xử lý file `.docx` đính kèm | `apps/chat/utils/attachment.py` (tải + trích + render khối prompt) + `apps/chat/curd/attachment.py` (lưu/đọc bảng) — **rồi cập nhật `API_SPEC.md` §6.10** |
 | Sửa quản trị datasource | [apps/datasource/api/datasource.py](../backend/apps/datasource/api/datasource.py) |
 | Sửa luồng nạp Excel bất đồng bộ | `apps/datasource/task/` (3 vòng nền, §5) + `crud/excel_job.py` (mọi câu SQL của hàng đợi) + `utils/excel_import.py` (hàm thuần nạp file) + `utils/remote_file.py` (kiểm URL nguồn và tải file) |
 | Sửa hợp đồng callback với hệ ngoài | [callback_sender.py](../backend/apps/datasource/task/callback_sender.py) `send_callback` — **rồi cập nhật `DATASOURCE_API_SPEC.md` §9.3** |
@@ -149,8 +153,15 @@ sinh khi merge nhánh), `072_add_chat_external_id.py`.
 | `chat` | Một hội thoại | `external_id`, `oid`, `datasource`, `brief`, `origin` (0 web / 1 mcp / 2 assistant) |
 | `chat_record` | Một **lượt hỏi** | `question`, `sql`, `data`, `answer`, `chart`, `analysis`, `predict`, `error`, `finish` |
 | `chat_log` | Một **thao tác** trong lượt | `operate` (enum 14 giá trị), `messages` (JSONB), `token_usage`, `local_operation`, `error` |
+| `chat_attachment` | Text đã trích từ file `.docx` gửi kèm một lượt hỏi | `chat_id`, `record_id`, `filename`, `content`, `truncated` |
 
-Quan hệ: `chat` 1─n `chat_record` 1─n `chat_log`.
+Quan hệ: `chat` 1─n `chat_record` 1─n `chat_log`; `chat_record` 1─n `chat_attachment`.
+
+`chat_attachment` (migration `081_chat_attachment.py`) **cố ý không đặt UNIQUE trên `record_id`** —
+hiện mỗi lượt chỉ đính một file, nhưng để mở đường cho nhiều file mà không phải sửa schema; khi đọc
+thì bản mới nhất của record thắng. `content` là bản đã bị áp trần `CHAT_DOC_EXTRACT_MAX_CHARS`, `truncated`
+cho biết bản gốc có dài hơn thế không. Bảng này chỉ được đọc ở một chỗ duy nhất khi dựng lịch sử pha
+answer — xem [TEXT2SQL_PIPELINE.md §10](TEXT2SQL_PIPELINE.md).
 
 `chat_record.answer` do migration `071_add_chat_record_answer.py` thêm — cột này là của fork, upstream
 không có.
@@ -168,7 +179,7 @@ từ web (Postgres cho phép nhiều NULL trong ràng buộc UNIQUE).
 
 Việc quy đổi `external_id` → id nội bộ nằm ở `resolve_chat_id`
 ([curd/chat.py:898](../backend/apps/chat/curd/chat.py#L898)), gọi qua dependency
-`resolve_chat_for_question` ([chat.py:437](../backend/apps/chat/api/chat.py#L437)). **Phải là
+`resolve_chat_for_question` ([chat.py:440](../backend/apps/chat/api/chat.py#L440)). **Phải là
 dependency**, không được gọi trong thân route, vì `require_permissions` cần thấy id nội bộ.
 
 ### Cụm datasource — [datasource.py](../backend/apps/datasource/models/datasource.py)

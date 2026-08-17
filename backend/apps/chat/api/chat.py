@@ -10,6 +10,7 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy import and_, select
 from starlette.responses import JSONResponse
 
+from apps.chat.curd.attachment import save_chat_attachment
 from apps.chat.curd.chat import delete_chat_with_user, get_chart_data_with_user, get_chat_predict_data_with_user, \
     list_chats, get_chat_with_records, create_chat, get_chat_chart_data, get_chat_predict_data, \
     get_chat_with_records_with_data, get_chat_record_by_id, \
@@ -18,6 +19,8 @@ from apps.chat.curd.chat import delete_chat_with_user, get_chart_data_with_user,
 from apps.chat.models.chat_model import CreateChat, ChatRecord, RenameChat, ChatQuestion, AxisObj, QuickCommand, \
     ChatInfo, Chat, ChatFinishStep, ChatQuestionBase, SimpleChat, ChatItem
 from apps.chat.task.llm import LLMService
+from apps.chat.utils.attachment import fetch_docx_attachment, render_attachment_block
+from apps.datasource.utils.excel_import import ExcelImportError
 from apps.swagger.i18n import PLACEHOLDER_PREFIX
 from apps.system.schemas.permission import SqlbotPermission, require_permissions
 from common.audit.models.log_model import OperationType, OperationModules
@@ -499,10 +502,43 @@ async def question_answer(
     Điểm dừng của pipeline do ``settings.GENERATE_CHART_ENABLED`` quyết định — xem
     ``default_finish_step``. Bật (mặc định) thì có thêm pha sinh biểu đồ chạy song song với pha
     answer; tắt thì dừng ngay sau câu trả lời bằng lời.
+
+    Kèm ``fileUrl`` (presigned URL của file .docx) thì tài liệu được tải và trích text NGAY TẠI
+    ĐÂY, trước khi pipeline chạy — client chờ thêm vài giây trước khi stream mở. Nội dung trích
+    trở thành ngữ cảnh của câu hỏi (xem ``question_for_prompt``) và được lưu vào bảng
+    ``chat_attachment`` (trong ``stream_sql``, sau khi record của lượt được tạo). Lỗi ở bước này
+    (URL sai host, hết hạn, file quá to, không phải docx...) trả về ``HTTP 400`` mang ``code`` là mã
+    lỗi máy-đọc-được, KHÔNG phải event SSE ``error``: hỏng hóc được phát hiện trước khi stream mở
+    nên status code vẫn nói được sự thật, và không có record nào được tạo.
     """
     question = ChatQuestion(
         chat_id=resolved_chat_id, question=request_question.question
     )
+    if request_question.fileUrl:
+        try:
+            # fetch_docx_attachment là hàm đồng bộ (mạng + parse CPU) — phải đẩy ra thread để
+            # không chặn event loop.
+            attachment = await asyncio.to_thread(
+                fetch_docx_attachment, request_question.fileUrl
+            )
+        except ExcelImportError as e:
+            # Trả HTTP 400 chứ không phải event SSE: chưa gửi byte nào của stream nên status code
+            # còn nói được sự thật. Dùng lại đúng khuôn của luồng excel (``_bad_request`` trong
+            # apps/datasource/api/datasource.py) — cùng bộ mã lỗi thì phải cùng cách trả, kẻo phía
+            # đối tác phải viết hai nhánh cho một hỏng hóc.
+            raise HTTPException(
+                status_code=400, detail={"code": e.error_code, "message": e.message}
+            )
+        question.attachment_filename = attachment.filename
+        question.attachment_content = attachment.content
+        question.attachment_truncated = attachment.truncated
+        question.attached_doc = render_attachment_block(
+            attachment.filename,
+            attachment.content,
+            attachment.truncated,
+            max_chars=settings.CHAT_DOC_PROMPT_MAX_CHARS,
+        )
+
     return await question_answer_inner(
         session,
         current_user,
@@ -756,6 +792,18 @@ async def stream_sql(
             embedding=embedding,
         )
         llm_service.init_record(session=session)
+        if getattr(request_question, "attachment_content", None):
+            # Ghi bản gốc của tài liệu đính kèm, gắn với record VỪA tạo — phải nằm sau init_record
+            # vì cần record_id, và trước run_task_async vì pha answer của chính lượt này có thể
+            # đọc lại bảng chat_attachment khi dựng lịch sử.
+            save_chat_attachment(
+                session=session,
+                chat_id=request_question.chat_id,
+                record_id=llm_service.record.id,
+                filename=request_question.attachment_filename,
+                content=request_question.attachment_content,
+                truncated=request_question.attachment_truncated,
+            )
         llm_service.run_task_async(
             in_chat=in_chat,
             stream=stream,
