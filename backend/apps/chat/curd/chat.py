@@ -1016,6 +1016,7 @@ def save_question(session: SessionDep, current_user: CurrentUser, question: Chat
     record.engine_type = chat.engine_type
     record.ai_modal_id = question.ai_modal_id
     record.regenerate_record_id = question.regenerate_record_id
+    record.domain_code = question.domain_code
 
     result = ChatRecord(**record.model_dump())
 

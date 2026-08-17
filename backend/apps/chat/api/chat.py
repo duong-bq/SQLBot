@@ -503,6 +503,13 @@ async def question_answer(
     ``default_finish_step``. Bật (mặc định) thì có thêm pha sinh biểu đồ chạy song song với pha
     answer; tắt thì dừng ngay sau câu trả lời bằng lời.
 
+    Kèm ``domainCode`` (mã lĩnh vực phía SW) thì lượt hỏi bị giới hạn trong các bảng thuộc lĩnh
+    vực đó theo quyền trong ``ai_user_permissions`` — chỉ có tác dụng với user được SW cấp quyền,
+    user khác thì trường này bị bỏ qua. Không gửi trường này = hỏi trên toàn bộ lĩnh vực được cấp;
+    gửi null/rỗng = ``HTTP 400`` (code ``invalid_domain_code``); gửi mã không có trong quyền của
+    user → event SSE ``error`` kèm danh sách lĩnh vực hợp lệ. Giá trị được lưu vào record để
+    ``/regenerate`` giữ nguyên ràng buộc.
+
     Kèm ``fileUrl`` (presigned URL của file .docx) thì tài liệu được tải và trích text NGAY TẠI
     ĐÂY, trước khi pipeline chạy — client chờ thêm vài giây trước khi stream mở. Nội dung trích
     trở thành ngữ cảnh của câu hỏi (xem ``question_for_prompt``) và được lưu vào bảng
@@ -511,8 +518,25 @@ async def question_answer(
     lỗi máy-đọc-được, KHÔNG phải event SSE ``error``: hỏng hóc được phát hiện trước khi stream mở
     nên status code vẫn nói được sự thật, và không có record nào được tạo.
     """
+    # Phân biệt "không gửi domainCode" với "gửi null/rỗng": không gửi = hỏi trên toàn bộ lĩnh vực
+    # được cấp (hợp lệ); đã gửi thì phải mang giá trị thật — null/rỗng gần như chắc chắn là bug
+    # phía client (biến chưa gán) nên chặn ngay bằng HTTP 400 trước khi stream mở, thay vì im lặng
+    # coi như không lọc. `model_fields_set` là cách duy nhất phân biệt hai ca này trong pydantic.
+    domain_code = None
+    if 'domainCode' in request_question.model_fields_set:
+        domain_code = (request_question.domainCode or '').strip()
+        if not domain_code:
+            raise HTTPException(
+                status_code=400,
+                detail={"code": "invalid_domain_code",
+                        "message": "domainCode đã gửi thì không được null/rỗng; muốn hỏi trên "
+                                   "toàn bộ lĩnh vực thì bỏ hẳn trường này khỏi request."},
+            )
+
     question = ChatQuestion(
-        chat_id=resolved_chat_id, question=request_question.question
+        chat_id=resolved_chat_id,
+        question=request_question.question,
+        domain_code=domain_code,
     )
     if request_question.fileUrl:
         try:
@@ -663,6 +687,12 @@ async def question_answer_inner(
             if command == QuickCommand.REGENERATE:
                 request_question.question = text_before_command
                 request_question.regenerate_record_id = rec_id
+                # Kế thừa mã lĩnh vực của lượt bị sinh lại: /regenerate phải tái lập đúng phạm vi
+                # quyền của lượt gốc, không được nới rộng chỉ vì request mới không gửi domainCode.
+                if request_question.domain_code is None:
+                    request_question.domain_code = session.execute(
+                        select(ChatRecord.domain_code).where(ChatRecord.id == rec_id)
+                    ).scalar()
                 return await stream_sql(
                     session,
                     current_user,

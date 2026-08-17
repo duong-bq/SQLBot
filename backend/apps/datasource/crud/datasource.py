@@ -761,8 +761,15 @@ def get_table_obj_by_ds(session: SessionDep, current_user: CurrentUser, ds: Core
     return _list
 
 
-def get_table_sample_data(ds: CoreDatasource, table_name: str, fields: list) -> str:
-    """Get 3 sample rows from a table in JSON format to help AI understand the data"""
+def get_table_sample_data(ds: CoreDatasource, table_name: str, fields: list, scope_query: str = None) -> str:
+    """Lấy 3 dòng mẫu của một bảng (JSON) để LLM hiểu hình dạng dữ liệu.
+
+    Khi bảng bị giới hạn phạm vi bởi quyền SW (`scope_query` — một câu SELECT đầy đủ), dòng mẫu
+    PHẢI lấy qua derived table `(scope_query) AS <bảng>` thay vì bảng vật lý: sample data đi thẳng
+    vào prompt nên đọc bảng vật lý sẽ rò cả hàng lẫn cột ngoài quyền. Trường hợp này SELECT `*`
+    (cột do projection của scope quyết định) thay vì danh sách cột từ core_field — cột vật lý nằm
+    ngoài projection sẽ làm câu lệnh lỗi và mất luôn sample.
+    """
     if not fields:
         return ""
 
@@ -771,25 +778,35 @@ def get_table_sample_data(ds: CoreDatasource, table_name: str, fields: list) -> 
     prefix = db.prefix if hasattr(db, 'prefix') else '"'
     suffix = db.suffix if hasattr(db, 'suffix') else '"'
 
-    # Build field list with proper quoting
-    field_names = []
-    for field in fields[:10]:  # Limit to first 10 fields to avoid too wide results
-        field_name = f"{prefix}{field.field_name}{suffix}"
-        field_names.append(field_name)
+    if scope_query:
+        select_expr = '*'
+        quoted_target = f"({scope_query}) {prefix}{table_name}{suffix}"
+        bare_target = f"({scope_query}) {table_name}"
+        oracle_target = f"({scope_query}) \"{table_name}\""
+    else:
+        # Build field list with proper quoting
+        field_names = []
+        for field in fields[:10]:  # Limit to first 10 fields to avoid too wide results
+            field_name = f"{prefix}{field.field_name}{suffix}"
+            field_names.append(field_name)
+        select_expr = ','.join(field_names)
+        quoted_target = f"{prefix}{table_name}{suffix}"
+        bare_target = table_name
+        oracle_target = f"\"{table_name}\""
 
     # Build LIMIT query based on database type
     if equals_ignore_case(ds.type, "sqlServer"):
-        query = f"SELECT TOP 3 {','.join(field_names)} FROM {prefix}{table_name}{suffix}"
+        query = f"SELECT TOP 3 {select_expr} FROM {quoted_target}"
     elif equals_ignore_case(ds.type, "ck"):
-        query = f"SELECT {','.join(field_names)} FROM {table_name} LIMIT 3"
+        query = f"SELECT {select_expr} FROM {bare_target} LIMIT 3"
     elif equals_ignore_case(ds.type, "hive"):
-        query = f"SELECT {','.join(field_names)} FROM {table_name} LIMIT 3"
+        query = f"SELECT {select_expr} FROM {bare_target} LIMIT 3"
     elif equals_ignore_case(ds.type, "oracle"):
-        query = f"SELECT {','.join(field_names)} FROM \"{table_name}\" WHERE ROWNUM <= 3"
+        query = f"SELECT {select_expr} FROM {oracle_target} WHERE ROWNUM <= 3"
     elif equals_ignore_case(ds.type, "dm"):
-        query = f"SELECT {','.join(field_names)} FROM \"{table_name}\" WHERE ROWNUM <= 3"
+        query = f"SELECT {select_expr} FROM {oracle_target} WHERE ROWNUM <= 3"
     else:
-        query = f"SELECT {','.join(field_names)} FROM {prefix}{table_name}{suffix} LIMIT 3"
+        query = f"SELECT {select_expr} FROM {quoted_target} LIMIT 3"
 
     try:
         result = exec_sql(ds=ds, sql=query, origin_column=True)
@@ -817,8 +834,12 @@ def get_table_sample_data(ds: CoreDatasource, table_name: str, fields: list) -> 
 
 
 def get_tables_sample_data(session: SessionDep, current_user: CurrentUser, ds: CoreDatasource,
-                           table_list: list[str] = None) -> str:
-    """Get sample data (3 rows) for all tables to help AI understand the data"""
+                           table_list: list[str] = None, scope_queries: dict[str, str] = None) -> str:
+    """Gom sample data (3 dòng/bảng) của các bảng trong `table_list` để đưa vào prompt.
+
+    `scope_queries` (bảng → câu SELECT giới hạn phạm vi, từ quyền SW): bảng nào có scope thì dòng
+    mẫu lấy qua derived table của scope thay vì bảng vật lý — xem `get_table_sample_data`.
+    """
     table_objs = get_table_obj_by_ds(session=session, current_user=current_user, ds=ds)
     if len(table_objs) == 0:
         return ""
@@ -828,14 +849,29 @@ def get_tables_sample_data(session: SessionDep, current_user: CurrentUser, ds: C
         if table_list is not None and obj.table.table_name not in table_list:
             continue
         if obj.fields:
-            sample = get_table_sample_data(ds, obj.table.table_name, obj.fields)
+            sample = get_table_sample_data(ds, obj.table.table_name, obj.fields,
+                                           scope_query=(scope_queries or {}).get(obj.table.table_name))
             if sample:
                 sample_data_parts.append(f"# Table: {obj.table.table_name}\n{sample}")
     return "\n".join(sample_data_parts)
 
 
 def get_table_schema(session: SessionDep, current_user: CurrentUser, ds: CoreDatasource, question: str,
-                     embedding: bool = True, table_list: list[str] = None) -> tuple[str, list]:
+                     embedding: bool = True, table_list: list[str] = None,
+                     column_filter: dict[str, set] = None) -> tuple[str, list]:
+    """Dựng M-Schema (chuỗi đưa vào prompt) và danh sách tên bảng từ `core_table`/`core_field`.
+
+    Danh sách bảng trả về chính là whitelist mà tầng kiểm tra AST dùng để chặn SQL — nên thu hẹp
+    `table_list` ở đây là thu hẹp đồng thời cả prompt lẫn tầng cưỡng chế. So khớp tên bảng EXACT
+    phân biệt hoa-thường (catalog Postgres bảo toàn hoa-thường của identifier có nháy kép).
+
+    `column_filter` (bảng → tập tên cột được phép, từ quyền SW): bảng có mặt trong dict thì chỉ
+    những field nằm trong tập mới vào schema; bảng vắng mặt thì đủ mọi field. Lọc hết sạch field
+    của một bảng là dấu hiệu tên cột phía SW lệch với core_field — log warning để vận hành biết.
+
+    Phần bổ sung bảng theo table_relation chỉ rút từ tập đã lọc (`all_tables`) nên không mở lại
+    bảng ngoài `table_list`.
+    """
     schema_str = ""
     table_objs = get_table_obj_by_ds(session=session, current_user=current_user, ds=ds)
     if len(table_objs) == 0:
@@ -862,8 +898,11 @@ def get_table_schema(session: SessionDep, current_user: CurrentUser, ds: CoreDat
             schema_table += f", {table_comment}\n[\n"
 
         if obj.fields:
+            allowed_columns = column_filter.get(obj.table.table_name) if column_filter else None
             field_list = []
             for field in obj.fields:
+                if allowed_columns is not None and field.field_name not in allowed_columns:
+                    continue
                 field_comment = ''
                 if field.custom_comment:
                     field_comment = field.custom_comment.strip()
@@ -871,6 +910,11 @@ def get_table_schema(session: SessionDep, current_user: CurrentUser, ds: CoreDat
                     field_list.append(f"({field.field_name}:{field.field_type})")
                 else:
                     field_list.append(f"({field.field_name}:{field.field_type}, {field_comment})")
+            if allowed_columns is not None and not field_list:
+                SQLBotLogUtil.warning(
+                    f"[sw_permission] Lọc cột làm bảng '{obj.table.table_name}' không còn field nào "
+                    f"trong schema — tên cột trong scope query phía SW có thể lệch với core_field."
+                )
             schema_table += ",\n".join(field_list)
         schema_table += '\n]\n'
 

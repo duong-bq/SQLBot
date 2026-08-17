@@ -5,7 +5,7 @@ from typing import List, Optional, Any, Union
 from fastapi import Body
 from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
 from pydantic import BaseModel
-from sqlalchemy import Column, Integer, Text, BigInteger, DateTime, Identity, Boolean
+from sqlalchemy import Column, Integer, String, Text, BigInteger, DateTime, Identity, Boolean
 from sqlalchemy import Enum as SQLAlchemyEnum
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlmodel import SQLModel, Field
@@ -148,6 +148,9 @@ class ChatRecord(SQLModel, table=True):
     analysis_record_id: int = Field(sa_column=Column(BigInteger, nullable=True))
     predict_record_id: int = Field(sa_column=Column(BigInteger, nullable=True))
     regenerate_record_id: int = Field(sa_column=Column(BigInteger, nullable=True))
+    # Mã lĩnh vực (domainCode) mà lượt hỏi này bị giới hạn theo — NULL nghĩa là không giới hạn
+    # lĩnh vực. Phải lưu theo từng record để /regenerate tái lập đúng ràng buộc của lượt gốc.
+    domain_code: str = Field(sa_column=Column(String(100), nullable=True))
 
 
 class ChatAttachment(SQLModel, table=True):
@@ -503,6 +506,9 @@ class ChatQuestion(AiModelQuestion):
     attachment_filename: Optional[str] = None
     attachment_content: Optional[str] = None
     attachment_truncated: bool = False
+    # Mã lĩnh vực của lượt hỏi (từ `domainCode` của request, hoặc kế thừa từ record gốc khi
+    # /regenerate). Được lưu vào chat_record.domain_code và đưa vào chuỗi sàng quyền SW.
+    domain_code: Optional[str] = None
 
 
 class ChatMcp(ChatQuestion):
@@ -542,6 +548,17 @@ class ChatQuestionBase(BaseModel):
     # trong EXCEL_DOWNLOAD_ALLOWED_HOSTS; URL chỉ cần sống qua một lần tải ngay trong request.
     fileUrl: Optional[str] = Body(description='Presigned URL của file .docx đính kèm câu hỏi',
                                   default=None)
+    # Mã lĩnh vực (linhVucMa phía SW) giới hạn phạm vi câu hỏi của lượt này. Chỉ có tác dụng với
+    # user được SW cấp quyền (có dòng trong ai_user_permissions): bảng ngoài lĩnh vực sẽ vô hình
+    # với cả LLM lẫn tầng thực thi. Ngữ nghĩa ba trạng thái: KHÔNG gửi trường này = không lọc lĩnh
+    # vực, hỏi trên toàn bộ bảng được cấp; gửi null/rỗng = HTTP 400 (chắc chắn là bug client);
+    # gửi mã không có trong quyền của user = event SSE error kèm danh sách lĩnh vực hợp lệ.
+    # User ngoài hệ SW thì trường này bị bỏ qua.
+    domainCode: Optional[str] = Body(description='Mã lĩnh vực giới hạn phạm vi câu hỏi (chỉ áp dụng '
+                                                 'với user được cấp quyền qua AI Sync Hook); muốn '
+                                                 'hỏi trên toàn bộ lĩnh vực thì bỏ hẳn trường này, '
+                                                 'gửi null/rỗng sẽ bị trả 400',
+                                     default=None)
 
 
 class McpQuestion(ChatQuestionBase):

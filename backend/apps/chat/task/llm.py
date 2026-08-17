@@ -37,6 +37,7 @@ from apps.chat.curd.chat import save_question, save_sql_answer, save_sql, \
     get_chat_chart_config, trigger_log_error, save_answer, get_recent_qa_history
 from apps.chat.models.chat_model import ChatQuestion, ChatRecord, Chat, RenameChat, ChatLog, OperationEnum, \
     ChatFinishStep, AxisObj, SystemPromptMessage, HumanPromptMessage, AIPromptMessage
+from apps.chat.permission.sw_permission import resolve_sw_permission, apply_scope_to_sql
 from apps.data_training.curd.data_training import get_training_template
 from apps.datasource.crud.datasource import get_table_schema, get_tables_sample_data, usable_ds_condition
 from apps.datasource.crud.permission import get_row_permission_filters, is_normal_user
@@ -227,6 +228,9 @@ class LLMService:
         self.current_assistant = current_assistant
 
         self.table_name_list = []
+        # Quyết định quyền SW của lượt này (resolve lười trong get_sw_permission). None = chưa
+        # resolve; sau khi resolve luôn là SwPermission (restricted hoặc không).
+        self.sw_permission = None
 
         chat_question.lang = get_lang_name(current_user.language)
         self.trans = i18n(lang=current_user.language)
@@ -528,17 +532,63 @@ class LLMService:
                                                                           OperationEnum.FILTER_SQL_EXAMPLE],
                                                                       full_message=example_list)
 
+    def get_sw_permission(self, _session: Session):
+        """Resolve (lười, cache theo lượt) quyết định quyền SW của user hiện tại trên datasource này.
+
+        Trả None khi không áp dụng được: datasource ngoài (assistant động) không nằm trong hệ quyền
+        SW, hoặc hội thoại chưa gắn datasource. `account` của user chính là `user_id` phía SW.
+        """
+        if self.out_ds_instance or not self.ds:
+            return None
+        if self.sw_permission is None:
+            self.sw_permission = resolve_sw_permission(
+                _session, self.current_user.account, self.chat_question.domain_code, self.ds)
+        return self.sw_permission
+
     def choose_table_schema(self, _session: Session):
+        """Dựng M-Schema + sample data cho prompt, đồng thời là chỗ ÁP quyền SW lên lượt hỏi.
+
+        Thu hẹp danh sách bảng ngay tại đây là thu hẹp cả ba tầng cùng lúc: schema trong prompt,
+        whitelist AST (dùng chính danh sách trả về của hàm này), và sample data. Phễu bảng rỗng
+        thì chặn sớm bằng SingleMessageError — trước mọi lời gọi LLM — kèm danh sách lĩnh vực
+        user thực có để client sửa `domainCode`.
+        """
         self.current_logs[OperationEnum.CHOOSE_TABLE] = start_log(session=_session,
                                                                   operate=OperationEnum.CHOOSE_TABLE,
                                                                   record_id=self.record.id,
                                                                   local_operation=True)
+        sw_permission = self.get_sw_permission(_session)
+        restricted = sw_permission is not None and sw_permission.restricted
+        if restricted:
+            domain_list = ', '.join(
+                f"{d['code']} ({d['name']})" if d.get('name') else d['code']
+                for d in sw_permission.available_domains) or 'không có'
+            requested_domain = self.chat_question.domain_code
+            if requested_domain and requested_domain not in {d['code'] for d in
+                                                             sw_permission.available_domains}:
+                raise SingleMessageError(
+                    f"Mã lĩnh vực '{requested_domain}' không có trong quyền của bạn trên nguồn dữ "
+                    f"liệu này. Lĩnh vực hợp lệ: {domain_list}.")
+            if not sw_permission.allowed_tables:
+                raise SingleMessageError(
+                    f"Bạn chưa được cấp quyền khai thác bảng nào trên nguồn dữ liệu này. "
+                    f"Lĩnh vực bạn được cấp: {domain_list}.")
+
         self.chat_question.db_schema, tables = self.out_ds_instance.get_db_schema(
             self.ds.id, self.chat_question.question) if self.out_ds_instance else get_table_schema(
             session=_session,
             current_user=self.current_user,
             ds=self.ds,
-            question=self.chat_question.question)
+            question=self.chat_question.question,
+            table_list=sw_permission.allowed_tables if restricted else None,
+            column_filter=sw_permission.allowed_columns if restricted else None)
+
+        if restricted and not tables:
+            # Tên bảng trong quyền không khớp exact với core_table (đã có warning chi tiết trong
+            # log) — với user bị siết thì schema rỗng phải là lỗi to, không phải prompt rỗng.
+            raise SingleMessageError(
+                "Danh sách bảng bạn được cấp quyền không khớp với schema hiện tại của nguồn dữ "
+                "liệu. Liên hệ quản trị để đồng bộ lại quyền.")
 
         # Get sample data for all tables
         if not self.out_ds_instance:
@@ -546,7 +596,8 @@ class LLMService:
                 session=_session,
                 current_user=self.current_user,
                 ds=self.ds,
-                table_list=tables)
+                table_list=tables,
+                scope_queries=sw_permission.scope_queries if restricted else None)
 
         self.current_logs[OperationEnum.CHOOSE_TABLE] = end_log(session=_session,
                                                                 log=self.current_logs[OperationEnum.CHOOSE_TABLE],
@@ -842,12 +893,19 @@ class LLMService:
 
         # get schema
         if self.ds and not self.chat_question.db_schema:
+            # Nhánh này chạy khi task gợi ý câu hỏi được gọi rời (không qua choose_table_schema),
+            # nên vẫn phải tự áp quyền SW: schema đầy đủ lọt vào prompt gợi ý là rò tên bảng/cột
+            # ngoài quyền của user bị siết.
+            sw_permission = self.get_sw_permission(_session)
+            restricted = sw_permission is not None and sw_permission.restricted
             self.chat_question.db_schema, tables = self.out_ds_instance.get_db_schema(
                 self.ds.id, self.chat_question.question) if self.out_ds_instance else get_table_schema(
                 session=_session,
                 current_user=self.current_user, ds=self.ds,
                 question=self.chat_question.question,
-                embedding=False)
+                embedding=False,
+                table_list=sw_permission.allowed_tables if restricted else None,
+                column_filter=sw_permission.allowed_columns if restricted else None)
 
             # Get sample data for all tables
             # if not self.out_ds_instance:
@@ -1756,6 +1814,21 @@ class LLMService:
                             yield json_result
                         return
 
+                    # Cưỡng chế scope của quyền SW: bọc mọi tham chiếu tới bảng có scope thành
+                    # derived table `(scope) AS <bảng>` — tất định bằng sqlglot, không qua LLM.
+                    # Chỉ đổi bản THỰC THI (real_execute_sql, cùng khuôn với nhánh assistant động);
+                    # bản `sql` đã phát cho client giữ nguyên để không rò điều kiện lọc quyền.
+                    # Rewrite hỏng thì từ chối thực thi — tuyệt đối không fallback về SQL chưa bọc.
+                    if (self.sw_permission and self.sw_permission.restricted
+                            and self.sw_permission.scope_queries):
+                        try:
+                            real_execute_sql = apply_scope_to_sql(
+                                real_execute_sql, self.sw_permission.scope_queries, self.ds.type)
+                        except Exception as rewrite_error:
+                            raise SingleMessageError(
+                                f'Không áp được giới hạn phạm vi dữ liệu lên SQL, '
+                                f'từ chối thực thi: {rewrite_error}')
+
                     self.current_logs[OperationEnum.EXECUTE_SQL] = start_log(session=_session,
                                                                              operate=OperationEnum.EXECUTE_SQL,
                                                                              record_id=self.record.id,
@@ -1886,7 +1959,9 @@ class LLMService:
                     current_user=self.current_user,
                     ds=self.ds,
                     question=self.chat_question.question,
-                    embedding=False, table_list=tables)
+                    embedding=False, table_list=tables,
+                    column_filter=self.sw_permission.allowed_columns
+                    if self.sw_permission and self.sw_permission.restricted else None)
                 SQLBotLogUtil.info('used_tables_schema: \n' + used_tables_schema)
                 chart_res = self.generate_chart(_session, chart_type, used_tables_schema)
                 full_chart_text = ''
