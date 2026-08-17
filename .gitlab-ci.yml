@@ -7,7 +7,7 @@ variables:
   IMAGE_TAG: "test-$CI_COMMIT_SHORT_SHA"
 
 # ============================================================
-# BUILD & PUSH IMAGE TO HARBOR
+# BUILD + PUSH IMAGE TO HARBOR
 # ============================================================
 build-test:
   stage: build
@@ -16,14 +16,21 @@ build-test:
   image: docker:27
 
   script:
+    - echo "===== LOGIN HARBOR ====="
     - echo "$HARBOR_PASSWORD" | docker login "$HARBOR_REGISTRY" -u "$HARBOR_USERNAME" --password-stdin
+
+    - echo "===== BUILD BACKEND IMAGE ====="
     - docker build -f Dockerfile.backend -t "$IMAGE_NAME:$IMAGE_TAG" .
+
+    - echo "===== PUSH BACKEND IMAGE ====="
     - docker push "$IMAGE_NAME:$IMAGE_TAG"
-    - docker images "$IMAGE_NAME:$IMAGE_TAG"
+
+    - echo "===== IMAGE ====="
+    - echo "$IMAGE_NAME:$IMAGE_TAG"
 
 
 # ============================================================
-# DEPLOY TO TEST
+# DEPLOY TO TEST SERVER
 # ============================================================
 deploy-test:
   stage: deploy
@@ -33,16 +40,35 @@ deploy-test:
 
   before_script:
     - apk add --no-cache openssh-client
+
+    # Tạo SSH private key từ GitLab Variable
     - mkdir -p ~/.ssh
     - printf '%s\n' "$DEPLOY_SSH_PRIVATE_KEY" > ~/.ssh/id_ed25519
     - chmod 600 ~/.ssh/id_ed25519
+
+    # Trust TEST server
     - ssh-keyscan -H "$TEST_HOST" >> ~/.ssh/known_hosts
 
   script:
-    # Kiểm tra SSH
+
+    # --------------------------------------------------------
+    # 1. Kiểm tra SSH
+    # --------------------------------------------------------
+    - echo "===== CHECK SSH ====="
     - ssh "$TEST_USER@$TEST_HOST" "hostname && whoami"
 
-    # Deploy
+    # --------------------------------------------------------
+    # 2. Copy Docker Compose từ GitLab CI workspace -> TEST
+    # --------------------------------------------------------
+    - echo "===== COPY DOCKER COMPOSE ====="
+    - |
+      scp docker-compose.backend.yml \
+        "$TEST_USER@$TEST_HOST:/data/ngocpt/sqlbot/docker-compose.backend.yml"
+
+    # --------------------------------------------------------
+    # 3. Deploy trên TEST
+    # --------------------------------------------------------
+    - echo "===== DEPLOY BACKEND ====="
     - |
       ssh "$TEST_USER@$TEST_HOST" "
         set -e
@@ -55,7 +81,10 @@ deploy-test:
         echo '===== PULL IMAGE ====='
         docker pull '$IMAGE_NAME:$IMAGE_TAG'
 
-        echo '===== DEPLOY BACKEND ====='
+        echo '===== CHECK COMPOSE FILE ====='
+        ls -lh /data/ngocpt/sqlbot/docker-compose.backend.yml
+
+        echo '===== DEPLOY DOCKER COMPOSE ====='
         cd /data/ngocpt/sqlbot
 
         BACKEND_IMAGE='$IMAGE_NAME:$IMAGE_TAG' \
@@ -67,8 +96,4 @@ deploy-test:
         docker compose \
           -f docker-compose.backend.yml \
           ps
-
-        echo '===== BACKEND STATUS ====='
-        docker ps \
-          --filter 'name=sqlbot-backend'
       "
