@@ -207,6 +207,24 @@ def test_table_info_queries_rong_bi_loai():
         )
 
 
+def test_query_rong_duoc_chap_nhan():
+    """SW dùng `query: ""` để biểu diễn "không giới hạn dữ liệu trên datasource đó" — hợp lệ,
+    không phải lỗi dữ liệu."""
+    data = AuthorizationSyncData.model_validate(
+        {
+            "userId": "u1", "isAdmin": False,
+            "formQueries": [{
+                "formUuid": "f1",
+                "tableInfo": {
+                    "databaseTableName": "t",
+                    "queries": [{"datasourceId": "d1", "datasourceType": "postgresql", "query": ""}],
+                },
+            }],
+        }
+    )
+    assert data.form_queries[0].table_info.queries[0].query == ""
+
+
 def test_table_info_thieu_queries_bi_loai():
     with pytest.raises(ValidationError):
         AuthorizationSyncData.model_validate(

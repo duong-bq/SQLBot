@@ -32,13 +32,16 @@ class QueryItem(BaseModel):
     """Một phần tử trong `tableInfo.queries[]` — gắn 1 datasource cụ thể với query giới hạn phạm vi
     dữ liệu trên đúng datasource đó. Thay thế 2 field cố định `postgresQuery`/`clickHouseQuery` cũ
     (chỉ hỗ trợ đúng 2 loại datasource) bằng danh sách tổng quát theo `datasourceId`/`datasourceType`.
+
+    `query` được phép rỗng — SW dùng `""` để biểu diễn "không giới hạn dữ liệu" trên datasource đó,
+    khác với thiếu hẳn `queries[]` (vô nghĩa, không biết lấy dữ liệu từ nguồn nào — vẫn bị chặn).
     """
 
     model_config = ConfigDict(populate_by_name=True, extra="ignore")
 
     datasource_id: str = Field(alias="datasourceId", min_length=1)
     datasource_type: str = Field(alias="datasourceType", min_length=1)
-    query: str = Field(min_length=1)
+    query: str = ""
 
 
 class TableInfo(BaseModel):
