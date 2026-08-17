@@ -166,7 +166,7 @@ nhưng không còn tác dụng gì.
 | `tableInfo.queries` | array | Có | **Không được rỗng** — một form không biết lấy dữ liệu từ nguồn nào thì vô nghĩa |
 | `queries[].datasourceId` | string | Có | Định danh datasource, không được lặp trong `queries` của CÙNG một form |
 | `queries[].datasourceType` | string | Có | Free string (`postgresql`, `clickhouse`, ...), SQLBot không validate theo enum |
-| `queries[].query` | string | Có | Query giới hạn phạm vi dữ liệu trên đúng datasource đó |
+| `queries[].query` | string | Có | Query giới hạn phạm vi dữ liệu trên đúng datasource đó. **Được phép rỗng** (`""`) — nghĩa là không giới hạn dữ liệu trên datasource đó |
 
 `userId` trùng giữa các phần tử trong cùng `users` nhận **400 `DUPLICATE_USER_ID`**. `formUuid` trùng
 trong `formQueries` của cùng một user nhận **400 `DUPLICATE_FORM_UUID`** — không liên quan tới user
