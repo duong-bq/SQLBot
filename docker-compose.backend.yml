@@ -2,10 +2,7 @@ name: sqlbot-backend
 
 services:
   backend:
-    build:
-      context: .
-      dockerfile: Dockerfile.backend
-    image: sqlbot-backend:0.0.1
+    image: ${BACKEND_IMAGE}
     container_name: sqlbot-backend
     restart: unless-stopped
     depends_on:
