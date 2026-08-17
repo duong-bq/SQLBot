@@ -91,8 +91,8 @@ cộng thêm `syncVersion`/`syncedAt` để dễ đối chiếu.
         "linhVucName": "Lĩnh vực Dân cư",
         "linhVucDescription": "Lĩnh vực quản lý các thông tin liên quan đến dân cư",
         "queries": [
-          {"datasourceId": "ds-001", "datasourceType": "postgresql", "query": "SELECT * FROM kdl_nhan_khau_row_values WHERE province_id = '01'"},
-          {"datasourceId": "ds-002", "datasourceType": "clickhouse", "query": "SELECT * FROM kdl_nhan_khau_row_values WHERE province_id = '01'"}
+          {"datasourceId": "7", "datasourceType": "postgresql", "query": "SELECT * FROM kdl_nhan_khau_row_values WHERE province_id = '01'"},
+          {"datasourceId": "12", "datasourceType": "clickhouse", "query": "SELECT * FROM kdl_nhan_khau_row_values WHERE province_id = '01'"}
         ]
       }
     }

@@ -2,9 +2,12 @@
 
 Dành cho hệ thống SW cần đồng bộ quyền user sang SQLBot.
 
-Phạm vi phase hiện tại: **1 endpoint**, **1 actionType** (`AUTHORIZATION_SYNC`). Đọc phần quyền này
-trong pipeline Text2SQL (bơm vào M-Schema, chèn `WHERE`) **chưa** được triển khai — endpoint dưới
-đây chỉ nhận, xác thực và lưu.
+Phạm vi phase hiện tại: **1 endpoint**, **1 actionType** (`AUTHORIZATION_SYNC`).
+
+⚠ **Quyền gửi qua endpoint này đã có hiệu lực thật trong luồng hỏi đáp.** Bảng, cột và phạm vi dòng
+khai ở đây quyết định trực tiếp người dùng hỏi được gì trên `POST /chat/question` — sai một trường
+là người dùng mất quyền (hoặc dư quyền) ngay ở lần đồng bộ kế tiếp, không có bước duyệt trung gian
+nào. Đọc kỹ hai cảnh báo ở §4 và ngữ nghĩa full snapshot ở §5 trước khi gửi bản tin thật.
 
 ---
 
@@ -121,12 +124,12 @@ Một actionType đã release thì không được đổi ý nghĩa.
             "linhVucDescription": "Lĩnh vực quản lý các thông tin liên quan đến dân cư",
             "queries": [
               {
-                "datasourceId": "ds-001",
+                "datasourceId": "7",
                 "datasourceType": "postgresql",
-                "query": "SELECT * FROM kdl_nhan_khau_row_values WHERE province_id = '01'"
+                "query": "SELECT ho_ten, nam_sinh, province_id FROM kdl_nhan_khau_row_values WHERE province_id = '01'"
               },
               {
-                "datasourceId": "ds-002",
+                "datasourceId": "12",
                 "datasourceType": "clickhouse",
                 "query": "SELECT * FROM kdl_nhan_khau_row_values WHERE province_id = '01'"
               }
@@ -164,9 +167,38 @@ nhưng không còn tác dụng gì.
 | `tableInfo.linhVucName` | string | Không | |
 | `tableInfo.linhVucDescription` | string | Không | |
 | `tableInfo.queries` | array | Có | **Không được rỗng** — một form không biết lấy dữ liệu từ nguồn nào thì vô nghĩa |
-| `queries[].datasourceId` | string | Có | Định danh datasource, không được lặp trong `queries` của CÙNG một form |
+| `queries[].datasourceId` | string | Có | **Id nguồn dữ liệu phía SQLBot** (số, dạng chuỗi) — xem cảnh báo ngay dưới bảng. Không được lặp trong `queries` của CÙNG một form |
 | `queries[].datasourceType` | string | Có | Free string (`postgresql`, `clickhouse`, ...), SQLBot không validate theo enum |
-| `queries[].query` | string | Có | Query giới hạn phạm vi dữ liệu trên đúng datasource đó |
+| `queries[].query` | string | Có | Query giới hạn phạm vi dữ liệu trên đúng datasource đó. **Danh sách cột trong `SELECT` chính là các cột người dùng được phép thấy** — xem cảnh báo ngay dưới bảng |
+
+### ⚠ Hai điều quyết định người dùng thực sự thấy được gì
+
+Bản tin này không chỉ là dữ liệu tham chiếu — nó là **nguồn quyền** mà SQLBot dùng để giới hạn câu
+hỏi của người dùng. Hai trường dưới đây sai thì không có lỗi nào được trả về, chỉ có người dùng
+không hỏi được (hoặc hỏi được nhiều hơn dự tính).
+
+**1. `datasourceId` phải là id nguồn dữ liệu của SQLBot**, không phải định danh nội bộ của hệ thống
+nguồn. Lấy từ `GET /datasource/list` (trường `id`, xem `API_SPEC.md` §5) và gửi dưới dạng chuỗi
+(`"7"`). So khớp là **chính xác tuyệt đối**: `"7"` không khớp `"07"` cũng không khớp `"7 "`.
+
+Một bảng chỉ được cấp quyền trên **đúng những nguồn dữ liệu có mặt trong `queries`** của form đó.
+Bảng có mặt ở nguồn A mà thiếu phần tử `queries` cho nguồn B thì trên nguồn B nó coi như không tồn
+tại. Sai id ở đây nghĩa là user không được cấp bảng nào cả.
+
+**2. Danh sách cột trong `SELECT` của `query` chính là quyền cột.**
+
+| Viết | Nghĩa |
+|---|---|
+| `SELECT * FROM t WHERE …` | Người dùng thấy **mọi cột** của bảng |
+| `SELECT ho_ten, nam_sinh FROM t WHERE …` | Người dùng chỉ thấy **hai cột đó**; các cột còn lại coi như không tồn tại |
+
+Cột dùng để lọc cũng phải nằm trong danh sách nếu muốn người dùng hỏi theo nó. Đặt bí danh
+(`nam_sinh AS ns`) thì tên người dùng thấy là **bí danh**.
+
+Mệnh đề `WHERE` giới hạn phạm vi **dòng**: mọi câu hỏi của người dùng đều bị thu hẹp về đúng tập
+dòng mà query này trả ra, kể cả các phép đếm và tổng hợp. Vì vậy `query` phải là một câu `SELECT`
+hợp lệ trên đúng loại database đó — câu sai cú pháp làm bảng **bị loại khỏi quyền** chứ không phải
+được bỏ qua.
 
 `userId` trùng giữa các phần tử trong cùng `users` nhận **400 `DUPLICATE_USER_ID`**. `formUuid` trùng
 trong `formQueries` của cùng một user nhận **400 `DUPLICATE_FORM_UUID`** — không liên quan tới user
@@ -188,6 +220,12 @@ khác trong cùng batch. `datasourceId` trùng trong `queries` của cùng một
 
 Nói cách khác: mỗi lần gọi hook, SW phải gửi đủ **toàn bộ** danh sách form user được phép truy cập
 tại thời điểm đó, không chỉ phần vừa thêm/sửa.
+
+⚠ **`formQueries: []` không phải là cách chặn một người dùng.** Nó xoá hết dòng quyền của user, và
+user không còn dòng quyền nào thì luồng hỏi đáp **không áp giới hạn nào** lên họ — đây là trạng thái
+dành cho các tài khoản quản trị nội bộ của SQLBot, vốn chưa bao giờ đi qua cơ chế này. Muốn một
+người dùng không truy vấn được nữa thì **khoá tài khoản** của họ (`USER_ADMIN_API_SPEC.md`), đừng
+thu hồi quyền bằng danh sách rỗng.
 
 ---
 
@@ -267,7 +305,7 @@ curl -X POST "https://<host>/api/v1/hooks/ai-sync" \
               "formUuid": "form-abcd-1234",
               "tableInfo": {
                 "databaseTableName": "kdl_nhan_khau_row_values",
-                "queries": [{"datasourceId": "ds-001", "datasourceType": "postgresql", "query": "SELECT * FROM kdl_nhan_khau_row_values WHERE province_id = '\''01'\''"}]
+                "queries": [{"datasourceId": "7", "datasourceType": "postgresql", "query": "SELECT * FROM kdl_nhan_khau_row_values WHERE province_id = '\''01'\''"}]
               }
             }
           ]

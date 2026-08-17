@@ -16,7 +16,7 @@ xa khỏi upstream**, cả về pipeline lẫn mục tiêu sản phẩm.
 ## 2. Fork này khác upstream ở đâu
 
 Đây là phần quan trọng nhất của cả file. Kiến thức về SQLBot upstream (kể cả từ tài liệu trên
-mạng) sẽ dẫn bạn đi sai ở đúng bốn chỗ này:
+mạng) sẽ dẫn bạn đi sai ở đúng năm chỗ này:
 
 | Điểm | Upstream | Repo này |
 |---|---|---|
@@ -24,6 +24,7 @@ mạng) sẽ dẫn bạn đi sai ở đúng bốn chỗ này:
 | Khi pha SQL hỏng | Trả event `error`, hết lượt | Sinh lại SQL (`LLM_SQL_MAX_RETRY`), vẫn hỏng thì **hạ cấp** sang trả lời dựa trên lịch sử hội thoại |
 | Đối tượng dùng | Web UI là chính | **API-first**: đối tác tích hợp gọi thẳng `POST /chat/question` qua SSE. Một lời gọi trả đủ `sql`, số liệu, `answer`, `chart` — không phải gọi thêm API nào |
 | Ngôn ngữ prompt | Tiếng Trung | Tiếng Việt (`backend/templates/template.yaml` đã dịch và viết lại) |
+| Phân quyền dữ liệu | Row/column permission cấu hình tay trên UI, nhờ LLM viết lại điều kiện lọc | Thêm một lớp **độc lập**: quyền bảng/cột/hàng đồng bộ từ hệ SW, cưỡng chế **tất định** bằng `sqlglot` |
 
 Hệ quả cụ thể: `ChatFinishStep` đã bị **đánh số lại** để chèn `GENERATE_ANSWER` vào giữa
 `QUERY_DATA` và `GENERATE_CHART`. Xem [chat_model.py:54](../backend/apps/chat/models/chat_model.py#L54).
@@ -43,8 +44,11 @@ Hệ quả cụ thể: `ChatFinishStep` đã bị **đánh số lại** để ch
   dùng tới và `API_SPEC.md` đã bỏ mô tả nó.
 - Backend Python 3.11 + FastAPI, quản lý dependency bằng `uv`; frontend Vue 3 + TypeScript.
 - Có cổng `POST /hooks/ai-sync` (`apps/hooks/`) nhận bản tin đồng bộ quyền user từ hệ thống SW, ghi
-  vào `ai_user_permissions`. **Chưa** nối vào pipeline Text2SQL — LLM chưa dùng dữ liệu này để giới
-  hạn quyền truy vấn.
+  vào `ai_user_permissions`. Pipeline Text2SQL **đã đọc** dữ liệu này: bảng và cột ngoài quyền không
+  vào M-Schema, và phạm vi dòng được bọc vào SQL bằng `sqlglot` trước khi chạy — tất định, không
+  nhờ LLM. `POST /chat/question` nhận thêm `domainCode` để giới hạn câu hỏi theo lĩnh vực. Người
+  dùng **không có dòng quyền nào thì không bị siết**, nên tài khoản nội bộ và harness eval chạy như
+  trước. Chi tiết ở [TEXT2SQL_PIPELINE.md](TEXT2SQL_PIPELINE.md) §13.
 - Nhóm endpoint quản trị tài khoản định danh bằng **`account`** thay vì `id`: `/user/by-account/*`
   ([user.py:215](../backend/apps/system/api/user.py#L215)). Tồn tại vì SW đặt `account` bằng đúng
   `userId` bên họ nên không giữ id snowflake của SQLBot — cùng một định danh dùng cho cả API quản
@@ -61,9 +65,10 @@ Hệ quả cụ thể: `ChatFinishStep` đã bị **đánh số lại** để ch
   `EXCEL_DOWNLOAD_ALLOWED_HOSTS` với luồng Excel. Thiết kế cốt lõi: tài liệu là **message**, không
   phải hạ tầng — nó trôi theo cửa sổ lịch sử chứ không sống mãi trong hội thoại. Chi tiết ở
   [TEXT2SQL_PIPELINE.md](TEXT2SQL_PIPELINE.md) §10.
-- Có thư mục test đầu tiên: `backend/tests/` (`uv run pytest tests/`), hiện chỉ phủ phần trích
-  `.docx`. Phần còn lại của backend vẫn **không có test tự động** — đo chất lượng pipeline bằng
-  harness ở `scripts/eval_text2sql/`, không phải bằng unit test.
+- Có thư mục test: `backend/tests/` (`uv run pytest tests/`, 31 ca), phủ phần trích `.docx` và toàn
+  bộ logic phân quyền theo user (chuỗi sàng + phép viết lại SQL). Phần còn lại của backend vẫn
+  **không có test tự động** — đo chất lượng pipeline bằng harness ở `scripts/eval_text2sql/`, không
+  phải bằng unit test.
 
 ## 4. Bản đồ tài liệu — hỏi gì thì đọc file nào
 
@@ -111,17 +116,17 @@ lại harness và kèm số liệu. Chi tiết trong [OPERATIONS.md](OPERATIONS.
 **2. Chú thích trong code là nguồn sự thật về "tại sao".**
 [llm.py](../backend/apps/chat/task/llm.py) và [config.py](../backend/common/core/config.py) có
 chú thích rất dày, nhiều chỗ ghi cả kết quả đo được và cảnh báo *"cố ý giữ nhánh này khi merge từ
-upstream"* (ví dụ [llm.py:102](../backend/apps/chat/task/llm.py#L102)). Trước khi "dọn dẹp" một
+upstream"* (ví dụ [llm.py:103](../backend/apps/chat/task/llm.py#L103)). Trước khi "dọn dẹp" một
 đoạn trông thừa, đọc chú thích của nó — phần lớn là vá lỗi đã đo được.
 
 **3. Mọi chỗ cắt bớt dữ liệu đưa vào prompt đều phải nói cho LLM biết đã cắt.**
 Cắt im lặng thì LLM đếm số dòng nó nhận được rồi báo đó là tổng. Ca đo thật: SQL trả 136 dòng,
 câu trả lời khẳng định "tổng cộng 72 nghị quyết". Cặp `ANSWER_MAX_ROWS` +
-`build_data_scope_note` ([llm.py:74-77](../backend/apps/chat/task/llm.py#L74)) tồn tại vì lý do
+`build_data_scope_note` ([llm.py:75-78](../backend/apps/chat/task/llm.py#L75)) tồn tại vì lý do
 đó và **phải luôn đi cùng nhau**.
 
 ## 6. Đi tiếp
 
 Muốn sửa pha answer → [TEXT2SQL_PIPELINE.md](TEXT2SQL_PIPELINE.md) §5, rồi mở
-[llm.py:611](../backend/apps/chat/task/llm.py#L611) và khối `answer` trong
+[llm.py:662](../backend/apps/chat/task/llm.py#L662) và khối `answer` trong
 [templates/template.yaml:630](../backend/templates/template.yaml#L630).

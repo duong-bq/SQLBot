@@ -181,6 +181,12 @@ Luôn kiểm tra `status_code` trước khi bóc `.data`. Ngoại lệ: lỗi va
 Bộ mã này dùng chung với luồng nạp Excel (`DATASOURCE_API_SPEC.md`) — cùng một hỏng hóc thì cùng
 một tên, dù lộ ra ở endpoint nào.
 
+Cùng dạng body `{"code", "message"}` và cùng trả **`400`** trước khi stream mở:
+
+| `code` | Nguyên nhân |
+|---|---|
+| `invalid_domain_code` | `domainCode` được gửi nhưng rỗng hoặc `null`. Muốn hỏi trên toàn bộ lĩnh vực thì **bỏ hẳn trường này** khỏi request — xem [§6.11](#611-giới-hạn-theo-lĩnh-vực--domaincode) |
+
 ---
 
 ## 4. `POST /login/access-token` — Đăng nhập
@@ -299,6 +305,7 @@ Accept: text/event-stream
 | `question` | string | ✔ | Câu hỏi bằng tiếng Việt |
 | `datasource` | int | chỉ lần đầu | Bắt buộc khi `chat_id` chưa tồn tại; các lần sau có thể không cần gửi |
 | `fileUrl` | string | ✗ | Presigned URL của một file `.docx` gửi kèm câu hỏi — xem [§6.10](#610-gửi-kèm-tài-liệu-docx--fileurl) |
+| `domainCode` | string | ✗ | Giới hạn câu hỏi trong một lĩnh vực nghiệp vụ — xem [§6.11](#611-giới-hạn-theo-lĩnh-vực--domaincode). **Không gửi trường này** nếu muốn hỏi trên toàn bộ phạm vi được cấp; gửi `null` là lỗi |
 
 Câu hỏi **tiếp theo** trên cùng hội thoại dùng `chat_id` cũ:
 
@@ -673,6 +680,45 @@ Lúc đó chưa có lượt hỏi nào được tạo — người dùng sửa f
 
 **Tài liệu không sống mãi trong hội thoại** — xem [§7.6](#76-tài-liệu-đính-kèm-trôi-theo-cửa-sổ-hội-thoại).
 
+### 6.11. Giới hạn theo lĩnh vực — `domainCode`
+
+Mỗi tài khoản được cấp quyền khai thác trên một tập bảng dữ liệu, và mỗi bảng thuộc về một **lĩnh
+vực nghiệp vụ** có mã riêng. Quyền này do hệ thống nguồn đồng bộ sang SQLBot, không khai báo trong
+lời gọi API.
+
+`domainCode` thu hẹp lượt hỏi về **một** lĩnh vực trong số đó — dùng khi UI có bộ chọn lĩnh vực và
+người dùng đã chọn một mục cụ thể.
+
+```json
+{
+  "chat_id": "7fa1a92e-a07b-442b-bade-1210897903e2",
+  "question": "Có bao nhiêu hộ nghèo",
+  "domainCode": "LV_DAN_CU"
+}
+```
+
+**Ba trạng thái, đừng nhầm hai cái đầu:**
+
+| Client gửi | Kết quả |
+|---|---|
+| **Không có trường `domainCode`** | Hỏi trên **toàn bộ** phạm vi tài khoản được cấp |
+| `"domainCode": null` hoặc `""` | `HTTP 400`, `{"code": "invalid_domain_code"}` — **không** có event SSE nào |
+| Mã không thuộc quyền của tài khoản | Event `error`, thông điệp liệt kê các mã lĩnh vực hợp lệ |
+
+Muốn hỏi trên mọi lĩnh vực thì **bỏ hẳn trường này khỏi JSON**, đừng gửi `null`. Hai cách viết đó
+được đối xử khác nhau có chủ ý: gửi `null` hầu như luôn là biến chưa được gán ở phía client, và im
+lặng mở rộng phạm vi câu hỏi trong trường hợp đó là điều nguy hiểm nhất có thể làm.
+
+**Hợp đồng stream không đổi** — không có event mới, không có trường mới trong event cũ.
+
+**Không có API liệt kê lĩnh vực.** Danh sách mã do hệ thống nguồn quản lý và cấp cho UI; SQLBot chỉ
+đọc lại nó trong thông điệp lỗi khi mã sai.
+
+`/regenerate` (sinh lại câu trả lời của một lượt cũ) tự dùng lại đúng lĩnh vực của lượt gốc, không
+cần gửi lại `domainCode`.
+
+**Phạm vi dữ liệu của câu trả lời** — xem [§7.7](#77-câu-trả-lời-nằm-trong-phạm-vi-quyền-của-tài-khoản).
+
 ---
 
 ## 7. Giới hạn hệ thống — cần biết trước khi thiết kế UI
@@ -718,6 +764,25 @@ Hệ quả cho UI: hỏi sâu về tài liệu thì hỏi liền mạch ngay sau
 tài liệu sau một hồi bàn chuyện khác, **đính kèm lại** — đừng cho rằng model vẫn còn nhớ. Muốn một
 tài liệu luôn có mặt thì đó là bài toán kho tri thức, không phải đính kèm.
 
+### 7.7. Câu trả lời nằm trong phạm vi quyền của tài khoản
+
+Câu trả lời chỉ dựa trên phần dữ liệu mà **tài khoản đang đăng nhập** được phép thấy: bảng ngoài
+quyền coi như không tồn tại, cột ngoài quyền không được đưa ra, và các dòng ngoài phạm vi không được
+tính vào bất kỳ con số tổng hợp nào.
+
+Ba hệ quả khi thiết kế UI:
+
+- **Hai tài khoản hỏi cùng một câu có thể nhận hai con số khác nhau.** Đó là hành vi đúng, không
+  phải dữ liệu sai. Đừng cache câu trả lời dùng chung giữa các tài khoản.
+- **Không so sánh chéo được với báo cáo toàn ngành** trừ khi tài khoản đó thực sự có quyền toàn bộ.
+- **Người dùng có thể hỏi trúng bảng họ không được cấp** và nhận câu trả lời kiểu "không có dữ
+  liệu" thay vì thông báo từ chối. SQLBot không tiết lộ sự tồn tại của bảng ngoài quyền — cách này
+  là cố ý, nên UI nào cần phân biệt "không có dữ liệu" với "không có quyền" phải tự dựa vào danh
+  sách quyền phía hệ thống nguồn.
+
+Trường hợp tài khoản **không được cấp bảng nào** trên nguồn dữ liệu đang hỏi thì lượt hỏi kết thúc
+bằng event `error` nói rõ điều đó, không phải câu trả lời rỗng.
+
 ---
 
 ## Phụ lục: checklist tích hợp
@@ -738,6 +803,8 @@ tài liệu luôn có mặt thì đó là bài toán kho tri thức, không ph�
 - [ ] Dùng biểu đồ: `info: chart failed` chỉ ẩn biểu đồ, **không** báo lỗi cả lượt hỏi (§6.9.4)
 - [ ] Dùng đính kèm: bắt `HTTP 400` + `code` **trước khi** mở stream (§6.10)
 - [ ] Dùng đính kèm: nhắc người dùng gửi lại file nếu quay lại chủ đề đó sau nhiều lượt (§7.6)
+- [ ] Dùng lĩnh vực: hỏi toàn bộ thì **bỏ hẳn** `domainCode` khỏi JSON, không gửi `null` (§6.11)
+- [ ] Không cache câu trả lời dùng chung giữa các tài khoản — phạm vi dữ liệu theo quyền (§7.7)
 - [ ] Read timeout 30–60s, không dùng total timeout
 - [ ] Không gửi hai câu hỏi song song trên cùng `chat_id`
 - [ ] Xử lý 401 → đăng nhập lại (không có refresh token)

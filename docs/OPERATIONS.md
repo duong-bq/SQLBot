@@ -128,7 +128,7 @@ vector cũ và mới không cùng không gian.
 | Nơi | Giá trị | Ghi chú |
 |---|---|---|
 | `GENERATE_SQL_QUERY_LIMIT_ENABLED` | `True` | Ép LLM thêm `LIMIT` vào SQL |
-| `ANSWER_MAX_ROWS` (**hằng số trong code**, [llm.py:74](../backend/apps/chat/task/llm.py#L74)) | `100` | Trần số dòng nhồi vào prompt answer. Sửa thì **bắt buộc** giữ nguyên cặp với `build_data_scope_note` |
+| `ANSWER_MAX_ROWS` (**hằng số trong code**, [llm.py:75](../backend/apps/chat/task/llm.py#L75)) | `100` | Trần số dòng nhồi vào prompt answer. Sửa thì **bắt buộc** giữ nguyên cặp với `build_data_scope_note` |
 
 ### 2.7. Bảo mật và mạng
 
@@ -428,6 +428,29 @@ ORDER BY received_at DESC;
 `request_payload` (JSONB) là body thô SW đã gửi — dùng để tái hiện request khi cần. Trạng thái quyền
 hiện tại (sau khi đã áp snapshot) nằm ở `ai_user_permissions`, lọc theo `user_id`.
 
+### Vì sao người dùng này không thấy bảng đó
+
+Quyền dữ liệu theo user (xem [TEXT2SQL_PIPELINE.md §13](TEXT2SQL_PIPELINE.md)) không phát event
+riêng nào, nên chẩn đoán đi theo ba bước dưới đây. `user_id` chính là `account` của tài khoản
+SQLBot đang đăng nhập.
+
+```sql
+-- 1. User có dòng quyền nào không? Không có dòng nào = KHÔNG bị siết (chạy như trước).
+SELECT database_table_name, domain_code, is_admin, form_uuid, queries
+FROM ai_user_permissions WHERE user_id = '<account>';
+
+-- 2. Lượt hỏi đó chạy với lĩnh vực nào (NULL = hỏi trên toàn bộ bảng được cấp).
+SELECT id, question, domain_code, error FROM chat_record WHERE id = <record_id>;
+
+-- 3. Tên bảng được cấp có khớp CHÍNH XÁC (phân biệt hoa-thường) tên trong schema không.
+SELECT table_name FROM core_table WHERE ds_id = <datasource_id>;
+```
+
+Bước 3 là chỗ hay hỏng nhất. Lệch hoa-thường thì bảng **không** được cấp quyền, nhưng log có dòng
+`[sw_permission] Bảng '<tên SW gửi>' … khớp khi bỏ hoa-thường ('<tên thật>')` nêu đúng cặp tên gần
+nhau. `grep sw_permission backend/logs/warn.log` là ra ngay mọi thứ đã bị bỏ qua âm thầm: tên lệch
+hoa-thường, scope query hỏng cú pháp, bảng có nhiều scope mâu thuẫn.
+
 ---
 
 ## 7. Bẫy đã biết
@@ -562,5 +585,22 @@ Hai lý do bẫy này khó phát hiện:
 | **`unique=True` trong model SQLModel không tới được DB** | `sys_user.account` và `sys_user.name` đều khai `unique=True` ([models/user.py:11-13](../backend/apps/system/models/user.py#L11)), nhưng bảng được tạo bằng DDL viết tay ở [001_ddl.py:23](../backend/alembic/versions/001_ddl.py#L23) và **không có ràng buộc duy nhất nào**. Đọc model rồi kết luận DB có ràng buộc là sai — đã sai một lần khi soạn spec |
 | `account` duy nhất chỉ nhờ kiểm ở tầng ứng dụng | `check_account_exists` ([crud/user.py:120](../backend/apps/system/crud/user.py#L120)) chạy lúc tạo, không có index duy nhất đỡ phía sau — một check-then-act kinh điển, hai request đồng thời vẫn tạo được hai `account` trùng. Hệ quả nặng hơn bình thường vì `resolve_uid_by_account` dùng `.first()`: có trùng thì nó **im lặng chọn một trong hai**. `name` thì không duy nhất, và không cần duy nhất |
 | Route `/user/by-account/*` phải đăng ký **trước** `/user/{id}` | Starlette khớp route theo thứ tự đăng ký, `{param}` ăn trọn một đoạn đường dẫn. Đặt sau thì `DELETE /user/by-account` rơi vào `DELETE /user/{id}` rồi chết ở bước ép kiểu int với thông báo không liên quan tới nguyên nhân. Thêm route `/user/...` mới thì kiểm lại vị trí |
-| `status = 0` giết luôn token **đang sống**, không chỉ chặn lần đăng nhập sau | `TokenMiddleware` đọc lại `status` ở **mỗi** request ([auth.py:156](../backend/apps/system/middleware/auth.py#L156), và 125 / 236 cho API key / token nhúng), còn handler đổi trạng thái xoá cache `USER_INFO` nên hiệu lực tức thì. Ngoại lệ duy nhất: luồng SSE đang chạy dở vẫn chạy tới hết, vì middleware chỉ chạy lúc mở request |
+| `status = 0` giết luôn token **đang sống**, không chỉ chặn lần đăng nhập sau | `TokenMiddleware` đọc lại `status` ở **mỗi** request ([auth.py:155](../backend/apps/system/middleware/auth.py#L155), và 125 / 236 cho API key / token nhúng), còn handler đổi trạng thái xoá cache `USER_INFO` nên hiệu lực tức thì. Ngoại lệ duy nhất: luồng SSE đang chạy dở vẫn chạy tới hết, vì middleware chỉ chạy lúc mở request |
 | Thừa field trong body thì **bị bỏ qua im lặng**, không 422 | Mặc định `extra='ignore'` của pydantic; không schema nào trong repo bật `extra='forbid'`. Gửi kèm `id` vào `POST /user` cũng bị bỏ, hệ thống vẫn tự sinh id. Ngoại lệ cố ý: object `configuration` của datasource có kiểm tên key và trả 422 ([utils.py:26](../backend/apps/datasource/utils/utils.py#L26)) |
+
+### 7.10. Quyền dữ liệu theo user (đồng bộ từ SW)
+
+Cơ chế đầy đủ ở [TEXT2SQL_PIPELINE.md §13](TEXT2SQL_PIPELINE.md). **Không có biến cấu hình nào**
+bật/tắt phần này — quyền có hay không hoàn toàn do dữ liệu trong `ai_user_permissions` quyết định.
+
+| Bẫy | Chi tiết |
+|---|---|
+| **Không có dòng quyền nào = KHÔNG bị siết** | Đây là mặc định "mở", ngược với allowlist tải file ở §7.6. Cố ý: mọi tài khoản nội bộ SQLBot (web UI, admin, harness eval) đều không có dòng nào và phải chạy như trước. Hệ quả cần nhớ khi test: **thu hồi hết quyền của một user bằng `formQueries: []` là biến user đó thành không bị siết**, không phải cấm sạch |
+| **`is_admin=true` phía SW bỏ qua toàn bộ phép sàng** | Một dòng `is_admin` là đủ, không cần dòng nào khác. Test phân quyền bằng tài khoản admin SW sẽ không thấy gì bị chặn |
+| **Tên bảng khớp phân biệt hoa-thường tuyệt đối** | Lệch một chữ hoa là bảng không được cấp, và triệu chứng phía người dùng là "chưa được cấp quyền bảng nào" chứ không phải lỗi cấu hình. Log có warning nêu tên gần đúng (xem §6) — cố ý không tự khớp lỏng vì Postgres cho phép hai bảng cùng tên khác hoa-thường tồn tại song song |
+| **Scope query hỏng cú pháp thì bảng bị LOẠI, không phải "cho xem tất cả"** | Hỏng theo hướng đóng. Sai cú pháp ở phía SW biểu hiện thành mất bảng chứ không thành lỗi — chỉ log warning mới nói ra nguyên nhân |
+| **`SELECT *` trong scope query nghĩa là cho xem MỌI cột** | Muốn giới hạn cột thì scope query phải liệt kê tường minh. Đây là lựa chọn có chủ ý (giữ đúng nghĩa của `*`), nhưng dễ bị hiểu là "đã có phân quyền cột" trong khi thực tế chưa |
+| **`queries[].datasourceId` phải là id datasource của SQLBot** | So khớp chuỗi chính xác với `core_datasource.id`. Gửi định danh nội bộ của SW (`"ds-001"`) thì không bảng nào được cấp quyền trên datasource nào — mà không có lỗi nào ở phía hook, vì hook không biết id đó dùng để làm gì |
+| **`domainCode` gửi `null` trả 400, không gửi thì không sao** | Ba trạng thái phân biệt bằng `model_fields_set` của pydantic. Client dựng body bằng cách gán biến chưa khởi tạo sẽ nhận `400 invalid_domain_code` chứ không âm thầm hỏi trên toàn bộ lĩnh vực |
+| **`/regenerate` kế thừa `domain_code` của record gốc** | Cột `chat_record.domain_code` (migration `082`). Sinh lại một lượt cũ mà đổi phạm vi thì hai kết quả không so sánh được với nhau |
+| **Nhánh assistant với datasource động không đi qua phép sàng** | Không có datasource cụ thể thì không có `queries[]` nào để đối chiếu. Hiện chưa dùng trong triển khai HĐND, nhưng đừng cho rằng mọi đường vào đều được siết |
