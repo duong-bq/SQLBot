@@ -56,7 +56,7 @@ from apps.hooks.schemas.ai_sync_schema import (
     SyncAppliedCounts,
     SyncEnvelope,
     SyncHookResponse,
-    UserSyncResult,
+    SyncResultItem,
     to_sync_version,
 )
 from apps.system.schemas.permission import SqlbotPermission, require_permissions
@@ -74,7 +74,7 @@ def _respond(
     request_id: str | None = None,
     idempotency_key: str | None = None,
     log_id: str | None = None,
-    results: list[UserSyncResult] | None = None,
+    results: list[SyncResultItem] | None = None,
     error_code: SyncErrorCode | None = None,
     error_message: str | None = None,
 ) -> JSONResponse:
@@ -143,7 +143,7 @@ def _best_effort_single_user_id(raw_data: Any) -> str | None:
 @router.post("/ai-sync", summary="Nhận bản tin đồng bộ từ hệ thống SW")
 @require_permissions(permission=SqlbotPermission(role=['ws_admin']))
 async def ai_sync(request: Request, session: SessionDep) -> JSONResponse:
-    """Cổng tiếp nhận bản tin đồng bộ, hiện chỉ xử lý `actionType = 1` (AUTHORIZATION_SYNC).
+    """Cổng tiếp nhận bản tin đồng bộ: `actionType = 1` (AUTHORIZATION_SYNC) và `4` (DATASOURCE_SYNC).
 
     Xác thực (JWT `X-SQLBOT-TOKEN`) và phân quyền (`ws_admin`) đã được `TokenMiddleware` +
     `require_permissions` xử lý trước khi vào đây — hàm này chỉ chạy khi request đã hợp lệ.

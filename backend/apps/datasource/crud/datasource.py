@@ -325,6 +325,53 @@ def sync_single_fields(session: SessionDep, trans: Trans, id: int):
     run_save_ds_embeddings([ds.id])
 
 
+def _build_er_ports(fields: List[CoreField]) -> list:
+    """Dựng danh sách port cho một node er-rect từ metadata cột hiện hành.
+
+    Port có ``id`` = ``CoreField.id`` — bất biến qua các lượt sync (``sync_fields`` khớp theo tên,
+    giữ nguyên id), nên edge trỏ vào port sống sót qua đồng bộ. Sắp theo ``field_index`` để thứ tự
+    cột trong ER editor khớp thứ tự cột trong bảng nguồn.
+    """
+    items = []
+    for f in sorted(fields, key=lambda x: x.field_index if x.field_index is not None else 0):
+        items.append({
+            "id": f.id,
+            "group": "list",
+            "attrs": {
+                "portNameLabel": {"text": f.field_name},
+                "portTypeLabel": {"text": f.field_type},
+            },
+        })
+    return items
+
+
+def _build_er_node(table: CoreTable, fields: List[CoreField], x: int, y: int, z_index: int) -> dict:
+    """Dựng một node er-rect theo đúng cấu trúc frontend X6 lưu vào ``table_relation``.
+
+    ``id`` của node = ``CoreTable.id`` — hợp đồng ngầm với ER editor và với khối Foreign keys khi
+    dựng M-Schema (``get_table_schema`` tra bảng qua ``int(cell)``).
+    """
+    return {
+        "id": table.id,
+        "shape": "er-rect",
+        "position": {"x": x, "y": y},
+        "size": {"width": 180, "height": 51},
+        "zIndex": z_index,
+        "visible": True,
+        "attrs": {
+            "text": {"text": table.table_name},
+            "label": {
+                "text": table.table_name,
+                "textAnchor": "left",
+                "refX": 34,
+                "refY": 28,
+                "textWrap": {"width": 120, "height": 24, "ellipsis": True},
+            },
+        },
+        "ports": {"items": _build_er_ports(fields)},
+    }
+
+
 def build_relation_graph(session: SessionDep, ds: CoreDatasource) -> list:
     """Build an X6 graph (nodes + FK edges) from the datasource's declared foreign keys.
 
@@ -359,36 +406,7 @@ def build_relation_graph(session: SessionDep, ds: CoreDatasource) -> list:
     col_count = 4  # simple grid auto-layout; user can rearrange freely afterwards
     for idx, t in enumerate(tables):
         row, col = divmod(idx, col_count)
-        port_items = []
-        for f in sorted(fields_by_table_id.get(t.id, []),
-                        key=lambda x: x.field_index if x.field_index is not None else 0):
-            port_items.append({
-                "id": f.id,
-                "group": "list",
-                "attrs": {
-                    "portNameLabel": {"text": f.field_name},
-                    "portTypeLabel": {"text": f.field_type},
-                },
-            })
-        cells.append({
-            "id": t.id,
-            "shape": "er-rect",
-            "position": {"x": col * 320, "y": row * 400},
-            "size": {"width": 180, "height": 51},
-            "zIndex": idx + 1,
-            "visible": True,
-            "attrs": {
-                "text": {"text": t.table_name},
-                "label": {
-                    "text": t.table_name,
-                    "textAnchor": "left",
-                    "refX": 34,
-                    "refY": 28,
-                    "textWrap": {"width": 120, "height": 24, "ellipsis": True},
-                },
-            },
-            "ports": {"items": port_items},
-        })
+        cells.append(_build_er_node(t, fields_by_table_id.get(t.id, []), col * 320, row * 400, idx + 1))
 
     z_index = len(tables) + 1
     for r in relations:
@@ -431,6 +449,120 @@ def seed_table_relation(session: SessionDep, ds: CoreDatasource):
             ds.table_relation = graph
     except Exception as e:
         SQLBotLogUtil.warning(f"seed_table_relation failed for ds {ds.id}: {e}")
+
+
+def reconcile_table_relation(session: SessionDep, ds: CoreDatasource):
+    """Đối soát đồ thị ``table_relation`` với metadata bảng/cột hiện hành, theo lối prune + merge.
+
+    ``seed_table_relation`` chỉ seed khi đồ thị còn rỗng; hàm này lo chiều ngược lại — đồ thị đã
+    có mà metadata vừa đổi (sau một lượt ``sync_table``) thì phải cắt tàn dư và bổ sung phần mới,
+    nếu không khối Foreign keys trong M-Schema sẽ in ra ``None.None=...`` từ các edge treo:
+
+    - Cắt node của bảng đã bị xóa; cắt edge có bất kỳ đầu neo nào (cell/port) trỏ id không còn.
+    - Ports của node còn sống được dựng lại toàn bộ từ ``CoreField`` hiện hành: port là dữ liệu
+      sinh (id = CoreField.id, không đổi qua sync) chứ không phải chỉnh tay, và cột mới phải có
+      port thì mới vẽ edge lên nó được.
+    - Thêm node cho bảng mới, xếp lưới Ở DƯỚI vùng đồ thị hiện có để không đè lên layout cũ.
+    - Bổ sung edge từ khóa ngoại trong catalog DB nguồn cho cặp cột chưa có edge — edge người
+      dùng vẽ tay còn hợp lệ được giữ nguyên, không đè.
+
+    So khớp id qua ``str()``: đồ thị backend seed ghi ``cell`` là int nhưng frontend X6 lưu lại
+    thành string, hai kiểu trộn lẫn trong cùng cột JSONB (consumer cũng phải ``int()`` khi đọc).
+
+    Nuốt lỗi và chỉ log warning, cùng hợp đồng với ``seed_table_relation``: đồ thị hỏng không
+    được phép làm hỏng cả lượt đồng bộ metadata.
+    """
+    try:
+        record = session.query(CoreDatasource).filter(CoreDatasource.id == ds.id).first()
+        if record is None:
+            return
+        if not record.table_relation:
+            # Chưa từng có đồ thị: đúng ca của seed, không có gì để prune.
+            seed_table_relation(session, record)
+            return
+
+        tables = session.query(CoreTable).filter(CoreTable.ds_id == ds.id).all()
+        fields = session.query(CoreField).filter(CoreField.ds_id == ds.id).all()
+        valid_table_ids = {str(t.id) for t in tables}
+        valid_field_ids = {str(f.id) for f in fields}
+        fields_by_table_id = {}
+        for f in fields:
+            fields_by_table_id.setdefault(f.table_id, []).append(f)
+
+        # --- Prune node + dựng lại ports ---
+        nodes = []
+        present_table_ids = set()
+        max_y = 0
+        for cell in record.table_relation:
+            if cell.get('shape') == 'edge':
+                continue
+            cell_id = str(cell.get('id'))
+            if cell_id not in valid_table_ids:
+                continue
+            present_table_ids.add(cell_id)
+            cell['ports'] = {"items": _build_er_ports(fields_by_table_id.get(int(cell_id), []))}
+            max_y = max(max_y, (cell.get('position') or {}).get('y', 0))
+            nodes.append(cell)
+
+        # --- Thêm node cho bảng mới, lưới riêng bên dưới đồ thị cũ ---
+        new_tables = [t for t in tables if str(t.id) not in present_table_ids]
+        y_start = max_y + 400 if nodes else 0
+        for idx, t in enumerate(new_tables):
+            row, col = divmod(idx, 4)
+            nodes.append(_build_er_node(t, fields_by_table_id.get(t.id, []),
+                                        col * 320, y_start + row * 400, len(nodes) + 1))
+
+        # --- Prune edge ---
+        edges = []
+        edge_keys = set()
+        for cell in record.table_relation:
+            if cell.get('shape') != 'edge':
+                continue
+            src = cell.get('source') or {}
+            tgt = cell.get('target') or {}
+            key = (str(src.get('cell')), str(src.get('port')), str(tgt.get('cell')), str(tgt.get('port')))
+            if key[0] in valid_table_ids and key[2] in valid_table_ids \
+                    and key[1] in valid_field_ids and key[3] in valid_field_ids:
+                edges.append(cell)
+                edge_keys.add(key)
+
+        # --- Merge edge mới từ khóa ngoại của catalog ---
+        try:
+            relations = get_relations(record)
+        except Exception as e:
+            SQLBotLogUtil.warning(f"reconcile_table_relation: get_relations failed for ds {ds.id}: {e}")
+            relations = []
+        table_by_name = {t.table_name: t for t in tables}
+        field_lookup = {(f.table_id, f.field_name): f for f in fields}
+        z_index = len(nodes) + len(edges) + 1
+        for r in relations:
+            src_t = table_by_name.get(r.srcTable)
+            tgt_t = table_by_name.get(r.tgtTable)
+            if src_t is None or tgt_t is None:
+                continue
+            src_f = field_lookup.get((src_t.id, r.srcColumn))
+            tgt_f = field_lookup.get((tgt_t.id, r.tgtColumn))
+            if src_f is None or tgt_f is None:
+                continue
+            key = (str(src_t.id), str(src_f.id), str(tgt_t.id), str(tgt_f.id))
+            if key in edge_keys:
+                continue
+            edges.append({
+                "id": str(uuid.uuid4()),
+                "shape": "edge",
+                "attrs": {"line": {"stroke": "#DEE0E3"}},
+                "source": {"cell": src_t.id, "port": str(src_f.id)},
+                "target": {"cell": tgt_t.id, "port": str(tgt_f.id)},
+                "zIndex": z_index,
+            })
+            edge_keys.add(key)
+            z_index += 1
+
+        record.table_relation = nodes + edges
+        session.add(record)
+        session.commit()
+    except Exception as e:
+        SQLBotLogUtil.warning(f"reconcile_table_relation failed for ds {ds.id}: {e}")
 
 
 def sync_table(session: SessionDep, ds: CoreDatasource, tables: List[CoreTable]):
@@ -510,6 +642,46 @@ def sync_fields(session: SessionDep, ds: CoreDatasource, table: CoreTable, field
         session.query(CoreField).filter(and_(CoreField.table_id == table.id, CoreField.id.not_in(id_list))).delete(
             synchronize_session=False)
         session.commit()
+
+
+def resync_ds_metadata(session: SessionDep, ds: CoreDatasource) -> tuple:
+    """Đồng bộ lại toàn bộ metadata của một nguồn theo catalog DB nguồn (mirror toàn schema).
+
+    Khác ``chooseTables`` (tập bảng đích do người dùng chọn), ở đây trạng thái đích là TOÀN BỘ
+    bảng trong schema nguồn: bảng mới được thêm (``checked=True`` — quyền truy cập đã có tầng
+    permission SW gác), bảng biến mất bị xóa kèm cột. Sau đó đối soát đồ thị quan hệ để không còn
+    node/edge treo (xem ``reconcile_table_relation``). Dùng cho luồng resync từ hook AI Sync.
+
+    Chặn catalog rỗng một cách tường minh: 0 bảng thường là schema cấu hình sai hoặc quyền DB bị
+    thu hồi, trong khi ``sync_table`` với list rỗng lại là lệnh XÓA SẠCH metadata — hook không
+    được phép phá hủy dựa trên tín hiệu mơ hồ đó; ai thật sự muốn xóa thì đi đường ``chooseTables``.
+
+    Không dùng ``updateNum`` cập nhật ``num``: hàm đó chép nguyên ``model_dump`` của object đè lên
+    dòng DB (lost update nếu có ai sửa nguồn song song) — ghi thẳng mỗi cột ``num``.
+
+    Trả về ``(số bảng sau đồng bộ, số bảng bị xóa)`` cho caller báo cáo.
+    """
+    source_tables = getTablesByDs(session, ds)
+    if not source_tables:
+        raise RuntimeError(
+            f"DB nguồn của datasource {ds.id} trả về 0 bảng — từ chối xóa sạch metadata; "
+            f"kiểm tra lại schema/quyền kết nối, hoặc dùng chooseTables nếu thật sự muốn xóa"
+        )
+
+    prev_names = {t.table_name for t in
+                  session.query(CoreTable).filter(CoreTable.ds_id == ds.id).all()}
+
+    items = [CoreTable(table_name=t.tableName, table_comment=t.tableComment) for t in source_tables]
+    sync_table(session, ds, items)
+    reconcile_table_relation(session, ds)
+
+    record = session.exec(select(CoreDatasource).where(CoreDatasource.id == ds.id)).first()
+    record.num = f"{len(items)}/{len(items)}"
+    session.add(record)
+    session.commit()
+
+    new_names = {t.tableName for t in source_tables}
+    return len(items), len(prev_names - new_names)
 
 
 def update_table_and_fields(session: SessionDep, data: TableObj):

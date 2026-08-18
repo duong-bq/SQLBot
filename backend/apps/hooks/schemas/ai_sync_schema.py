@@ -106,6 +106,24 @@ class AuthorizationSyncBatch(BaseModel):
     users: list[AuthorizationSyncData]
 
 
+class DatasourceSyncData(BaseModel):
+    """Payload của `actionType = 4` (DATASOURCE_SYNC).
+
+    Bản tin KHÔNG mang trạng thái mới — chỉ là cú hích bảo SQLBot đọc lại catalog DB nguồn của các
+    datasource được nêu tên, nên trường duy nhất là danh sách id. `datasourceIds` dùng đúng họ tên
+    và kiểu của `queries[].datasourceId` bên AUTHORIZATION_SYNC (id SQLBot, số dạng chuỗi) — không
+    dùng họ `dsId` (int) của hợp đồng datasource API, để trong cùng spec hook một khái niệm chỉ có
+    một tên.
+
+    Không ép `min_length=1`: mảng rỗng cần mã lỗi riêng `EMPTY_DATASOURCE_LIST` (kiểm ở handler),
+    cùng khuôn `AuthorizationSyncBatch`.
+    """
+
+    model_config = ConfigDict(populate_by_name=True, extra="ignore")
+
+    datasource_ids: list[str] = Field(alias="datasourceIds")
+
+
 class SyncAppliedCounts(BaseModel):
     """Số dòng quyền đã ghi/xoá của một lần xử lý."""
 
@@ -123,6 +141,25 @@ class UserSyncResult(BaseModel):
     applied: SyncAppliedCounts = Field(default_factory=SyncAppliedCounts)
 
 
+class DatasourceSyncResult(BaseModel):
+    """Kết quả xử lý của một datasource trong batch DATASOURCE_SYNC.
+
+    `applied.upserted` là số bảng sau đồng bộ, `applied.deleted` là số bảng bị loại — giữ đúng
+    khuôn `SyncAppliedCounts` để route cộng dồn chung với `UserSyncResult` không cần phân nhánh.
+    `message` chỉ có nghĩa khi FAILED: lý do nguồn đó không đồng bộ được.
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    datasourceId: str
+    status: str
+    applied: SyncAppliedCounts = Field(default_factory=SyncAppliedCounts)
+    message: str | None = None
+
+
+SyncResultItem = UserSyncResult | DatasourceSyncResult
+
+
 class SyncHookResponse(BaseModel):
     """Body trả cho SW. Tên trường cố ý camelCase để serialize thẳng, không cần alias."""
 
@@ -133,7 +170,7 @@ class SyncHookResponse(BaseModel):
     actionType: int
     status: str
     logId: str | None = None
-    results: list[UserSyncResult] = Field(default_factory=list)
+    results: list[SyncResultItem] = Field(default_factory=list)
     applied: SyncAppliedCounts = Field(default_factory=SyncAppliedCounts)
     errorCode: str | None = None
     errorMessage: str | None = None
@@ -188,6 +225,21 @@ def find_duplicate_datasource_id(queries: list[QueryItem]) -> str | None:
         if item.datasource_id in seen:
             return item.datasource_id
         seen.add(item.datasource_id)
+    return None
+
+
+def find_first_duplicate(values: list[str]) -> str | None:
+    """Trả phần tử đầu tiên bị lặp trong một danh sách chuỗi trần, None nếu không có.
+
+    Bản tổng quát của các `find_duplicate_*` bên trên, dùng cho payload dạng mảng id không bọc
+    object (vd `datasourceIds` của DATASOURCE_SYNC) — kiểm tường minh để trả lỗi 400 rõ ràng thay
+    vì để phần tử sau âm thầm lặp việc của phần tử trước trong vòng áp dụng.
+    """
+    seen: set[str] = set()
+    for value in values:
+        if value in seen:
+            return value
+        seen.add(value)
     return None
 
 

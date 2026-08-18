@@ -20,6 +20,7 @@ from apps.hooks.schemas.ai_sync_schema import (
     AuthorizationSyncBatch,
     SyncAppliedCounts,
     SyncEnvelope,
+    SyncResultItem,
     UserSyncResult,
     find_duplicate_datasource_id,
     find_duplicate_form_uuid,
@@ -32,12 +33,12 @@ class HandlerResult:
     """Kết quả một lần xử lý bản tin batch, để route dựng response và chốt audit log.
 
     `status` luôn là `SUCCESS` khi hàm trả về bình thường (không raise) — batch đã qua validate cấu
-    trúc và được xử lý xong, bất kể có user nào bên trong bị `STALE`. Chi tiết từng user nằm trong
-    `results`.
+    trúc và được xử lý xong, bất kể có phần tử nào bên trong bị `STALE`/`FAILED`. Chi tiết từng
+    phần tử (user hoặc datasource, tùy actionType) nằm trong `results`.
     """
 
     status: SyncStatus
-    results: list[UserSyncResult] = field(default_factory=list)
+    results: list[SyncResultItem] = field(default_factory=list)
 
 
 def handle_authorization_sync(
