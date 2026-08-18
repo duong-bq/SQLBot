@@ -30,6 +30,7 @@ Lưu ý: lỗi xác thực (401, thiếu/sai JWT) và lỗi thiếu quyền (`ws
 `BACKEND_ARCHITECTURE.md` §7), không phải hợp đồng riêng của hook.
 """
 
+import asyncio
 from typing import Any
 
 from fastapi import APIRouter, Request
@@ -271,7 +272,12 @@ async def ai_sync(request: Request, session: SessionDep) -> JSONResponse:
     sync_version = to_sync_version(envelope.timestamp) if envelope.timestamp is not None else None
     handler = ACTION_HANDLERS[action_type]
     try:
-        result = handler(session, envelope, sync_version or 0)
+        # PHẢI chạy ở thread riêng: handler làm việc chặn (DATASOURCE_SYNC đọc catalog + ghi
+        # metadata hàng trăm bảng, kéo dài hàng phút). Gọi thẳng trong `async def` là chiếm event
+        # loop dùng chung của cả tiến trình — mọi request khác đứng xếp hàng cho tới khi xong, và
+        # triệu chứng là "backend chết" chứ không phải "hook chậm". `to_thread` (không phải
+        # `executor.submit`) vì nó copy contextvar sang thread mới, giữ nguyên RequestContext.
+        result = await asyncio.to_thread(handler, session, envelope, sync_version or 0)
     except SyncHookError as e:
         session.rollback()
         return fail(e.http_status, e.error_code, e.message)
