@@ -252,10 +252,26 @@ async def ai_sync(request: Request, session: SessionDep) -> JSONResponse:
     except ValidationError as e:
         return fail(400, SyncErrorCode.INVALID_ENVELOPE, str(e))
 
-    sync_version = to_sync_version(envelope.timestamp)
+    # `version`/`timestamp` optional ở model nhưng bắt buộc cho AUTHORIZATION_SYNC: thiếu
+    # `timestamp` là mất hẳn mốc chống bản tin lùi (STALE), một bản tin quyền cũ tới muộn sẽ ghi
+    # đè quyền mới mà không ai biết. DATASOURCE_SYNC không có cơ chế đó nên không cần.
+    missing = [
+        name for name, value in (("version", envelope.version), ("timestamp", envelope.timestamp))
+        if value is None
+    ]
+    if action_type is SyncActionType.AUTHORIZATION_SYNC and missing:
+        return fail(
+            400,
+            SyncErrorCode.INVALID_ENVELOPE,
+            f"actionType 1 bắt buộc có {', '.join(missing)}",
+        )
+
+    # None (không phải 0) khi thiếu timestamp: `finish_log` bỏ qua giá trị None nên cột
+    # `sync_version` để trống, không sinh ra mốc giả mà `get_last_applied_version` có thể đọc nhầm.
+    sync_version = to_sync_version(envelope.timestamp) if envelope.timestamp is not None else None
     handler = ACTION_HANDLERS[action_type]
     try:
-        result = handler(session, envelope, sync_version)
+        result = handler(session, envelope, sync_version or 0)
     except SyncHookError as e:
         session.rollback()
         return fail(e.http_status, e.error_code, e.message)

@@ -194,7 +194,7 @@ def test_body_json_nhung_khong_phai_object_tra_400(client, crud_patches):
     assert resp.json()["errorCode"] == "MALFORMED_JSON"
 
 
-@pytest.mark.parametrize("action_type", [2, 3, 4, 5, 6])
+@pytest.mark.parametrize("action_type", [2, 3, 5, 6])
 def test_action_type_chua_implement_tra_422_va_co_ghi_log(client, crud_patches, action_type):
     body = dict(VALID_BODY, actionType=action_type)
     resp = client.post("/api/v1/hooks/ai-sync", json=body, headers=HEADERS)
@@ -361,3 +361,45 @@ def test_path_hooks_khong_nam_trong_whitelist():
     from common.utils.whitelist import whiteUtils
 
     assert whiteUtils.is_whitelisted("/api/v1/hooks/ai-sync") is False
+
+
+@pytest.mark.parametrize("missing", ["version", "timestamp"])
+def test_action_type_1_thieu_version_hoac_timestamp_tra_400(client, crud_patches, missing):
+    """Hai trường này optional ở model (để actionType 4 miễn) nhưng route vẫn bắt buộc với type 1.
+
+    Thiếu `timestamp` mà vẫn cho qua là mất mốc chống bản tin lùi — bản tin quyền cũ tới muộn sẽ
+    lặng lẽ ghi đè quyền mới.
+    """
+    body = dict(VALID_BODY)
+    body.pop(missing)
+    resp = client.post("/api/v1/hooks/ai-sync", json=body, headers=HEADERS)
+    assert resp.status_code == 400
+    assert resp.json()["errorCode"] == "INVALID_ENVELOPE"
+    assert missing in resp.json()["errorMessage"]
+
+
+def test_action_type_4_nhan_payload_khong_can_version_timestamp(client, crud_patches):
+    """Hợp đồng của bên tích hợp DATASOURCE_SYNC: chỉ `actionType` + `payload`, không vỏ thời gian."""
+    from apps.hooks.handlers import ACTION_HANDLERS
+    from apps.hooks.schemas.ai_sync_schema import DatasourceSyncResult
+
+    handler = MagicMock(
+        return_value=HandlerResult(
+            status=SyncStatus.SUCCESS,
+            results=[DatasourceSyncResult(
+                datasourceId="50", status="SUCCESS",
+                applied=SyncAppliedCounts(upserted=102, deleted=1),
+            )],
+        )
+    )
+    body = {"actionType": 4, "payload": {"datasourceIds": ["50"]}}
+    with patch.dict(ACTION_HANDLERS, {SyncActionType.DATASOURCE_SYNC: handler}):
+        resp = client.post("/api/v1/hooks/ai-sync", json=body, headers=HEADERS)
+
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "SUCCESS"
+    assert resp.json()["applied"] == {"upserted": 102, "deleted": 1}
+    # handler vẫn nhận đủ payload dù nó tới dưới tên `payload`
+    assert handler.call_args.args[1].data == {"datasourceIds": ["50"]}
+    # thiếu timestamp thì KHÔNG bịa mốc: cột sync_version để trống
+    assert crud_patches["finish_log"].call_args.kwargs["sync_version"] is None

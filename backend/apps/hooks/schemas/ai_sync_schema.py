@@ -7,7 +7,7 @@ chú ý: alias là `clickHouseQuery` (chữ H hoa) — viết sai alias thì que
 from datetime import datetime, timezone
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field
 
 
 class SyncEnvelope(BaseModel):
@@ -17,15 +17,24 @@ class SyncEnvelope(BaseModel):
     "integer nhưng chưa hỗ trợ" do `resolve_action_type` làm TRƯỚC khi validate envelope, vì hai ca
     đó trả HTTP status khác nhau (400 vs 422) và cần ghi audit khác nhau.
 
+    `version`/`timestamp` khai optional Ở ĐÂY nhưng KHÔNG phải optional với mọi bản tin: chúng vẫn
+    bắt buộc cho `AUTHORIZATION_SYNC` (thiếu `timestamp` là mất mốc chống bản tin lùi), và route
+    kiểm lại theo actionType sau khi parse. Lý do phải hạ xuống mức model: pydantic validate cả vỏ
+    trong một lượt, không phân biệt được loại bản tin, nên bắt buộc ở đây thì `DATASOURCE_SYNC`
+    không thể miễn.
+
+    Payload nhận CẢ HAI tên `data` và `payload` (`AliasChoices`) — hợp đồng gốc dùng `data`, bên
+    tích hợp DATASOURCE_SYNC dùng `payload`; nhận cả hai để không bên nào phải sửa client.
+
     `extra="ignore"`: SW thêm trường mới ở vỏ thì hook không vỡ.
     """
 
     model_config = ConfigDict(populate_by_name=True, extra="ignore")
 
     action_type: int = Field(alias="actionType")
-    version: str = Field(min_length=1)
-    timestamp: datetime
-    data: dict[str, Any]
+    version: str | None = Field(default=None, min_length=1)
+    timestamp: datetime | None = None
+    data: dict[str, Any] = Field(validation_alias=AliasChoices("data", "payload"))
 
 
 class QueryItem(BaseModel):

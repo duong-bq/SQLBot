@@ -52,12 +52,28 @@ def test_envelope_hop_le():
     assert env.data["userId"] == "usr-12345-67890"
 
 
-@pytest.mark.parametrize("missing", ["version", "timestamp", "data"])
+@pytest.mark.parametrize("missing", ["actionType", "data"])
 def test_envelope_thieu_truong_bat_buoc(missing):
     body = {"actionType": 1, "version": "1.0", "timestamp": "2026-08-10T10:00:00Z", "data": VALID_DATA}
     body.pop(missing)
     with pytest.raises(ValidationError):
         SyncEnvelope.model_validate(body)
+
+
+@pytest.mark.parametrize("missing", ["version", "timestamp"])
+def test_envelope_thieu_version_timestamp_van_parse_duoc(missing):
+    """`version`/`timestamp` optional ở MODEL — route mới là nơi bắt buộc chúng cho actionType 1."""
+    body = {"actionType": 1, "version": "1.0", "timestamp": "2026-08-10T10:00:00Z", "data": VALID_DATA}
+    body.pop(missing)
+    env = SyncEnvelope.model_validate(body)
+    assert getattr(env, "version" if missing == "version" else "timestamp") is None
+
+
+def test_envelope_nhan_ca_payload_lan_data():
+    """Bên tích hợp DATASOURCE_SYNC gửi khoá `payload`, hợp đồng gốc dùng `data` — nhận cả hai."""
+    env = SyncEnvelope.model_validate({"actionType": 4, "payload": {"datasourceIds": ["50"]}})
+    assert env.data == {"datasourceIds": ["50"]}
+    assert env.version is None and env.timestamp is None
 
 
 def test_payload_hop_le_va_parse_dung_alias():
