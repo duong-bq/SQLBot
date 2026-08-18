@@ -428,6 +428,18 @@ ORDER BY received_at DESC;
 `request_payload` (JSONB) là body thô SW đã gửi — dùng để tái hiện request khi cần. Trạng thái quyền
 hiện tại (sau khi đã áp snapshot) nằm ở `ai_user_permissions`, lọc theo `user_id`.
 
+Bản tin `DATASOURCE_SYNC` (`action_type = 4`) **không có `user_id`** — cột đó NULL, nên chỉ lần được
+theo `idempotency_key` hoặc quét theo loại bản tin:
+
+```sql
+SELECT status, error_code, request_payload->'data'->'datasourceIds' AS ds_ids, received_at, processed_at
+FROM ai_sync_hook_logs WHERE action_type = 4 ORDER BY received_at DESC LIMIT 20;
+```
+
+Dòng log chỉ nói request đã chạy xong hay hỏng ở tầng cấu trúc; kết cục của **từng nguồn** nằm trong
+body trả về chứ không lưu lại, nên nguồn nào đồng bộ trượt thì phải tra tiếp `warn.log`/`error.log`
+theo chuỗi `[ai-sync] DATASOURCE_SYNC`.
+
 ### Vì sao người dùng này không thấy bảng đó
 
 Quyền dữ liệu theo user (xem [TEXT2SQL_PIPELINE.md §13](TEXT2SQL_PIPELINE.md)) không phát event
@@ -462,6 +474,7 @@ hoa-thường, scope query hỏng cú pháp, bảng có nhiều scope mâu thu�
 | **`source.cell` / `target.cell` phải là số nguyên** | Trong `POST /table_relation/save/{ds_id}`. Truyền chuỗi thì API trả **200 OK, không lỗi, không log**, nhưng quan hệ bị vô hiệu hoàn toàn → mọi câu hỏi cần JOIN sẽ sai. Xem `DATASOURCE_API_SPEC.md` §6.2 |
 | **`editTable` / `editField` thiếu `custom_comment` là xóa mất chú thích** | Hai endpoint này ghi đè toàn bộ record, không phải PATCH. Chú thích là đầu vào trực tiếp của M-Schema nên mất là chất lượng SQL tụt ngay |
 | **`chooseTables` thay thế toàn bộ danh sách** | Không phải "thêm bảng". Gửi thiếu một bảng đang dùng là bỏ chọn nó |
+| **`chooseTables` bỏ chọn bảng nhưng KHÔNG dọn đồ thị quan hệ** | `sync_table` chỉ gọi `seed_table_relation` ([datasource.py:608](../backend/apps/datasource/crud/datasource.py#L608)), mà hàm seed **no-op khi đồ thị đã khác rỗng**. Hệ quả: bỏ chọn bảng để lại node/port/edge trỏ vào id đã xoá, và chọn lại thì bảng mang **id mới** trong khi seed vẫn từ chối chạy. Triệu chứng ở tầng trên là khối `Foreign keys` của M-Schema có dòng `None.None=...` — LLM đọc phải rác đó khi cần JOIN. Không có đường phục hồi từ UI. Hiện chỉ `DATASOURCE_SYNC` (hook actionType 4) là dọn, vì nó gọi thêm `reconcile_table_relation` ([datasource.py:454](../backend/apps/datasource/crud/datasource.py#L454)). Kiểm tồn đọng bằng cách so `table_relation` với `core_table`/`core_field` của cùng `ds_id` |
 | **Lỗi thường trả 500 thay vì 403/404** | Không suy ra được nguyên nhân từ status code; phải đọc body |
 
 ### 7.2. Rò rỉ thông tin
@@ -511,6 +524,12 @@ kỳ tài liệu, log hay issue nào; nếu cần xoay vòng mật khẩu thì p
 | `AUTHORIZATION_SYNC` là **full snapshot**, không phải patch | Gửi thiếu một `formUuid` đang có quyền là **thu hồi** form đó, không phải "giữ nguyên". `formQueries: []` thu hồi hết. Xem `AI_SYNC_HOOK_API_SPEC.md` §5 |
 | Gọi hook mà không đăng nhập trước | Không có static token riêng — SW phải `POST /login/access-token` lấy `X-SQLBOT-TOKEN` như mọi client khác, và tài khoản đó phải có quyền `ws_admin` |
 | Thiếu quyền `ws_admin` trả **500**, không phải 403 | Quy ước chung của `require_permissions` toàn hệ thống (xem §7.4 / `BACKEND_ARCHITECTURE.md` §7), không riêng gì hook |
+| `DATASOURCE_SYNC` trả **200 + `status: SUCCESS`** ngay cả khi **mọi** nguồn trong batch đều hỏng | Ngữ nghĩa per-item, không all-or-nothing như `AUTHORIZATION_SYNC`: `status` cấp request chỉ nói "batch đã xử lý xong". Kết cục thật nằm ở `results[]`. SW dựng monitor theo HTTP status sẽ không bao giờ báo động |
+| `DATASOURCE_SYNC` **mở rộng** tập bảng, không giữ nguyên lựa chọn thủ công | Trạng thái đích là toàn bộ schema nguồn, trong khi `chooseTables` là tập do người dùng tick. Một nguồn đang `91/91` có thể thành `102/102` sau đồng bộ — đúng thiết kế, nhưng ai quen nhìn số đó sẽ tưởng có người vào bấm chọn lại |
+| Chạy **đồng bộ trong request**, không có hàng đợi nền | Đo được ~15s cho một nguồn PostgreSQL hơn 100 bảng. Batch nhiều nguồn giữ kết nối HTTP rất lâu; timeout phía SW/reverse proxy là thứ hỏng trước tiên |
+| Nguồn Excel và nguồn đang `Importing` bị **từ chối per-item** | Excel không có DB nguồn ngoài để đọc lại (đọc "catalog" của nó sẽ trúng PG nội bộ của SQLBot), còn `Importing` nghĩa là worker nền đang ghi metadata song song — chen vào là race |
+| DB nguồn trả **0 bảng** thì FAILED chứ không xoá sạch | Hỏng theo hướng đóng, cố ý: 0 bảng gần như luôn là sai schema hoặc mất quyền DB, trong khi hạ tầng bên dưới lại hiểu "danh sách bảng rỗng" là lệnh xoá hết. Muốn xoá thật thì đi đường `chooseTables` |
+| `DATASOURCE_SYNC` **không** kiểm `STALE` | Bản tin không mang trạng thái riêng nên replay là vô hại. Đừng đi tìm lý do "vì sao bản tin datasource không bao giờ STALE" — nó cố ý không có |
 
 ### 7.6. Nạp Excel bất đồng bộ và các vòng nền
 
@@ -556,6 +575,13 @@ apps.datasource.crud.datasource (most likely due to a circular import)
 
 Cách chữa: đặt `import sqlbot_xpack` lên **trước mọi import `apps.*`** trong script. `import
 apps.api` **không** chữa được — nó chết cùng kiểu.
+
+Vòng import này cũng chi phối **code trong app**: module nào không nằm sẵn trong cụm datasource mà
+cần gọi hàm của `crud/datasource.py` thì phải import **lazy trong thân hàm**, không import ở mức
+module. Ví dụ đang có: handler `DATASOURCE_SYNC` gọi `resync_ds_metadata`
+([datasource_sync.py:57](../backend/apps/hooks/handlers/datasource_sync.py#L57)). Chạy bằng `main.py`
+thì import ở mức module vẫn sống nhờ thứ tự nạp tình cờ đúng, nhưng test nạp riêng cụm `hooks` sẽ vỡ
+— tức là lỗi chỉ xuất hiện ở nơi khó liên hệ nhất với nguyên nhân.
 
 ### 7.8. Envelope response
 

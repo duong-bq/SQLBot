@@ -824,7 +824,13 @@ một nguồn đang chạy: DB nguồn có 26 cột trong khi SQLBot đang lưu 
   của nó. Thêm một bảng vẫn phải gửi lại cả những bảng đang có. Mảng rỗng xóa sạch.
 - ⚠ Bảng bị xóa rồi thêm lại sẽ mang `table_id` mới và **mất toàn bộ chú thích** của bảng lẫn các
   cột. Gọi lại với cùng danh sách thì an toàn — chú thích được giữ.
-- ⚠ Quan hệ giữa các bảng **không** được cập nhật theo, phải khai lại bằng 6.2.
+- ⚠ Quan hệ giữa các bảng **không** được cập nhật theo, phải khai lại bằng 6.2. Nặng hơn "không cập
+  nhật": sơ đồ quan hệ vẫn giữ nguyên các bảng/cột vừa bị gỡ, và những mẩu trỏ vào chỗ trống đó đi
+  thẳng vào ngữ cảnh sinh SQL. Đổi tập bảng xong thì **luôn** gọi 6.2 để khai lại quan hệ theo tập
+  bảng mới — kể cả khi không có quan hệ nào (gửi mảng rỗng).
+- Nếu chỉ cần cập nhật cấu trúc cho khớp DB nguồn (chứ không phải tự chọn tập bảng), dùng bản tin
+  `actionType 4` của `AI_SYNC_HOOK_API_SPEC.md` §6: nó tự đọc lại catalog nguồn và tự dọn sơ đồ quan
+  hệ, không cần gọi 6.2 sau đó.
 - ⚠ Không có transaction bao trùm: hỏng giữa chừng để lại trạng thái dở dang. Xử lý bằng cách đọc
   4.4 rồi gọi lại — thao tác này lặp lại được.
 - Khác 3.5: endpoint này **có** kiểm tra kết nối, hỏng thì 500 và không thay đổi gì.

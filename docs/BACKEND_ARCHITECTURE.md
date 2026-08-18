@@ -52,7 +52,7 @@ backend/
 | `apps/template/` | Nạp prompt từ YAML (có `@cache`) | `template.py` |
 | `apps/system/` | User, workspace, auth, model config, assistant, apikey | `middleware/auth.py`, `schemas/permission.py`, `api/login.py` |
 | `apps/mcp/` | MCP server | `mcp.py` |
-| `apps/hooks/` | Cổng nhận bản tin đồng bộ từ hệ ngoài (SW) + API đọc quyền (dev/test) | `api/ai_sync.py`, `api/permission_query.py`, `handlers/authorization.py`, `crud/ai_user_permission.py` |
+| `apps/hooks/` | Cổng nhận bản tin đồng bộ từ hệ ngoài (SW) + API đọc quyền (dev/test) | `api/ai_sync.py`, `api/permission_query.py`, `handlers/authorization.py`, `handlers/datasource_sync.py`, `crud/ai_user_permission.py` |
 | `apps/dashboard/`, `apps/settings/`, `apps/swagger/` | Dashboard, tham số hệ thống, i18n cho OpenAPI | |
 | `common/core/` | Config, session DB, response middleware, cache | `config.py`, `db.py`, `response_middleware.py` |
 | `common/utils/` | Tiện ích: crypto, log, lock phân tán, embedding thread, vòng lặp định kỳ | `crypto.py`, `distributed_lock.py`, `embedding_threads.py`, `periodic.py` |
@@ -259,6 +259,18 @@ Pipeline Text2SQL **chỉ đọc** `ai_user_permissions`, mỗi lượt hỏi m�
 `apps/chat/permission/sw_permission.py` — nó lọc bảng/cột đưa vào M-Schema và bọc phạm vi dòng vào
 SQL trước khi chạy. Ghi vào bảng này là độc quyền của hook. Chi tiết:
 [TEXT2SQL_PIPELINE.md §13](TEXT2SQL_PIPELINE.md).
+
+Hai bản tin đã triển khai ghi vào **hai vùng dữ liệu tách rời**, chỉ dùng chung tầng route
+(idempotency + audit) của `api/ai_sync.py`:
+
+| actionType | Handler | Ghi vào |
+|---|---|---|
+| 1 `AUTHORIZATION_SYNC` | `handlers/authorization.py` | `ai_user_permissions` |
+| 4 `DATASOURCE_SYNC` | `handlers/datasource_sync.py` | `core_table`, `core_field`, `core_datasource.table_relation` / `.num` — qua `resync_ds_metadata` của cụm datasource |
+
+Khác biệt về ngữ nghĩa (all-or-nothing theo batch vs per-item, có/không kiểm `STALE`) nằm trọn
+trong handler, route không phân biệt. Vì `DATASOURCE_SYNC` đi ngược vào cụm datasource, nó phải
+import lazy để né vòng import có sẵn của upstream — xem `OPERATIONS.md` §7.7.
 
 ---
 

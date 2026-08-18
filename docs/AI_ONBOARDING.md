@@ -43,8 +43,11 @@ Hệ quả cụ thể: `ChatFinishStep` đã bị **đánh số lại** để ch
   `GET /chat/record/{id}/data` vẫn còn để web UI dựng lại hội thoại cũ, nhưng đối tác không cần
   dùng tới và `API_SPEC.md` đã bỏ mô tả nó.
 - Backend Python 3.11 + FastAPI, quản lý dependency bằng `uv`; frontend Vue 3 + TypeScript.
-- Có cổng `POST /hooks/ai-sync` (`apps/hooks/`) nhận bản tin đồng bộ quyền user từ hệ thống SW, ghi
-  vào `ai_user_permissions`. Pipeline Text2SQL **đã đọc** dữ liệu này: bảng và cột ngoài quyền không
+- Có cổng `POST /hooks/ai-sync` (`apps/hooks/`) nhận bản tin đồng bộ từ hệ thống SW. Hai loại bản
+  tin đã triển khai: `actionType 1` đồng bộ **quyền user**, ghi vào `ai_user_permissions`; và
+  `actionType 4` đồng bộ **cấu trúc nguồn dữ liệu** — SQLBot tự đọc lại catalog DB nguồn rồi mirror
+  metadata bảng/cột/quan hệ (per-item, không kiểm STALE).
+  Pipeline Text2SQL **đã đọc** dữ liệu quyền này: bảng và cột ngoài quyền không
   vào M-Schema, và phạm vi dòng được bọc vào SQL bằng `sqlglot` trước khi chạy — tất định, không
   nhờ LLM. `POST /chat/question` nhận thêm `domainCode` để giới hạn câu hỏi theo lĩnh vực. Người
   dùng **không có dòng quyền nào thì không bị siết**, nên tài khoản nội bộ và harness eval chạy như
@@ -88,7 +91,7 @@ Hệ quả cụ thể: `ChatFinishStep` đã bị **đánh số lại** để ch
 |---|---|
 | [backend/scripts/chat_stream_demo/API_SPEC.md](../backend/scripts/chat_stream_demo/API_SPEC.md) | Hợp đồng tích hợp chat: login, list datasource, `POST /chat/question` (SSE) — đủ catalog event, bảng lỗi, giới hạn hệ thống |
 | [backend/scripts/chat_stream_demo/DATASOURCE_API_SPEC.md](../backend/scripts/chat_stream_demo/DATASOURCE_API_SPEC.md) | 26 endpoint quản trị datasource — tạo/sync/chọn bảng/sửa chú thích/quan hệ bảng, cho cả database quan hệ lẫn file Excel/CSV; §9 là luồng nạp Excel bất đồng bộ + hợp đồng callback |
-| [backend/scripts/ai_sync_hook/AI_SYNC_HOOK_API_SPEC.md](../backend/scripts/ai_sync_hook/AI_SYNC_HOOK_API_SPEC.md) | Cổng `POST /hooks/ai-sync` nhận bản tin đồng bộ quyền từ SW — actionType, full-snapshot, idempotency, bảng lỗi |
+| [backend/scripts/ai_sync_hook/AI_SYNC_HOOK_API_SPEC.md](../backend/scripts/ai_sync_hook/AI_SYNC_HOOK_API_SPEC.md) | Cổng `POST /hooks/ai-sync` nhận bản tin đồng bộ từ SW — actionType, full-snapshot quyền (type 1), mirror schema nguồn (type 4), idempotency, bảng lỗi |
 | [backend/scripts/ai_sync_hook/AI_PERMISSION_QUERY_API_SPEC.md](../backend/scripts/ai_sync_hook/AI_PERMISSION_QUERY_API_SPEC.md) | 2 endpoint GET đọc lại quyền đã đồng bộ (dev/test), tách khỏi spec ghi ở trên |
 | [backend/scripts/ai_sync_hook/USER_ADMIN_API_SPEC.md](../backend/scripts/ai_sync_hook/USER_ADMIN_API_SPEC.md) | Quản trị tài khoản cho SW: đăng nhập, tạo/sửa/khoá/xoá user, đổi mật khẩu. Mọi endpoint định danh bằng `account`. Bản `..._LITE.md` cạnh đó là bản rút gọn gửi đối tác — sửa cái nào thì sửa cả hai |
 | [backend/scripts/eval_text2sql/README.md](../backend/scripts/eval_text2sql/README.md) | Cách dùng harness đánh giá chất lượng |
