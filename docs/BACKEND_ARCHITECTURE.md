@@ -104,8 +104,13 @@ một route trả **JSON thô** thì cách duy nhất là khai path pattern củ
 `shutdown_resources()` gọi `stop_datasource_background_tasks()` **trước** `SingleWorkerGuard.release()`
 — các vòng nền còn đang giữ session DB.
 
-Migration mới nhất: `082_chat_record_domain_code.py` (thêm cột `chat_record.domain_code` — mã lĩnh
-vực giới hạn phạm vi của lượt hỏi). Trước đó: `081_chat_attachment.py` (tạo `chat_attachment` — text
+Migration mới nhất: `083_core_field_lookup_index.py` (index `(table_id, field_name)` trên
+`core_field`). Index này **không thừa, đừng xoá**: vòng đồng bộ metadata tra từng cột một để quyết
+định INSERT hay UPDATE, nên không có index thì mỗi lần tra là seq scan toàn bảng — chi phí tỉ lệ với
+tổng số cột của **toàn hệ thống**, tức là càng thêm datasource thì đồng bộ nguồn nào cũng chậm đi.
+Cố ý không đặt UNIQUE vì dữ liệu cũ chưa chắc sạch. Trước đó: `082_chat_record_domain_code.py`
+(thêm cột `chat_record.domain_code` — mã lĩnh vực giới hạn phạm vi của lượt hỏi),
+`081_chat_attachment.py` (tạo `chat_attachment` — text
 trích từ file `.docx` đính kèm câu hỏi), `080_excel_import_jobs_file_url.py` (thêm cột `file_url` — nguồn file
 chuyển từ multipart sang presigned URL; đánh số 080 vì revision id của bản 079 cũ trùng với một
 migration đã có trên `main`), `079_ai_user_permissions_drop_table_description.py`,
@@ -128,7 +133,7 @@ sinh khi merge nhánh), `072_add_chat_external_id.py`.
 | Sửa vòng retry / hạ cấp | [llm.py:1697-1870](../backend/apps/chat/task/llm.py#L1697) |
 | Thêm/sửa event SSE | `run_task` ([llm.py:1622](../backend/apps/chat/task/llm.py#L1622)) — **rồi cập nhật `API_SPEC.md` §6.3** |
 | Đổi điểm dừng pipeline | [chat_model.py:54](../backend/apps/chat/models/chat_model.py#L54) `ChatFinishStep` |
-| Sửa M-Schema đưa vào prompt | [datasource.py:859](../backend/apps/datasource/crud/datasource.py#L859) `get_table_schema` |
+| Sửa M-Schema đưa vào prompt | [datasource.py:1063](../backend/apps/datasource/crud/datasource.py#L1063) `get_table_schema` |
 | Đổi cách chọn bảng theo embedding | [table_embedding.py:43](../backend/apps/datasource/embedding/table_embedding.py#L43) |
 | Sửa kiểm tra an toàn SQL | [llm.py:103](../backend/apps/chat/task/llm.py#L103) (whitelist bảng) + [db.py:1084](../backend/apps/db/db.py#L1084) (`check_sql_read`) |
 | Sửa quyền dữ liệu theo user (bảng / cột / hàng) | [apps/chat/permission/sw_permission.py](../backend/apps/chat/permission/sw_permission.py) — suy diễn quyền và viết lại SQL; hai điểm cưỡng chế nằm ở `choose_table_schema` và ngay trước `execute_sql` trong `llm.py`. **Rồi cập nhật `TEXT2SQL_PIPELINE.md` §13** |

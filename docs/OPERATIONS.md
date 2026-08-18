@@ -478,7 +478,7 @@ hoa-thường, scope query hỏng cú pháp, bảng có nhiều scope mâu thu�
 | **`source.cell` / `target.cell` phải là số nguyên** | Trong `POST /table_relation/save/{ds_id}`. Truyền chuỗi thì API trả **200 OK, không lỗi, không log**, nhưng quan hệ bị vô hiệu hoàn toàn → mọi câu hỏi cần JOIN sẽ sai. Xem `DATASOURCE_API_SPEC.md` §6.2 |
 | **`editTable` / `editField` thiếu `custom_comment` là xóa mất chú thích** | Hai endpoint này ghi đè toàn bộ record, không phải PATCH. Chú thích là đầu vào trực tiếp của M-Schema nên mất là chất lượng SQL tụt ngay |
 | **`chooseTables` thay thế toàn bộ danh sách** | Không phải "thêm bảng". Gửi thiếu một bảng đang dùng là bỏ chọn nó |
-| **`chooseTables` bỏ chọn bảng nhưng KHÔNG dọn đồ thị quan hệ** | `sync_table` chỉ gọi `seed_table_relation` ([datasource.py:608](../backend/apps/datasource/crud/datasource.py#L608)), mà hàm seed **no-op khi đồ thị đã khác rỗng**. Hệ quả: bỏ chọn bảng để lại node/port/edge trỏ vào id đã xoá, và chọn lại thì bảng mang **id mới** trong khi seed vẫn từ chối chạy. Triệu chứng ở tầng trên là khối `Foreign keys` của M-Schema có dòng `None.None=...` — LLM đọc phải rác đó khi cần JOIN. Không có đường phục hồi từ UI. Hiện chỉ `DATASOURCE_SYNC` (hook actionType 4) là dọn, vì nó gọi thêm `reconcile_table_relation` ([datasource.py:454](../backend/apps/datasource/crud/datasource.py#L454)). Kiểm tồn đọng bằng cách so `table_relation` với `core_table`/`core_field` của cùng `ds_id` |
+| **`chooseTables` bỏ chọn bảng nhưng KHÔNG dọn đồ thị quan hệ** | `sync_table` chỉ gọi `seed_table_relation` ([datasource.py:640](../backend/apps/datasource/crud/datasource.py#L640)), mà hàm seed **no-op khi đồ thị đã khác rỗng**. Hệ quả: bỏ chọn bảng để lại node/port/edge trỏ vào id đã xoá, và chọn lại thì bảng mang **id mới** trong khi seed vẫn từ chối chạy. Triệu chứng ở tầng trên là khối `Foreign keys` của M-Schema có dòng `None.None=...` — LLM đọc phải rác đó khi cần JOIN. Không có đường phục hồi từ UI. Hiện chỉ `DATASOURCE_SYNC` (hook actionType 4) là dọn, vì nó gọi thêm `reconcile_table_relation` ([datasource.py:454](../backend/apps/datasource/crud/datasource.py#L454)). Kiểm tồn đọng bằng cách so `table_relation` với `core_table`/`core_field` của cùng `ds_id` |
 | **Lỗi thường trả 500 thay vì 403/404** | Không suy ra được nguyên nhân từ status code; phải đọc body |
 
 ### 7.2. Rò rỉ thông tin
@@ -633,3 +633,42 @@ bật/tắt phần này — quyền có hay không hoàn toàn do dữ liệu tr
 | **`domainCode` gửi `null` trả 400, không gửi thì không sao** | Ba trạng thái phân biệt bằng `model_fields_set` của pydantic. Client dựng body bằng cách gán biến chưa khởi tạo sẽ nhận `400 invalid_domain_code` chứ không âm thầm hỏi trên toàn bộ lĩnh vực |
 | **`/regenerate` kế thừa `domain_code` của record gốc** | Cột `chat_record.domain_code` (migration `082`). Sinh lại một lượt cũ mà đổi phạm vi thì hai kết quả không so sánh được với nhau |
 | **Nhánh assistant với datasource động không đi qua phép sàng** | Không có datasource cụ thể thì không có `queries[]` nào để đối chiếu. Hiện chưa dùng trong triển khai HĐND, nhưng đừng cho rằng mọi đường vào đều được siết |
+
+### 7.11. SQLAlchemy `expire_on_commit`: mỗi `commit()` là một lần nạp lại cả dòng
+
+Mặc định của SQLAlchemy là `expire_on_commit=True`: sau mỗi `commit()`, **mọi** object đang gắn
+session bị đánh dấu hết hạn, và lần chạm thuộc tính kế tiếp âm thầm bắn một `SELECT` nạp lại
+**nguyên dòng**. Không có log, không có exception — nhìn code chỉ thấy `ds.id`.
+
+| Bẫy | Chi tiết |
+|---|---|
+| **Commit trong vòng lặp + đọc lại object = N+1 vô hình** | `sync_table` commit theo từng bảng/cột rồi vòng nào cũng đọc `ds.type`/`ds.configuration`, nên mỗi vòng kéo về cả cột `table_relation`. Với nguồn 537 bảng, cột đó ~1,5 MB → một lượt resync tải ~1,7 GB qua dây mà không ai dùng tới. Cách chữa là `snapshot_ds` ([datasource.py:568](../backend/apps/datasource/crud/datasource.py#L568)): bản sao transient, không gắn session nên không bao giờ hết hạn |
+| **`model_dump()` trên object đã hết hạn trả về toàn `None`** | Thuộc tính hết hạn bị **gỡ khỏi `__dict__`**, mà `model_dump()` đọc thẳng `__dict__` — nên nó trả bản sao rỗng, không exception, không cảnh báo. `getattr` mới kích hoạt cơ chế nạp lại của ORM. Bẫy này có thật: `create_ds` và luồng nhập Excel đều commit ngay trước khi gọi `sync_table`, nên bản sao hỏng sẽ khiến mọi bảng được ghi với `ds_id=None` |
+| **`table_relation` nặng hơn nhiều so với tưởng tượng** | Nó **không phải** danh sách cạnh: nó là ảnh chụp canvas của sơ đồ ER (node, port, layout, style theo định dạng AntV/X6). Nguồn 537 bảng có 936 cell, trong đó riêng phần `ports` chiếm 86% dung lượng, còn cạnh chỉ 5%. Bảng không có quan hệ nào vẫn tốn node. `pg_column_size` báo số **đã nén** (TOAST) nên nhìn qua tưởng nhẹ, nhưng đọc ra là bản giải nén |
+
+### 7.12. `SQLBOT_TEST_DB_URL` — fixture test **TRUNCATE** dữ liệu
+
+Các test tích hợp cần Postgres thật (JSONB, partial unique index, `ON CONFLICT` — SQLite không mô
+phỏng được). Biến `SQLBOT_TEST_DB_URL` chọn DB cho chúng; thiếu biến thì test **skip** chứ không
+fail, nên `pytest tests/` vẫn xanh trên máy không dựng Postgres.
+
+⚠ **Fixture `db_session` chạy `TRUNCATE ai_sync_hook_logs, ai_user_permissions` trước MỖI test**
+([conftest.py:53](../tests/conftest.py#L53)) — cần vậy vì các test dùng chung định danh cố định
+(`u1`, `f1`, …) và assert số dòng chính xác, còn handler thì tự commit bên trong nên không bọc
+rollback được.
+
+Nghĩa là **biến này chỉ được trỏ vào một DB rỗng dùng xong vứt**, không bao giờ trỏ vào DB dev hay
+DB thật. Trỏ nhầm là mất sạch audit trail của hook và mất sạch bảng phân quyền — mà hậu quả nặng
+nhất không phải "mất dữ liệu": `ai_user_permissions` rỗng nghĩa là **mọi user SW thành không bị
+siết** (mặc định mở, §7.10), chỉ khôi phục được khi SW đẩy lại snapshot actionType 1.
+
+```bash
+docker run -d --name sqlbot-test-pg -p 55432:5432 \
+  -e POSTGRES_USER=test -e POSTGRES_PASSWORD=test -e POSTGRES_DB=sqlbot_test \
+  pgvector/pgvector:pg16
+export SQLBOT_TEST_DB_URL="postgresql+psycopg://test:test@127.0.0.1:55432/sqlbot_test"
+```
+
+Chạy test không có DB (48 test skip): `set -a && . ./env.txt && set +a` rồi
+`backend/.venv/bin/python -m pytest tests/ -q`. Cần `env.txt` vì `sqlbot_xpack` `mkdir` `UPLOAD_DIR`
+ngay lúc import, mặc định là `/opt/sqlbot` — user thường không ghi được vào đó (§1).

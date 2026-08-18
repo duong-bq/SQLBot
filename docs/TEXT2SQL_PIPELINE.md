@@ -268,7 +268,7 @@ RAG (terminology, data_training, chọn bảng) **không gọi LLM** — chỉ g
 ### Định dạng
 
 M-Schema là cách serialize schema dạng bán cấu trúc (nguồn: XiYan-SQL của Alibaba), token-hiệu quả
-hơn DDL thô. Sinh tại [datasource.py:859](../backend/apps/datasource/crud/datasource.py#L859)
+hơn DDL thô. Sinh tại [datasource.py:1063](../backend/apps/datasource/crud/datasource.py#L1063)
 `get_table_schema`:
 
 ```
