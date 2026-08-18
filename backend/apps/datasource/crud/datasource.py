@@ -565,10 +565,42 @@ def reconcile_table_relation(session: SessionDep, ds: CoreDatasource):
         SQLBotLogUtil.warning(f"reconcile_table_relation failed for ds {ds.id}: {e}")
 
 
+def snapshot_ds(ds: CoreDatasource) -> CoreDatasource:
+    """Tạo bản sao của một ``CoreDatasource`` KHÔNG gắn với session nào.
+
+    Lý do tồn tại là ``expire_on_commit`` (mặc định bật) của SQLAlchemy: mỗi ``commit()`` đánh dấu
+    mọi object đang gắn session là hết hạn, và lần chạm thuộc tính kế tiếp âm thầm bắn một SELECT
+    nạp lại NGUYÊN dòng. Vòng đồng bộ metadata commit hàng nghìn lần rồi lần nào cũng đọc lại
+    ``ds.type``/``ds.configuration``/``ds.id``, nên mỗi vòng kéo về cả cột ``table_relation`` —
+    với nguồn 537 bảng là ~1.5 MB mỗi lần, tổng ~1.7 GB cho một lượt resync mà không ai dùng tới.
+
+    Object trả về là transient (chưa từng qua ``session.add``) nên session không theo dõi, không
+    bao giờ bị hết hạn, và đọc thuộc tính không chạm DB. CHỈ dùng cho đường ĐỌC: ghi vào nó sẽ
+    không được lưu, và nó không thấy thay đổi do người khác thực hiện trong lúc đồng bộ — điều
+    này đúng ý muốn, cả lượt đồng bộ nên dùng một cấu hình nhất quán.
+
+    Sao đủ mọi cột thay vì bốc riêng vài trường: các nhánh driver trong ``apps/db/db.py`` đọc
+    những thuộc tính khác nhau tùy loại DB, bốc thiếu một trường sẽ thành ``None`` âm thầm.
+
+    PHẢI đọc qua ``getattr``, KHÔNG được dùng ``model_dump()``: một object vừa bị ``commit()`` làm
+    hết hạn có ``__dict__`` gần như rỗng (thuộc tính hết hạn bị gỡ khỏi đó), mà ``model_dump()``
+    đọc thẳng ``__dict__`` nên sẽ trả về bản sao toàn ``None`` — không exception, không cảnh báo.
+    ``getattr`` mới kích hoạt cơ chế nạp lại của ORM, và ở đây nó chạy đúng một lần. Bẫy này có
+    thật với ``create_ds`` và luồng nhập Excel: cả hai commit ngay trước khi gọi ``sync_table``.
+
+    Chỉ dùng được với object đang gắn session; object detached mà hết hạn sẽ ném
+    ``DetachedInstanceError`` — hỏng to tiếng, đúng ý muốn.
+    """
+    return CoreDatasource(**{name: getattr(ds, name, None) for name in CoreDatasource.model_fields})
+
+
 def sync_table(session: SessionDep, ds: CoreDatasource, tables: List[CoreTable]):
     id_list = []
+    # Bản đọc rời session: mọi lần chạm ds bên trong vòng lặp đều đi qua đây, xem `snapshot_ds`.
+    ds_ro = snapshot_ds(ds)
+    ds_id = ds_ro.id
     for item in tables:
-        statement = select(CoreTable).where(and_(CoreTable.ds_id == ds.id, CoreTable.table_name == item.table_name))
+        statement = select(CoreTable).where(and_(CoreTable.ds_id == ds_id, CoreTable.table_name == item.table_name))
         record = session.exec(statement).first()
         # update exist table, only update table_comment
         if record is not None:
@@ -580,7 +612,7 @@ def sync_table(session: SessionDep, ds: CoreDatasource, tables: List[CoreTable])
             session.commit()
         else:
             # save new table
-            table = CoreTable(ds_id=ds.id, checked=True, table_name=item.table_name, table_comment=item.table_comment,
+            table = CoreTable(ds_id=ds_id, checked=True, table_name=item.table_name, table_comment=item.table_comment,
                               custom_comment=item.table_comment)
             session.add(table)
             session.flush()
@@ -590,18 +622,18 @@ def sync_table(session: SessionDep, ds: CoreDatasource, tables: List[CoreTable])
             session.commit()
 
         # sync field
-        fields = getFieldsByDs(session, ds, item.table_name)
-        sync_fields(session, ds, item, fields)
+        fields = getFieldsByDs(session, ds_ro, item.table_name)
+        sync_fields(session, ds_ro, item, fields)
 
     if len(id_list) > 0:
-        session.query(CoreTable).filter(and_(CoreTable.ds_id == ds.id, CoreTable.id.not_in(id_list))).delete(
+        session.query(CoreTable).filter(and_(CoreTable.ds_id == ds_id, CoreTable.id.not_in(id_list))).delete(
             synchronize_session=False)
-        session.query(CoreField).filter(and_(CoreField.ds_id == ds.id, CoreField.table_id.not_in(id_list))).delete(
+        session.query(CoreField).filter(and_(CoreField.ds_id == ds_id, CoreField.table_id.not_in(id_list))).delete(
             synchronize_session=False)
         session.commit()
     else:  # delete all tables and fields in this ds
-        session.query(CoreTable).filter(CoreTable.ds_id == ds.id).delete(synchronize_session=False)
-        session.query(CoreField).filter(CoreField.ds_id == ds.id).delete(synchronize_session=False)
+        session.query(CoreTable).filter(CoreTable.ds_id == ds_id).delete(synchronize_session=False)
+        session.query(CoreField).filter(CoreField.ds_id == ds_id).delete(synchronize_session=False)
         session.commit()
 
     # seed table relations from declared foreign keys (one-time, only when not set yet)
