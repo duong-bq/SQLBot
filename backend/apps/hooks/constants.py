@@ -29,9 +29,6 @@ IMPLEMENTED_ACTION_TYPES = frozenset({SyncActionType.AUTHORIZATION_SYNC, SyncAct
 class SyncStatus(str, Enum):
     """Trạng thái xử lý một bản tin, ghi vào `ai_sync_hook_logs.status`.
 
-    `STALE` là trạng thái riêng của fork: bản tin có sync_version không mới hơn version đã áp dụng
-    thì bị bỏ qua có chủ ý — khác FAILED (lỗi) và khác DUPLICATE (trùng idempotency key).
-
     `PROCESSING` được giữ để khớp tập trạng thái của DDL gốc nhưng luồng xử lý ĐỒNG BỘ hiện tại
     không bao giờ set nó — một request đi thẳng từ RECEIVED sang trạng thái cuối cùng. Nó chỉ có ý
     nghĩa nếu sau này chuyển sang xử lý nền.
@@ -42,7 +39,6 @@ class SyncStatus(str, Enum):
     SUCCESS = "SUCCESS"
     FAILED = "FAILED"
     DUPLICATE = "DUPLICATE"
-    STALE = "STALE"
 
 
 class SyncErrorCode(str, Enum):
