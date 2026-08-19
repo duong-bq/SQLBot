@@ -82,7 +82,7 @@ def test_list_summary_tra_ve_duoc_boc_envelope(client, crud_patches):
     crud_patches["list_summary"].return_value = [
         {
             "user_id": "u1", "full_name": "A", "is_admin": False,
-            "form_count": 2, "sync_version": 100, "synced_at": "2026-08-12T10:00:00Z",
+            "table_count": 2, "sync_version": 100, "synced_at": "2026-08-12T10:00:00Z",
         }
     ]
     resp = client.get("/api/v1/hooks/ai-sync/permissions")
@@ -93,7 +93,7 @@ def test_list_summary_tra_ve_duoc_boc_envelope(client, crud_patches):
     assert body["data"] == [
         {
             "userId": "u1", "fullName": "A", "isAdmin": False,
-            "formCount": 2, "syncVersion": 100, "syncedAt": "2026-08-12T10:00:00Z",
+            "tableCount": 2, "syncVersion": 100, "syncedAt": "2026-08-12T10:00:00Z",
         }
     ]
 

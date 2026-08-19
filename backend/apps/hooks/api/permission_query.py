@@ -38,7 +38,7 @@ async def list_permission_summary(session: SessionDep) -> list[UserPermissionSum
             userId=row["user_id"],
             fullName=row["full_name"],
             isAdmin=row["is_admin"],
-            formCount=row["form_count"],
+            tableCount=row["table_count"],
             syncVersion=row["sync_version"],
             syncedAt=row["synced_at"],
         )

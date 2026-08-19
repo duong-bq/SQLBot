@@ -34,20 +34,20 @@ def _seed(session, user_id: str, full_name, is_admin: bool, forms: tuple, sync_v
     session.commit()
 
 
-def test_tra_dung_form_count_cho_nhieu_user(db_session):
+def test_tra_dung_table_count_cho_nhieu_user(db_session):
     _seed(db_session, "u1", "Nguyễn Văn A", False, (("f1", "t1"), ("f2", "t2")), 100)
     _seed(db_session, "u2", None, True, (("f3", "t3"),), 200)
 
     result = list_users_with_permission_summary(db_session)
     by_user = {r["user_id"]: r for r in result}
 
-    assert by_user["u1"]["form_count"] == 2
+    assert by_user["u1"]["table_count"] == 2
     assert by_user["u1"]["full_name"] == "Nguyễn Văn A"
     assert by_user["u1"]["is_admin"] is False
     assert by_user["u1"]["sync_version"] == 100
     assert by_user["u1"]["synced_at"] is not None
 
-    assert by_user["u2"]["form_count"] == 1
+    assert by_user["u2"]["table_count"] == 1
     assert by_user["u2"]["is_admin"] is True
     assert by_user["u2"]["sync_version"] == 200
 

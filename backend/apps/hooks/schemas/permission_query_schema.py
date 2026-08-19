@@ -58,14 +58,18 @@ class UserPermissionDetailOut(BaseModel):
 
 
 class UserPermissionSummaryOut(BaseModel):
-    """1 phần tử trong response của `GET /hooks/ai-sync/permissions`."""
+    """1 phần tử trong response của `GET /hooks/ai-sync/permissions`.
+
+    `tableCount` (trước đây `formCount`) — đếm số BẢNG user đang có quyền, khớp khoá định danh mới
+    `(user_id, database_table_name)` của `ai_user_permissions`.
+    """
 
     model_config = ConfigDict(populate_by_name=True)
 
     userId: str
     fullName: str | None = None
     isAdmin: bool | None = None
-    formCount: int
+    tableCount: int
     syncVersion: int | None = None
     syncedAt: datetime | None = None
 

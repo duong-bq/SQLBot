@@ -84,7 +84,9 @@ def replace_user_permissions(
 def list_users_with_permission_summary(session: Session) -> list[dict[str, Any]]:
     """Tóm tắt quyền theo từng user đang có ≥1 dòng trong `ai_user_permissions`.
 
-    Mỗi phần tử: `user_id`, `full_name`, `is_admin`, `form_count`, `sync_version`, `synced_at`.
+    Mỗi phần tử: `user_id`, `full_name`, `is_admin`, `table_count`, `sync_version`, `synced_at`.
+    `table_count` đếm số BẢNG user đang có quyền — mỗi dòng trong `ai_user_permissions` giờ ứng với
+    1 bảng (khoá `(user_id, database_table_name)`), không phải 1 form.
     Dùng `MAX()` cho `full_name`/`is_admin`/`sync_version`/`synced_at` thay vì `GROUP BY` đủ cột —
     an toàn vì mọi dòng của cùng 1 user luôn cùng giá trị các cột này (`replace_user_permissions`
     ghi đồng loạt cho cả batch áp dụng), `MAX()` chỉ là cách hợp lệ về mặt SQL để lấy 1 giá trị đại
@@ -96,7 +98,7 @@ def list_users_with_permission_summary(session: Session) -> list[dict[str, Any]]
             table.c.user_id,
             func.max(table.c.full_name).label("full_name"),
             func.bool_or(table.c.is_admin).label("is_admin"),
-            func.count().label("form_count"),
+            func.count().label("table_count"),
             func.max(table.c.sync_version).label("sync_version"),
             func.max(table.c.synced_at).label("synced_at"),
         )
@@ -109,7 +111,7 @@ def list_users_with_permission_summary(session: Session) -> list[dict[str, Any]]
             "user_id": row.user_id,
             "full_name": row.full_name,
             "is_admin": row.is_admin,
-            "form_count": row.form_count,
+            "table_count": row.table_count,
             "sync_version": row.sync_version,
             "synced_at": row.synced_at,
         }
@@ -118,7 +120,11 @@ def list_users_with_permission_summary(session: Session) -> list[dict[str, Any]]
 
 
 def get_user_permissions(session: Session, user_id: str) -> list[AiUserPermission]:
-    """Toàn bộ quyền hiện tại của một user, sắp theo `form_uuid` cho ổn định thứ tự.
+    """Toàn bộ quyền hiện tại của một user, sắp theo `database_table_name` cho ổn định thứ tự.
+
+    Sắp theo bảng chứ không theo `form_uuid` (cột cũ dùng để sort) vì `form_uuid` giờ nullable —
+    nhiều dòng cùng NULL sẽ không có thứ tự ổn định giữa chúng, còn `database_table_name` luôn
+    NOT NULL và chính là khoá định danh của dòng quyền (xem `replace_user_permissions`).
 
     Đây là điểm vào duy nhất mà phase tích hợp pipeline sẽ dùng: chỉ cần `user_id`, không cần biết
     bản tin đến từ đâu.
@@ -126,6 +132,6 @@ def get_user_permissions(session: Session, user_id: str) -> list[AiUserPermissio
     statement = (
         select(AiUserPermission)
         .where(AiUserPermission.user_id == user_id)
-        .order_by(AiUserPermission.form_uuid)
+        .order_by(AiUserPermission.database_table_name)
     )
     return list(session.execute(statement).scalars().all())

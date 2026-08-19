@@ -36,7 +36,7 @@ chọn nhanh `userId` cần xem chi tiết mà không cần biết trước.
     "userId": "usr-1",
     "fullName": "Nguyễn Văn A",
     "isAdmin": false,
-    "formCount": 2,
+    "tableCount": 2,
     "syncVersion": 1786356000000,
     "syncedAt": "2026-08-11T10:00:00Z"
   },
@@ -44,7 +44,7 @@ chọn nhanh `userId` cần xem chi tiết mà không cần biết trước.
     "userId": "usr-2",
     "fullName": null,
     "isAdmin": true,
-    "formCount": 0,
+    "tableCount": 0,
     "syncVersion": 1786356100000,
     "syncedAt": "2026-08-11T10:05:00Z"
   }
@@ -59,7 +59,7 @@ luôn sắp theo `userId`.
 | `userId` | Định danh user do SW gửi, lưu nguyên văn |
 | `fullName` | Tên hiển thị, từ lần đồng bộ gần nhất |
 | `isAdmin` | Cờ admin, từ lần đồng bộ gần nhất |
-| `formCount` | Số form user đang có quyền |
+| `tableCount` | Số bảng user đang có quyền (tên cũ `formCount` — đổi vì khoá định danh dòng quyền giờ là bảng, không phải form, xem `AI_SYNC_HOOK_API_SPEC.md` §4) |
 | `syncVersion` | `sync_version` (epoch millis) của lần đồng bộ gần nhất |
 | `syncedAt` | Thời điểm ghi dòng quyền gần nhất |
 
@@ -99,6 +99,11 @@ cộng thêm `syncVersion`/`syncedAt` để dễ đối chiếu.
   ]
 }
 ```
+
+⚠ **`formUuid` có thể là `null`** — SW không bắt buộc gửi trường này khi đồng bộ (xem
+`AI_SYNC_HOOK_API_SPEC.md` §4), API đọc trả lại nguyên giá trị đã lưu, kể cả khi đó là `null`. Khoá
+định danh thật của mỗi phần tử `formQueries[]` là `tableInfo.databaseTableName`, không phải
+`formUuid`.
 
 ⚠ **`user_id` không có dòng nào trong `ai_user_permissions` → HTTP 200**, không phải 404:
 
