@@ -68,7 +68,7 @@ class CallbackStatus:
 class ExcelImportJob(SQLModel, table=True):
     """Một lần import excel bất đồng bộ.
 
-    Vì sao không có cột ``job_id`` riêng: ``ds_id`` đã là khóa đối chiếu với hệ ngoài (``externalId``
+    Vì sao không có cột ``job_id`` riêng: ``ds_id`` đã là khóa đối chiếu với hệ ngoài (trường ``Id``
     trong payload callback chính là dsId), đồng thời ràng buộc duy nhất trên nó chặn luôn việc hai
     job cùng chạy cho một nguồn dữ liệu.
     """

@@ -274,8 +274,18 @@ def fail_import_job(job_id: int, ds_id: int, created: list[str], error_code: str
 
 
 def _payload(ds_id: int, ok: bool, message: str) -> dict:
-    """Dựng payload callback theo đặc tả của hệ ngoài: ``externalId`` chính là dsId."""
-    return {"externalId": ds_id, "status": ok, "message": message}
+    """Dựng payload callback theo đặc tả của hệ ngoài.
+
+    Khóa đối chiếu tên là ``Id`` — viết hoa chữ I, đúng như cổng của đối tác đòi. Giá trị là dsId
+    của SQLBot, tức hệ ngoài phải lưu lại ``dsId`` nhận được ở response 202 lúc tạo thì sau này mới
+    khớp được bản tin này với bản ghi của họ.
+
+    Tên trường này từng là ``externalId`` và sai: cổng của họ vẫn trả HTTP 200 kèm
+    ``{"data": false, "message": "Không tìm thấy kho dữ liệu..."}``, nên phía ta ghi nhận là gửi
+    thành công trong khi bên kia không nhận được gì. Đổi tên trường ở đây thì phải bắn thử lại bằng
+    curl, đừng tin mỗi cột ``callback_status``.
+    """
+    return {"Id": ds_id, "status": ok, "message": message}
 
 
 def _finalize_datasource(ds_id: int, filename: str, results: list[dict]) -> None:

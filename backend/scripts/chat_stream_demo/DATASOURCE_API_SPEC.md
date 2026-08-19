@@ -1373,7 +1373,7 @@ Content-Type: application/json
 {
   "actionType": 999,
   "payload": {
-    "externalId": 42,
+    "Id": 42,
     "status": true,
     "message": "Import succeeded"
   }
@@ -1383,20 +1383,22 @@ Content-Type: application/json
 | Trường | Nghĩa |
 |---|---|
 | `actionType` | Mã sự kiện cố định `999`, cấp riêng cho việc báo kết quả nạp excel |
-| `payload.externalId` | **Chính là `dsId`** đã trả về ở response `202` |
+| `payload.Id` | **Chính là `dsId`** đã trả về ở response `202`. Viết hoa chữ `I` |
 | `payload.status` | `true` = nguồn dữ liệu đã dùng được; `false` = nạp hỏng |
 | `payload.message` | Mô tả bằng tiếng Anh. Khi hỏng đây là lý do (`Sheet not found: Quy3. Available: Quy1, Quy2`, `Cannot download after 3 attempts: ...`, …) |
 
 `payload` **không có** `errorCode`. Cần mã lỗi phân loại được bằng máy thì gọi
-[9.4](#94-get-datasourceexcelimportstatusds_id) với `externalId` vừa nhận.
+[9.4](#94-get-datasourceexcelimportstatusds_id) với `Id` vừa nhận.
 
 Coi là nhận thành công khi trả về HTTP **2xx** bất kỳ. Nội dung body không được đọc.
+
+⚠ Vì thế **không được trả 2xx cho một bản tin bị từ chối**. Báo lỗi nghiệp vụ bằng thân response trong khi mã trạng thái vẫn là `200` sẽ khiến SQLBot ghi nhận đã gửi thành công và không bao giờ thử lại — hai bên sẽ tin vào hai sự thật khác nhau. Không xử lý được thì trả mã 4xx/5xx để cơ chế thử lại làm việc.
 
 **Bốn điều bên nhận bắt buộc phải xử lý:**
 
 1. **Có thể nhận trùng.** Cơ chế gửi bảo đảm *ít nhất một lần*, không phải *đúng một lần*: trả 2xx
-   chậm hơn timeout thì lá thư đó vẫn được gửi lại. Xử lý theo `externalId` phải **idempotent** —
-   lần thứ hai với cùng `externalId` không được sinh ra tác dụng phụ mới.
+   chậm hơn timeout thì lá thư đó vẫn được gửi lại. Xử lý theo `Id` phải **idempotent** —
+   lần thứ hai với cùng `Id` không được sinh ra tác dụng phụ mới.
 2. **Có thể không bao giờ nhận được.** Sau một số lần thử (giãn cách tăng dần) SQLBot dừng hẳn. Đó
    là lý do phải có [9.4](#94-get-datasourceexcelimportstatusds_id) làm đường đối chiếu — hệ ngoài
    nên tự hỏi lại với những `dsId` chờ quá lâu thay vì chờ vô hạn.

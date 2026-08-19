@@ -359,7 +359,8 @@ class CreateFromExcelAcceptedResponse(BaseModel):
     """Kết quả pha đồng bộ của luồng import bất đồng bộ: đã NHẬN việc, chưa nạp xong.
 
     Không có danh sách bảng — lúc trả về chưa bảng nào tồn tại. ``dsId`` là thứ duy nhất cần giữ:
-    nó cũng chính là ``externalId`` trong callback báo kết quả sau này.
+    nó cũng chính là trường ``Id`` trong callback báo kết quả sau này, nên hệ ngoài không lưu lại
+    thì về sau không khớp được bản tin với bản ghi của mình.
     """
 
     dsId: int

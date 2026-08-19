@@ -14,7 +14,7 @@ Ba pha, cố ý không gộp:
 
 Bảo đảm đạt được là "gửi ít nhất một lần", không bao giờ là "đúng một lần": ta không thể phân biệt
 "đối tác chưa nhận" với "đối tác nhận rồi nhưng phản hồi rớt trên đường về". Hệ ngoài vì thế phải
-xử lý được cùng một ``externalId`` tới hai lần.
+xử lý được cùng một ``Id`` tới hai lần.
 """
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -98,7 +98,7 @@ def callback_tick() -> int:
 
     Cả lô gửi song song vì các lá thư độc lập nhau và phần lớn thời gian là chờ mạng. Không có bảo
     đảm thứ tự: hai kết quả import xong gần nhau có thể tới hệ ngoài theo thứ tự bất kỳ. Điều đó
-    chấp nhận được vì mỗi lá thư nói về một ``externalId`` riêng.
+    chấp nhận được vì mỗi lá thư nói về một ``Id`` riêng.
 
     URL rỗng thì thoát ngay và KHÔNG đụng vào các dòng chờ: giữ nguyên ``pending`` để khi cấu hình
     xong là gửi được luôn, thay vì đốt hết số lần thử vào lúc hệ thống còn chưa khai báo địa chỉ.
