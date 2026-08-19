@@ -24,12 +24,10 @@ class _FakeAuthMiddleware(BaseHTTPMiddleware):
         return await call_next(request)
 
 
-def _body(user_id: str, timestamp: str, form_uuids: list[str]) -> dict:
+def _body(user_id: str, form_uuids: list[str]) -> dict:
     return {
         "actionType": 1,
-        "version": "1.0",
-        "timestamp": timestamp,
-        "data": {
+        "payload": {
             "users": [
                 {
                     "userId": user_id,
@@ -81,7 +79,7 @@ def test_e2e_dong_bo_roi_thu_hoi_va_retry(e2e_client, db_session):
     # 1. Bản tin đầu: cấp 2 form
     resp = e2e_client.post(
         "/api/v1/hooks/ai-sync",
-        json=_body("usr-e2e", "2026-08-10T10:00:00Z", ["form-1", "form-2"]),
+        json=_body("usr-e2e", ["form-1", "form-2"]),
         headers=_headers("idem-e2e-1"),
     )
     assert resp.status_code == 200, resp.text
@@ -90,14 +88,14 @@ def test_e2e_dong_bo_roi_thu_hoi_va_retry(e2e_client, db_session):
     assert {r.form_uuid for r in get_user_permissions(db_session, "usr-e2e")} == {"form-1", "form-2"}
     log = get_log_by_idempotency_key(db_session, "idem-e2e-1")
     assert log.status == "SUCCESS"
-    assert log.sync_version == 1786356000000
+    assert log.sync_version is not None
     assert log.processed_at is not None
-    assert log.request_payload["data"]["users"][0]["userId"] == "usr-e2e"
+    assert log.request_payload["payload"]["users"][0]["userId"] == "usr-e2e"
 
     # 2. Retry đúng bản tin đó: DUPLICATE, không xử lý lại
     again = e2e_client.post(
         "/api/v1/hooks/ai-sync",
-        json=_body("usr-e2e", "2026-08-10T10:00:00Z", ["form-1", "form-2"]),
+        json=_body("usr-e2e", ["form-1", "form-2"]),
         headers=_headers("idem-e2e-1"),
     )
     assert again.json()["status"] == "DUPLICATE"
@@ -105,45 +103,21 @@ def test_e2e_dong_bo_roi_thu_hoi_va_retry(e2e_client, db_session):
     # 3. Bản tin mới hơn chỉ còn form-2: form-1 bị thu hồi
     newer = e2e_client.post(
         "/api/v1/hooks/ai-sync",
-        json=_body("usr-e2e", "2026-08-10T11:00:00Z", ["form-2"]),
+        json=_body("usr-e2e", ["form-2"]),
         headers=_headers("idem-e2e-2"),
     )
     assert newer.json()["applied"] == {"upserted": 1, "deleted": 1}
     assert {r.form_uuid for r in get_user_permissions(db_session, "usr-e2e")} == {"form-2"}
 
-    # 4. Bản tin CŨ gửi lại (idempotency key khác): bị chặn vì lùi version
-    stale = e2e_client.post(
-        "/api/v1/hooks/ai-sync",
-        json=_body("usr-e2e", "2026-08-10T09:00:00Z", ["form-1", "form-2"]),
-        headers=_headers("idem-e2e-3"),
-    )
-    assert stale.status_code == 200
-    # status cấp request luôn SUCCESS khi batch xử lý xong — STALE tính riêng theo user, nằm
-    # trong results[].status (xem handlers/authorization.py và AI_SYNC_HOOK_API_SPEC.md §7)
-    assert stale.json()["status"] == "SUCCESS"
-    assert stale.json()["results"][0]["status"] == "STALE"
-    assert {r.form_uuid for r in get_user_permissions(db_session, "usr-e2e")} == {"form-2"}
-
-    # 5. Thu hồi hết quyền
-    revoke = _body("usr-e2e", "2026-08-10T12:00:00Z", [])
-    revoked = e2e_client.post("/api/v1/hooks/ai-sync", json=revoke, headers=_headers("idem-e2e-4"))
+    # 4. Thu hồi hết quyền
+    revoke = _body("usr-e2e", [])
+    revoked = e2e_client.post("/api/v1/hooks/ai-sync", json=revoke, headers=_headers("idem-e2e-3"))
     assert revoked.json()["status"] == "SUCCESS"
-    assert get_user_permissions(db_session, "usr-e2e") == []
-
-    # 6. Sau khi thu hồi hết, bản tin cũ vẫn không được áp ngược
-    #    (mốc version đọc từ bảng log nên không mất khi bảng quyền trống)
-    late = e2e_client.post(
-        "/api/v1/hooks/ai-sync",
-        json=_body("usr-e2e", "2026-08-10T11:30:00Z", ["form-1"]),
-        headers=_headers("idem-e2e-5"),
-    )
-    assert late.json()["status"] == "SUCCESS"
-    assert late.json()["results"][0]["status"] == "STALE"
     assert get_user_permissions(db_session, "usr-e2e") == []
 
 
 def test_e2e_action_type_chua_ho_tro_van_de_lai_vet(e2e_client, db_session):
-    body = _body("usr-e2e-2", "2026-08-10T10:00:00Z", [])
+    body = _body("usr-e2e-2", [])
     body["actionType"] = 3
     resp = e2e_client.post("/api/v1/hooks/ai-sync", json=body, headers=_headers("idem-e2e-unsup"))
     assert resp.status_code == 422
@@ -156,8 +130,8 @@ def test_e2e_action_type_chua_ho_tro_van_de_lai_vet(e2e_client, db_session):
 
 def test_e2e_payload_sai_van_de_lai_vet(e2e_client, db_session):
     body = {
-        "actionType": 1, "version": "1.0", "timestamp": "2026-08-10T10:00:00Z",
-        "data": {"users": [{"userId": "u-bad"}]},
+        "actionType": 1,
+        "payload": {"users": [{"userId": "u-bad"}]},
     }
     resp = e2e_client.post("/api/v1/hooks/ai-sync", json=body, headers=_headers("idem-e2e-badpayload"))
     assert resp.status_code == 400
@@ -168,20 +142,10 @@ def test_e2e_payload_sai_van_de_lai_vet(e2e_client, db_session):
     assert get_user_permissions(db_session, "u-bad") == []
 
 
-def test_e2e_batch_nhieu_user_1_thanh_cong_1_stale(e2e_client, db_session):
-    # usr-stale đã có mốc mới hơn từ 1 bản tin trước đó
-    pre = e2e_client.post(
-        "/api/v1/hooks/ai-sync",
-        json=_body("usr-stale", "2026-08-10T12:00:00Z", ["form-x"]),
-        headers=_headers("idem-pre"),
-    )
-    assert pre.status_code == 200
-
+def test_e2e_batch_nhieu_user_deu_thanh_cong(e2e_client, db_session):
     batch_body = {
         "actionType": 1,
-        "version": "1.0",
-        "timestamp": "2026-08-10T10:00:00Z",  # cũ hơn mốc đã áp cho usr-stale
-        "data": {
+        "payload": {
             "users": [
                 {
                     "userId": "usr-fresh",
@@ -196,7 +160,7 @@ def test_e2e_batch_nhieu_user_1_thanh_cong_1_stale(e2e_client, db_session):
                         }
                     ],
                 },
-                {"userId": "usr-stale", "isAdmin": False, "formQueries": []},
+                {"userId": "usr-two", "isAdmin": False, "formQueries": []},
             ]
         },
     }
@@ -205,19 +169,15 @@ def test_e2e_batch_nhieu_user_1_thanh_cong_1_stale(e2e_client, db_session):
     body = resp.json()
     assert body["status"] == "SUCCESS"
     results_by_user = {r["userId"]: r["status"] for r in body["results"]}
-    assert results_by_user == {"usr-fresh": "SUCCESS", "usr-stale": "STALE"}
+    assert results_by_user == {"usr-fresh": "SUCCESS", "usr-two": "SUCCESS"}
     assert body["applied"] == {"upserted": 1, "deleted": 0}
     assert {r.form_uuid for r in get_user_permissions(db_session, "usr-fresh")} == {"form-y"}
-    # usr-stale không bị đụng vào — vẫn còn form-x từ bản tin trước
-    assert {r.form_uuid for r in get_user_permissions(db_session, "usr-stale")} == {"form-x"}
 
 
 def test_e2e_batch_1_user_loi_thi_khong_ai_duoc_ap_dung(e2e_client, db_session):
     batch_body = {
         "actionType": 1,
-        "version": "1.0",
-        "timestamp": "2026-08-10T10:00:00Z",
-        "data": {
+        "payload": {
             "users": [
                 {
                     "userId": "usr-ok",
