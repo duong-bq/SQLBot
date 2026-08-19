@@ -268,9 +268,9 @@ Hai bản tin đã triển khai ghi vào **hai vùng dữ liệu tách rời**, 
 | 1 `AUTHORIZATION_SYNC` | `handlers/authorization.py` | `ai_user_permissions` |
 | 4 `DATASOURCE_SYNC` | `handlers/datasource_sync.py` | `core_table`, `core_field`, `core_datasource.table_relation` / `.num` — qua `resync_ds_metadata` của cụm datasource |
 
-Khác biệt về ngữ nghĩa (all-or-nothing theo batch vs per-item, có/không kiểm `STALE`) nằm trọn
-trong handler, route không phân biệt. Vì `DATASOURCE_SYNC` đi ngược vào cụm datasource, nó phải
-import lazy để né vòng import có sẵn của upstream — xem `OPERATIONS.md` §7.7.
+Khác biệt về ngữ nghĩa (all-or-nothing theo batch vs per-item) nằm trọn trong handler, route không
+phân biệt. Vì `DATASOURCE_SYNC` đi ngược vào cụm datasource, nó phải import lazy để né vòng import
+có sẵn của upstream — xem `OPERATIONS.md` §7.7.
 
 ---
 

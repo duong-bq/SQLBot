@@ -46,7 +46,7 @@ Hệ quả cụ thể: `ChatFinishStep` đã bị **đánh số lại** để ch
 - Có cổng `POST /hooks/ai-sync` (`apps/hooks/`) nhận bản tin đồng bộ từ hệ thống SW. Hai loại bản
   tin đã triển khai: `actionType 1` đồng bộ **quyền user**, ghi vào `ai_user_permissions`; và
   `actionType 4` đồng bộ **cấu trúc nguồn dữ liệu** — SQLBot tự đọc lại catalog DB nguồn rồi mirror
-  metadata bảng/cột/quan hệ (per-item, không kiểm STALE).
+  metadata bảng/cột/quan hệ (per-item, không all-or-nothing như actionType 1).
   Pipeline Text2SQL **đã đọc** dữ liệu quyền này: bảng và cột ngoài quyền không
   vào M-Schema, và phạm vi dòng được bọc vào SQL bằng `sqlglot` trước khi chạy — tất định, không
   nhờ LLM. `POST /chat/question` nhận thêm `domainCode` để giới hạn câu hỏi theo lĩnh vực. Người

@@ -425,6 +425,10 @@ WHERE idempotency_key = '...' OR user_id = '...'
 ORDER BY received_at DESC;
 ```
 
+`sync_version` là mốc **server tự sinh** tại thời điểm xử lý (epoch millis), không còn phản ánh
+`timestamp` do SW khai báo — SW không còn gửi trường đó nữa. Chỉ dùng để biết thứ tự áp dụng thật
+trên SQLBot, không dùng để suy ra bản tin phía SW gửi lúc nào.
+
 `request_payload` (JSONB) là body thô SW đã gửi — dùng để tái hiện request khi cần. Trạng thái quyền
 hiện tại (sau khi đã áp snapshot) nằm ở `ai_user_permissions`, lọc theo `user_id`.
 
@@ -432,7 +436,7 @@ Bản tin `DATASOURCE_SYNC` (`action_type = 4`) **không có `user_id`** — c�
 theo `idempotency_key` hoặc quét theo loại bản tin:
 
 ```sql
-SELECT status, error_code, request_payload->'data'->'datasourceIds' AS ds_ids, received_at, processed_at
+SELECT status, error_code, request_payload->'payload'->'datasourceIds' AS ds_ids, received_at, processed_at
 FROM ai_sync_hook_logs WHERE action_type = 4 ORDER BY received_at DESC LIMIT 20;
 ```
 
@@ -520,7 +524,7 @@ kỳ tài liệu, log hay issue nào; nếu cần xoay vòng mật khẩu thì p
 
 | Bẫy | Chi tiết |
 |---|---|
-| Bản tin bị coi là `STALE` mà SW vẫn thấy **HTTP 200** | Chống lùi dựa trên `timestamp` của SW, không phải sequence phía DB. Đồng hồ SW lệch về quá khứ (hoặc lệch múi giờ, thiếu offset) khiến bản tin mới bị bỏ qua trong khi request vẫn "thành công" theo status code — phải đọc trường `status` trong body, không chỉ HTTP status |
+| `sync_version` không còn chống bản tin lùi | Cột này (và cơ chế `STALE` cũ) đã bỏ hẳn — SW không còn gửi `timestamp`, mọi bản tin `AUTHORIZATION_SYNC` hợp lệ về cấu trúc đều ghi đè bản trước bất kể thứ tự thời gian thật. Đừng đi tìm lại hành vi chống lùi trong code hiện tại |
 | `AUTHORIZATION_SYNC` là **full snapshot**, không phải patch | Gửi thiếu một `formUuid` đang có quyền là **thu hồi** form đó, không phải "giữ nguyên". `formQueries: []` thu hồi hết. Xem `AI_SYNC_HOOK_API_SPEC.md` §5 |
 | Gọi hook mà không đăng nhập trước | Không có static token riêng — SW phải `POST /login/access-token` lấy `X-SQLBOT-TOKEN` như mọi client khác, và tài khoản đó phải có quyền `ws_admin` |
 | Thiếu quyền `ws_admin` trả **500**, không phải 403 | Quy ước chung của `require_permissions` toàn hệ thống (xem §7.4 / `BACKEND_ARCHITECTURE.md` §7), không riêng gì hook |
@@ -529,7 +533,6 @@ kỳ tài liệu, log hay issue nào; nếu cần xoay vòng mật khẩu thì p
 | Chạy **đồng bộ trong request**, không có hàng đợi nền | Đo được ~15s cho một nguồn PostgreSQL hơn 100 bảng. Batch nhiều nguồn giữ kết nối HTTP rất lâu; timeout phía SW/reverse proxy là thứ hỏng trước tiên |
 | Nguồn Excel và nguồn đang `Importing` bị **từ chối per-item** | Excel không có DB nguồn ngoài để đọc lại (đọc "catalog" của nó sẽ trúng PG nội bộ của SQLBot), còn `Importing` nghĩa là worker nền đang ghi metadata song song — chen vào là race |
 | DB nguồn trả **0 bảng** thì FAILED chứ không xoá sạch | Hỏng theo hướng đóng, cố ý: 0 bảng gần như luôn là sai schema hoặc mất quyền DB, trong khi hạ tầng bên dưới lại hiểu "danh sách bảng rỗng" là lệnh xoá hết. Muốn xoá thật thì đi đường `chooseTables` |
-| `DATASOURCE_SYNC` **không** kiểm `STALE` | Bản tin không mang trạng thái riêng nên replay là vô hại. Đừng đi tìm lý do "vì sao bản tin datasource không bao giờ STALE" — nó cố ý không có |
 
 ### 7.6. Nạp Excel bất đồng bộ và các vòng nền
 

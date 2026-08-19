@@ -91,21 +91,17 @@ Một actionType đã release thì không được đổi ý nghĩa.
 ```json
 {
   "actionType": 1,
-  "version": "1.0",
-  "timestamp": "2026-08-10T10:00:00Z",
-  "data": { "...": "..." }
+  "payload": { "...": "..." }
 }
 ```
 
 | Trường | Kiểu | Bắt buộc | Ghi chú |
 |---|---|---|---|
 | `actionType` | integer | Có | Xem §2 |
-| `version` | string | Có | Version schema, hiện tại `"1.0"` |
-| `timestamp` | ISO 8601 datetime | Có | **Với actionType 1: dùng làm mốc chống bản tin đến sai thứ tự — xem §7.** Đồng hồ SW phải đồng bộ NTP |
-| `data` | object | Có | Payload theo `actionType`, xem §4 và §6 |
+| `payload` | object | Có | Payload theo `actionType`, xem §4 và §6 |
 
-Vỏ envelope giống nhau cho mọi actionType, kể cả những trường mà một actionType cụ thể không dùng
-tới (`timestamp` với actionType 4 — xem §7): vẫn **bắt buộc gửi**, thiếu là `INVALID_ENVELOPE`.
+Vỏ envelope giống nhau cho mọi actionType. SW gửi kèm trường lạ nào (kể cả `version`/`timestamp`
+của hợp đồng cũ) đều bị bỏ qua âm thầm, không lỗi.
 
 ---
 
@@ -271,10 +267,9 @@ catalog của tất cả các nguồn trong batch. Đo thực tế: một nguồ
 **15 giây**. Batch càng nhiều nguồn thì request treo càng lâu → chia nhỏ batch và đặt timeout phía
 SW rộng rãi (tối thiểu vài phút).
 
-⚠ **`timestamp` không dùng để chống bản tin lùi cho actionType 4.** Bản tin không mang trạng thái
-riêng, nên gọi lại một bản tin cũ chỉ là đọc lại DB nguồn thêm một lần nữa — vô hại, và không bao
-giờ trả `STALE`. Chống xử lý trùng khi retry vẫn theo `X-Idempotency-Key` như mọi actionType khác
-(§7).
+⚠ **Gọi lại bản tin cũ luôn an toàn.** Bản tin không mang trạng thái riêng, nên gọi lại một bản tin
+cũ chỉ là đọc lại DB nguồn thêm một lần nữa — vô hại. Chống xử lý trùng khi retry vẫn theo
+`X-Idempotency-Key` như mọi actionType khác (§7).
 
 ### 6.4. Response mẫu
 
@@ -297,23 +292,17 @@ giờ trả `STALE`. Chống xử lý trùng khi retry vẫn theo `X-Idempotency
 
 ---
 
-## 7. Idempotency và chống bản tin đến sai thứ tự
+## 7. Idempotency
 
 **`X-Idempotency-Key` là bắt buộc.** Gửi lại đúng key đã dùng trước đó (ví dụ do timeout mạng và
 SW tự động retry) sẽ **không xử lý lại** — trả 200 với `status: "DUPLICATE"` kèm kết quả của lần
 xử lý đầu tiên (kể cả khi lần đầu đó FAILED). Client an toàn khi retry vô hạn với cùng key.
 
-**Chống bản tin lùi (chỉ áp dụng cho `actionType = 1`):** SQLBot dùng `timestamp` trong envelope để
-suy ra mốc thời gian của bản tin. Nếu một bản tin đến muộn (do mạng, do retry với
-`X-Idempotency-Key` **mới**) nhưng `timestamp` của nó **không mới hơn** bản tin gần nhất đã xử lý
-thành công cho cùng `userId`, SQLBot **bỏ qua** bản tin đó — trả 200 với `status: "STALE"`, **không**
-áp dụng vào dữ liệu.
-
-`actionType = 4` không có cơ chế này (§6.3) — nó không bao giờ trả `STALE`.
-
-⚠ Hệ quả vận hành: nếu đồng hồ hệ thống SW lệch, bản tin mới có thể bị coi là cũ và bị bỏ qua trong
-khi HTTP status vẫn là 200. Phải kiểm `status` trong response, không chỉ HTTP status code, để biết
-bản tin có thực sự được áp dụng hay không.
+⚠ Không có cơ chế chống bản tin đến sai thứ tự. Với `X-Idempotency-Key` **mới**, mỗi bản tin
+`AUTHORIZATION_SYNC` (actionType 1) hợp lệ về cấu trúc đều **ghi đè** full snapshot của lần trước
+cho đúng user đó, bất kể bản tin đó thực sự phát sinh trước hay sau về mặt thời gian thực. SW phải tự
+đảm bảo thứ tự gửi (ví dụ gửi tuần tự, không bắn song song nhiều bản tin cho cùng `userId`) nếu thứ
+tự áp dụng có ý nghĩa với nghiệp vụ.
 
 ---
 
@@ -323,24 +312,22 @@ bản tin có thực sự được áp dụng hay không.
 |---|---|---|---|
 | 200 | `SUCCESS` | — | Áp dụng thành công |
 | 200 | `DUPLICATE` | (của lần đầu) | Trùng `X-Idempotency-Key`, trả lại kết quả cũ |
-| 200 | `STALE` | — | Bản tin cũ hơn mốc đã áp dụng, bị bỏ qua có chủ ý (chỉ actionType 1) |
 | 400 | `FAILED` | `MALFORMED_JSON` | Body không phải JSON hợp lệ hoặc không phải object |
 | 400 | `FAILED` | `MISSING_IDEMPOTENCY_KEY` | Thiếu header `X-Idempotency-Key` |
 | 400 | `FAILED` | `INVALID_ENVELOPE` | Envelope thiếu trường hoặc sai kiểu |
-| 400 | `FAILED` | `INVALID_PAYLOAD` | `data` sai theo schema ở §4 / §6 (gồm cả `datasourceIds` chứa phần tử không phải số dạng chuỗi) |
+| 400 | `FAILED` | `INVALID_PAYLOAD` | `payload` sai theo schema ở §4 / §6 (gồm cả `datasourceIds` chứa phần tử không phải số dạng chuỗi) |
 | 400 | `FAILED` | `DUPLICATE_FORM_UUID` | `formUuid` bị lặp trong `formQueries` của cùng một user |
 | 400 | `FAILED` | `DUPLICATE_DATASOURCE_ID` | `datasourceId` bị lặp — trong `queries` của cùng một form (actionType 1), hoặc trong `datasourceIds` (actionType 4) |
 | 400 | `FAILED` | `DUPLICATE_USER_ID` | `userId` bị lặp giữa các phần tử trong `users` |
-| 400 | `FAILED` | `EMPTY_USER_LIST` | `data.users` rỗng hoặc thiếu |
-| 400 | `FAILED` | `EMPTY_DATASOURCE_LIST` | `data.datasourceIds` rỗng hoặc thiếu |
+| 400 | `FAILED` | `EMPTY_USER_LIST` | `payload.users` rỗng hoặc thiếu |
+| 400 | `FAILED` | `EMPTY_DATASOURCE_LIST` | `payload.datasourceIds` rỗng hoặc thiếu |
 | 422 | `FAILED` | `UNSUPPORTED_ACTION_TYPE` | actionType đã đặt tên nhưng chưa triển khai (2, 3, 5, 6) |
 | 422 | `FAILED` | `UNKNOWN_ACTION_TYPE` | actionType không hợp lệ hoặc ngoài phạm vi |
 | 500 | `FAILED` | `INTERNAL_ERROR` | Lỗi phía SQLBot |
 
 **actionType 1:** lỗi cấu trúc ở BẤT KỲ user nào trong `users` (kể cả `INVALID_PAYLOAD`,
 `DUPLICATE_FORM_UUID`, `DUPLICATE_USER_ID`, `EMPTY_USER_LIST`) làm **cả request FAILED** — không
-user nào trong batch được áp dụng. Ngược lại, `STALE` được tính RIÊNG theo từng user: xem
-`results[].status` trong response, không phải `status` cấp request (§1).
+user nào trong batch được áp dụng.
 
 **actionType 4:** chỉ ba lỗi cấu trúc `EMPTY_DATASOURCE_LIST` / `DUPLICATE_DATASOURCE_ID` /
 `INVALID_PAYLOAD` làm cả request FAILED. Mọi lý do khác (nguồn không tồn tại, không kết nối được,
@@ -370,9 +357,7 @@ curl -X POST "https://<host>/api/v1/hooks/ai-sync" \
   -H "X-Idempotency-Key: $(uuidgen)" \
   -d '{
     "actionType": 1,
-    "version": "1.0",
-    "timestamp": "2026-08-10T10:00:00Z",
-    "data": {
+    "payload": {
       "users": [
         {
           "userId": "usr-12345-67890",
@@ -422,9 +407,7 @@ curl -X POST "https://<host>/api/v1/hooks/ai-sync" \
   -H "X-Idempotency-Key: $(uuidgen)" \
   -d '{
     "actionType": 4,
-    "version": "1.0",
-    "timestamp": "2026-08-17T10:00:00Z",
-    "data": {"datasourceIds": ["7"]}
+    "payload": {"datasourceIds": ["7"]}
   }'
 ```
 
