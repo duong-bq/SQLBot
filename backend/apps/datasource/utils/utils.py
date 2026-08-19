@@ -23,7 +23,7 @@ def aes_decrypt(encrypted_data):
     return decrypted_text.decode('utf-8')
 
 
-def validate_configuration_object(conf: dict) -> None:
+def validate_configuration_object(conf: dict, db_type: str | None = None) -> None:
     """Kiểm tra một ``configuration`` dạng object trước khi chấp nhận, ném 422 nếu sai.
 
     Lý do phải kiểm tay: ``DatasourceConf`` khai mọi field đều có giá trị mặc định và pydantic mặc
@@ -32,6 +32,9 @@ def validate_configuration_object(conf: dict) -> None:
     sang object lồng nhằm loại bỏ. Ở đây chặn key lạ trước, rồi mới để pydantic ép kiểu.
 
     Chỉ áp cho nhánh object. Nhánh chuỗi giữ nguyên hành vi cũ để không làm vỡ client đang chạy.
+
+    Có ``db_type`` thì kiểm luôn ``extraJdbc`` theo bảng tham số của loại DB đó, để lỗi hiện ra lúc
+    bấm lưu chứ không phải lúc mở kết nối.
     """
     from ..models.datasource import DatasourceConf
 
@@ -46,9 +49,12 @@ def validate_configuration_object(conf: dict) -> None:
         DatasourceConf(**conf)
     except Exception as e:
         raise HTTPException(status_code=422, detail=f'Invalid configuration: {e}')
+    if db_type:
+        from apps.db.extra_params import validate_extra_params
+        validate_extra_params(db_type, conf.get('extraJdbc'))
 
 
-def normalize_configuration(configuration):
+def normalize_configuration(configuration, db_type: str | None = None):
     """Quy trường ``configuration`` client gửi lên về dạng chuỗi mà toàn bộ code phía sau chờ đợi.
 
     Nhận ba dạng đầu vào:
@@ -69,7 +75,7 @@ def normalize_configuration(configuration):
     trong source cả hai phía — nên nó không được để lộ ra hợp đồng API. Client chỉ gửi object.
     """
     if isinstance(configuration, dict):
-        validate_configuration_object(configuration)
+        validate_configuration_object(configuration, db_type)
         return aes_encrypt(json.dumps(configuration)).decode()
     if not configuration or not isinstance(configuration, str):
         return configuration
@@ -80,4 +86,9 @@ def normalize_configuration(configuration):
         return configuration
     if not isinstance(parsed, dict):
         return configuration
+    if db_type:
+        # nhánh chuỗi JSON cố tình KHÔNG kiểm tên field như nhánh object (giữ nguyên độ nới cũ),
+        # nhưng extraJdbc thì vẫn phải kiểm — sai ở đây là sai của người nhập, không phải của client
+        from apps.db.extra_params import validate_extra_params
+        validate_extra_params(db_type, parsed.get('extraJdbc'))
     return aes_encrypt(text).decode()

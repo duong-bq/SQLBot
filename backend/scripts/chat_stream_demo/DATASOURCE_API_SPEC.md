@@ -24,7 +24,7 @@ Phạm vi: 26 endpoint. Nguồn dữ liệu là database quan hệ (§3–§7) h
 
 | HTTP | Body | Ý nghĩa |
 |---|---|---|
-| 400 | `"<thông điệp>"` | Đầu vào sai ở mức nhìn ra được ngay — chỉ [§9](#9-tạo-nguồn-excelcsv-bằng-một-lời-gọi) dùng |
+| 400 | `"<thông điệp>"` | Đầu vào sai ở mức nhìn ra được ngay — [§9](#9-tạo-nguồn-excelcsv-bằng-một-lời-gọi) và `extraJdbc` sai ([3.1.1](#311-extrajdbc--tham-số-kết-nối-phụ)) |
 | 401 | `"Authentication invalid【...】"` | Token thiếu, sai định dạng, hoặc hết hạn |
 | 409 | `{"code": "...", ...}` | Xung đột tên nguồn dữ liệu — chỉ [9.2](#92-post-datasourcecreatefromexcelasync) dùng |
 | 422 | `"<thông điệp>"` hoặc `{"detail":[...]}` | Sai tham số |
@@ -46,6 +46,7 @@ FastAPI bắt). Client phải xử lý được cả hai.
 | | Endpoint |
 |---|---|
 | 3.1 | Cấu hình kết nối (`type` và `configuration`) |
+| 3.1.1 | Tham số kết nối phụ `extraJdbc` |
 | 3.2 | `POST /datasource/check` |
 | 3.3 | `POST /datasource/getSchemaByConf` |
 | 3.4 | `POST /datasource/getTablesByConf` |
@@ -165,7 +166,7 @@ Sai `type` → 500 `"Invalid db type: <giá trị>"`.
 | `password` | string | mọi loại | |
 | `database` | string | mọi loại | Với MySQL/Doris/StarRocks đây là namespace chứa bảng |
 | `dbSchema` | string | pg, sqlServer, oracle, dm, redshift, kingbase | Lấy từ 3.3 |
-| `extraJdbc` | string | mọi loại | `""` |
+| `extraJdbc` | string | mọi loại | `""` — xem [3.1.1](#311-extrajdbc--tham-số-kết-nối-phụ) |
 | `timeout` | int | mọi loại | `30` (giây) |
 | `ssl` | bool | mọi loại | `false` |
 | `poolSize` | int | mọi loại | `5` |
@@ -186,6 +187,158 @@ Sai tên field hoặc sai kiểu → 422, body là chuỗi:
   Không parse nó.
 - ⚠ Chuỗi đó chứa mật khẩu DB và có mặt trong response của 4.1 và 4.2. Chỉ gọi qua HTTPS, không ghi
   log body ở gateway/proxy.
+
+#### 3.1.1. `extraJdbc` — tham số kết nối phụ
+
+**Không bắt buộc.** Để trống trong đa số trường hợp; chỉ điền khi cần đặt hạn chờ riêng cho lúc
+đăng nhập, gắn tên ứng dụng để dễ truy vết phiên, đặt biến phiên, hoặc siết TLS phía MySQL.
+
+**Định dạng:** các cặp `tên=giá_trị` nối bằng `&`, không có dấu `?` mở đầu.
+
+```
+loginTimeout=30&applicationName=sqlbot
+```
+
+Đây **không phải** URL JDBC. Chuỗi dạng `jdbc:sqlserver://10.0.0.15:1433;databaseName=master` sẽ bị
+từ chối — host, port, database, username, password, timeout, ssl đều đã có field riêng UI.
+
+Quy tắc đọc chuỗi:
+
+- Tên tham số không phân biệt hoa thường.
+- Cặp được cắt ở dấu `=` **đầu tiên**, nên giá trị chứa `=` vẫn hợp lệ:
+  `init_command=SET time_zone='+07:00'`.
+- Khoảng trắng quanh tên và quanh giá trị bị bỏ qua.
+- Giá trị kiểu bool nhận `true`/`false`, `1`/`0`, `yes`/`no`, `on`/`off`.
+- Đoạn không có dấu `=`, hoặc có tên mà không có giá trị → lỗi.
+
+Sai tên, sai kiểu, hoặc dùng tên bị từ chối → **400**, body là chuỗi nêu tên sai và cách sửa. Lỗi
+được trả ngay ở 3.2–3.5 và 7.5, không đợi tới lúc mở kết nối thật.
+
+```
+"Extra parameter 'charset' must be one of: utf-8, utf8; got 'latin1'"
+"Extra parameter 'login_timeout' must be an integer, got 'ba muoi'"
+"Extra parameter 'timeout' is not allowed: use the 'timeout' field"
+"Unknown extra parameter 'foo' for sqlServer. Allowed: appname, charset, login_timeout, read_only, ..."
+```
+
+**Tên quen dùng bên JDBC được nhận và tự quy về tên tương đương**
+
+| `type` | Viết theo thói quen JDBC | Được hiểu thành | Ghi chú |
+|---|---|---|---|
+| `sqlServer` | `loginTimeout` | `login_timeout` | |
+| `sqlServer` | `applicationName` | `appname` | |
+| `sqlServer` | `ApplicationIntent=ReadOnly` | `read_only=true` | `ReadWrite` → `false` |
+| `mysql` | `characterEncoding=UTF-8` | `charset=utf8mb4` | tên IANA đổi sang tên bộ ký tự của MySQL |
+| `mysql` | `sessionVariables` | `init_command` | |
+| `mysql` | `socketTimeout` | `read_timeout` | |
+
+Viết tên nào trong hai cột đầu cũng được, kết quả như nhau.
+
+**Tham số hợp lệ — `sqlServer`**
+
+| Tên | Kiểu | Ý nghĩa |
+|---|---|---|
+| `login_timeout` | int, giây | Hạn chờ lúc đăng nhập; khác field `timeout` (hạn chờ truy vấn) |
+| `charset` | `UTF-8` | Chỉ nhận họ UTF-8, viết hoa hay thường đều được. Bộ ký tự khác làm hỏng tiếng Việt nên bị từ chối |
+| `appname` | string | Tên ứng dụng, tra bằng `SELECT APP_NAME()` hoặc trong `sys.dm_exec_sessions` |
+| `read_only` | bool | Cờ ApplicationIntent để AlwaysOn định tuyến sang replica đọc. **Không** chặn ghi: trên server thường, phiên vẫn ghi được như bình thường |
+
+**Tham số hợp lệ — `mysql`**
+
+| Tên | Kiểu | Ý nghĩa |
+|---|---|---|
+| `charset` | `utf8mb4` | Chỉ nhận họ UTF-8 (`utf8mb4`, `utf8`, `UTF-8`), đều quy về `utf8mb4`. Bộ ký tự khác làm hỏng tiếng Việt nên bị từ chối |
+| `collation` | string | vd `utf8mb4_unicode_ci` |
+| `sql_mode` | string | Đặt sql_mode cho phiên |
+| `init_command` | string | Câu SQL chạy ngay sau khi mở kết nối |
+| `program_name` | string | Tên chương trình, tra ở `performance_schema.session_connect_attrs`. **Không** hiện trong `SHOW PROCESSLIST` |
+| `read_timeout` | int, giây | Cắt mọi truy vấn chạy lâu hơn ngưỡng và đóng luôn kết nối. Đặt thấp thì báo cáo nặng sẽ đứt giữa chừng |
+| `write_timeout` | int, giây | Hạn chờ ghi dữ liệu |
+| `ssl_ca`, `ssl_cert`, `ssl_key` | string | Đường dẫn file chứng chỉ — xem ghi chú bên dưới |
+| `ssl_key_password` | string | Mật khẩu của private key |
+| `ssl_disabled` | bool | Tắt hẳn TLS, kênh truyền về dạng trần — xem khối mã hóa bên dưới |
+| `ssl_verify_cert` | bool | Kiểm chứng chỉ của server |
+| `ssl_verify_identity` | bool | Kiểm cả tên miền trong chứng chỉ |
+
+**Tham số cần thao tác sẵn trên máy chủ SQLBot**
+
+`ssl_ca`, `ssl_cert`, `ssl_key` nhận đường dẫn **trên máy chủ chạy SQLBot**, không phải trên máy
+người dùng. File phải do bên vận hành SQLBot đặt sẵn ở đó — không có API nào tải file lên, nên điền
+một đường dẫn chưa thỏa thuận trước thì kết nối sẽ hỏng.
+
+**Mã hóa đường truyền**
+
+Mã hóa gồm hai lời hứa tách rời nhau: **chống nghe lén** (kênh được mã hóa) và **chống giả mạo
+server** (chứng chỉ của server được kiểm, gồm cả chuỗi ký lẫn tên miền). Bật TLS chỉ mua được lời
+hứa thứ nhất.
+
+*MySQL*
+
+| Cấu hình | Chống nghe lén | Chống giả mạo server |
+|---|---|---|
+| Không điền gì | ✔ nếu server bật TLS — MySQL 8 mặc định có | ✘ |
+| `ssl_verify_cert=true`, không có `ssl_ca` | ✔ | một phần, và thường không kết nối được |
+| `ssl_ca=<đường dẫn>` | ✔ | ✔ |
+| `ssl_disabled=true` | ✘ | ✘ |
+
+- Dòng thứ hai kiểm chuỗi chứng chỉ theo kho CA của máy chủ SQLBot nhưng **không** kiểm tên miền,
+  nên vẫn không chặn được kẻ đứng giữa cầm một chứng chỉ hợp lệ cấp cho tên miền khác. Mà MySQL
+  mặc định dùng chứng chỉ tự ký — thứ không CA công cộng nào ký — nên cấu hình này thường làm hỏng
+  luôn kết nối với lỗi `CERTIFICATE_VERIFY_FAILED`.
+- Muốn kiểm chứng chỉ cho ra kiểm thì phải có `ssl_ca`, kèm điều kiện file ở khối trên.
+- `ssl_disabled=true` là đường **hạ cấp** về kênh trần; chỉ dùng khi biết rõ mình cần.
+- ⚠ `ssl_verify_identity=true` **không có tác dụng** nếu không có `ssl_ca` — driver bỏ qua, không
+  báo lỗi. Đây là bẫy dễ mắc nhất trong nhóm này.
+
+*SQL Server*
+
+Không có cách nào bật mã hóa toàn phiên qua `extraJdbc` — driver bỏ qua tham số đó, nên dữ liệu
+truy vấn đi trên kênh trần. Riêng gói đăng nhập mang mật khẩu thì luôn được TLS bọc. Cần mã hóa cả
+phiên thì phải cấu hình ở phía máy chủ SQLBot, trao đổi trước với bên vận hành.
+
+**Một số tham số bị từ chối**
+
+Hai nhóm dưới đây luôn trả 400, kể cả khi giá trị viết đúng.
+
+*Đã có field riêng trong `configuration`*
+
+| Tên | `type` | Điền vào field |
+|---|---|---|
+| `host`, `server`, `port`, `user`, `password`, `database`, `databaseName` | sqlServer | `host`, `port`, `username`, `password`, `database` |
+| `host`, `port`, `user`, `password`, `passwd`, `db`, `database` | mysql | `host`, `port`, `username`, `password`, `database` |
+| `timeout`, `queryTimeout` | sqlServer | `timeout` |
+| `connect_timeout`, `connectTimeout` | mysql | `timeout` |
+| `ssl`, `useSSL`, `requireSSL` | mysql | `ssl` |
+| `tds_version` | sqlServer | `lowVersion` |
+
+*Tên JDBC quen dùng nhưng không dùng được ở đây*
+
+| Tên | `type` | Lý do |
+|---|---|---|
+| `encrypt`, `encryption` | sqlServer | driver bỏ qua, kênh truyền vẫn chạy trần — xem khối mã hóa ở trên |
+| `trustServerCertificate` | sqlServer | không cần — chứng chỉ server vốn không được kiểm, xem khối mã hóa ở trên |
+| `integratedSecurity` | sqlServer | không hỗ trợ xác thực Windows, chỉ dùng tài khoản SQL Server |
+| `serverTimezone` | mysql | driver không tự quy đổi múi giờ nên tham số này không có tác dụng gì. Muốn đổi múi giờ thì đặt ở phiên bằng `init_command`, điền ngay trong ô này — xem bảng ví dụ bên dưới |
+| `autoReconnect` | mysql | SQLBot đã có sẵn tính năng này |
+| `allowLoadLocalInfile` | mysql | tắt vì lý do an toàn: bật lên thì một server MySQL giả mạo có thể đòi đọc file nằm trên máy chủ SQLBot |
+| `useUnicode` | mysql | kết quả luôn ở dạng chuỗi; tắt đi làm dữ liệu bị đọc sai |
+| `useCompression` | mysql | driver không hỗ trợ nén, bật lên là kết nối hỏng |
+
+⚠ Hai bảng này không liệt kê hết — còn một số tên nội bộ của driver cũng bị từ chối. Nguyên tắc
+chung: chỉ dùng những tên có trong hai bảng **tham số hợp lệ** ở trên.
+
+**Ví dụ**
+
+| Tình huống | `extraJdbc` |
+|---|---|
+| SQL Server, hạn đăng nhập 30 giây + đặt tên ứng dụng | `loginTimeout=30&applicationName=sqlbot` |
+| SQL Server, định tuyến sang replica đọc của AlwaysOn | `ApplicationIntent=ReadOnly` |
+| MySQL, đặt múi giờ cho phiên | `init_command=SET time_zone='+07:00'` |
+| MySQL, cắt truy vấn chạy quá 120 giây | `read_timeout=120` |
+| MySQL, TLS có kiểm chứng chỉ (file đã đặt sẵn trên máy chủ SQLBot) | `ssl_ca=/etc/ssl/certs/ca.pem&ssl_verify_cert=true` |
+
+Các loại DB còn lại (`pg`, `oracle`, `ck`, …) dùng chung định dạng và chung cách báo lỗi, nhưng bảng
+tham số khác — để trống trừ khi có yêu cầu cụ thể.
 
 ### 3.2. `POST /datasource/check`
 

@@ -57,8 +57,10 @@ def _normalize_ds_configuration(ds) -> None:
     Phải gọi ở MỌI endpoint nhận cấu hình từ client. Với ``CoreDatasource`` (SQLModel ``table=True``)
     FastAPI không validate body, nên một ``configuration`` dạng object đi thẳng vào hàm dưới dạng
     dict và sẽ nổ ở ``aes_decrypt`` nếu thiếu bước này — không có 422 nào chặn hộ.
+
+    ``type`` được chuyển xuống để kiểm luôn ``extraJdbc`` theo bảng tham số của đúng loại DB.
     """
-    normalized = normalize_configuration(ds.configuration)
+    normalized = normalize_configuration(ds.configuration, getattr(ds, 'type', None))
     if normalized != ds.configuration:
         ds.configuration = normalized
 

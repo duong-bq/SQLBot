@@ -5,7 +5,7 @@ import platform
 import urllib.parse
 from datetime import datetime, date, time, timedelta
 from decimal import Decimal
-from typing import Optional, List
+from typing import Optional
 
 import oracledb
 import psycopg2
@@ -24,6 +24,7 @@ from sqlalchemy.orm import sessionmaker
 from apps.datasource.models.datasource import DatasourceConf, CoreDatasource, TableSchema, ColumnSchema, RelationSchema
 from apps.datasource.utils.utils import aes_decrypt
 from apps.db.constant import DB, ConnectType
+from apps.db.extra_params import build_extra_query, parse_extra_params
 from apps.db.engine import get_engine_config
 from apps.system.crud.assistant import get_out_ds_conf
 from apps.system.schemas.system_schema import AssistantOutDsSchema
@@ -57,59 +58,50 @@ def get_uri(ds: CoreDatasource) -> str:
 
 
 def get_uri_from_config(type: str, conf: DatasourceConf) -> str:
+    """Dựng connection string SQLAlchemy cho một loại DB từ cấu hình nguồn dữ liệu.
+
+    Tham số phụ (``extraJdbc``) KHÔNG nối vào URL nữa, trừ ClickHouse: dialect của nó đọc
+    ``protocol``/``endpoint`` từ query string để dựng địa chỉ HTTP trước khi driver nhận kwargs, nên
+    chỉ đường URL mới có tác dụng. Các loại còn lại nhận tham số phụ dưới dạng keyword argument đã
+    ép kiểu (xem ``parse_extra_params``) — nhét vào URL thì giá trị lại thành chuỗi và số phận của
+    nó phụ thuộc việc dialect có ép kiểu hộ hay không, mỗi dialect một khác.
+    """
     db_url: str
+    user = urllib.parse.quote(conf.username)
+    password = urllib.parse.quote(conf.password)
     if equals_ignore_case(type, "mysql"):
-        checkParams(conf.extraJdbc, DB.mysql.illegalParams)
-        if conf.extraJdbc is not None and conf.extraJdbc != '':
-            db_url = f"mysql+pymysql://{urllib.parse.quote(conf.username)}:{urllib.parse.quote(conf.password)}@{conf.host}:{conf.port}/{conf.database}?{conf.extraJdbc}"
-        else:
-            db_url = f"mysql+pymysql://{urllib.parse.quote(conf.username)}:{urllib.parse.quote(conf.password)}@{conf.host}:{conf.port}/{conf.database}"
+        db_url = f"mysql+pymysql://{user}:{password}@{conf.host}:{conf.port}/{conf.database}"
     elif equals_ignore_case(type, "sqlServer"):
-        if conf.extraJdbc is not None and conf.extraJdbc != '':
-            db_url = f"mssql+pymssql://{urllib.parse.quote(conf.username)}:{urllib.parse.quote(conf.password)}@{conf.host}:{conf.port}/{conf.database}?{conf.extraJdbc}"
-        else:
-            db_url = f"mssql+pymssql://{urllib.parse.quote(conf.username)}:{urllib.parse.quote(conf.password)}@{conf.host}:{conf.port}/{conf.database}"
+        db_url = f"mssql+pymssql://{user}:{password}@{conf.host}:{conf.port}/{conf.database}"
     elif equals_ignore_case(type, "pg", "excel"):
-        if conf.extraJdbc is not None and conf.extraJdbc != '':
-            db_url = f"postgresql+psycopg2://{urllib.parse.quote(conf.username)}:{urllib.parse.quote(conf.password)}@{conf.host}:{conf.port}/{conf.database}?{conf.extraJdbc}"
-        else:
-            db_url = f"postgresql+psycopg2://{urllib.parse.quote(conf.username)}:{urllib.parse.quote(conf.password)}@{conf.host}:{conf.port}/{conf.database}"
+        db_url = f"postgresql+psycopg2://{user}:{password}@{conf.host}:{conf.port}/{conf.database}"
     elif equals_ignore_case(type, "oracle"):
         if equals_ignore_case(conf.mode, "service_name", "serviceName"):
-            if conf.extraJdbc is not None and conf.extraJdbc != '':
-                db_url = f"oracle+oracledb://{urllib.parse.quote(conf.username)}:{urllib.parse.quote(conf.password)}@{conf.host}:{conf.port}?service_name={conf.database}&{conf.extraJdbc}"
-            else:
-                db_url = f"oracle+oracledb://{urllib.parse.quote(conf.username)}:{urllib.parse.quote(conf.password)}@{conf.host}:{conf.port}?service_name={conf.database}"
+            db_url = f"oracle+oracledb://{user}:{password}@{conf.host}:{conf.port}?service_name={conf.database}"
         else:
-            if conf.extraJdbc is not None and conf.extraJdbc != '':
-                db_url = f"oracle+oracledb://{urllib.parse.quote(conf.username)}:{urllib.parse.quote(conf.password)}@{conf.host}:{conf.port}/{conf.database}?{conf.extraJdbc}"
-            else:
-                db_url = f"oracle+oracledb://{urllib.parse.quote(conf.username)}:{urllib.parse.quote(conf.password)}@{conf.host}:{conf.port}/{conf.database}"
+            db_url = f"oracle+oracledb://{user}:{password}@{conf.host}:{conf.port}/{conf.database}"
     elif equals_ignore_case(type, "ck"):
-        if conf.extraJdbc is not None and conf.extraJdbc != '':
-            db_url = f"clickhouse+http://{urllib.parse.quote(conf.username)}:{urllib.parse.quote(conf.password)}@{conf.host}:{conf.port}/{conf.database}?{conf.extraJdbc}"
-        else:
-            db_url = f"clickhouse+http://{urllib.parse.quote(conf.username)}:{urllib.parse.quote(conf.password)}@{conf.host}:{conf.port}/{conf.database}"
+        db_url = f"clickhouse+http://{user}:{password}@{conf.host}:{conf.port}/{conf.database}"
+        extra_query = build_extra_query(type, conf.extraJdbc)
+        if extra_query:
+            db_url = f"{db_url}?{extra_query}"
     else:
-        raise 'The datasource type not support.'
+        # bản cũ raise một chuỗi, Python ném TypeError nên thông điệp này không bao giờ tới tay ai
+        raise ValueError(f'The datasource type not support: {type}')
     return db_url
 
 
-def get_extra_config(conf: DatasourceConf):
-    config_dict = {}
-    if conf.extraJdbc:
-        config_arr = conf.extraJdbc.split("&")
-        for config in config_arr:
-            kv = config.split("=")
-            if len(kv) == 2 and kv[0] and kv[1]:
-                config_dict[kv[0]] = kv[1]
-            else:
-                raise Exception(f'param: {config} is error')
-    return config_dict
+def get_extra_config(conf: DatasourceConf, db_type: str):
+    """Đọc ``extraJdbc`` thành kwargs đã đúng tên và đúng kiểu cho driver của ``db_type``.
+
+    Phải truyền ``db_type`` vì mỗi driver có tập tham số riêng, và tên bị cấm cũng khác nhau: cái
+    hệ thống tự truyền cho SQL Server không giống cái nó tự truyền cho Doris.
+    """
+    return parse_extra_params(db_type, conf.extraJdbc)
 
 
 def get_origin_connect(type: str, conf: DatasourceConf):
-    extra_config_dict = get_extra_config(conf)
+    extra_config_dict = get_extra_config(conf, type)
     if equals_ignore_case(type, "sqlServer"):
         # none or true, set tds_version = 7.0
         if conf.lowVersion is None or conf.lowVersion:
@@ -153,23 +145,27 @@ def get_engine(ds: CoreDatasource, timeout: int = 0, use_pool: bool = False) -> 
         'poolclass': NullPool
     }
 
+    # Tham số phụ do người dùng nhập, đã đúng tên và đúng kiểu. Luôn trải TRƯỚC các giá trị hệ
+    # thống tự đặt: tên nào hệ thống quản lý thì lớp kiểm tra đã chặn từ đầu, thứ tự này chỉ là lưới
+    # an toàn cuối cùng để không ai vô tình đè được timeout hay search_path.
+    extra_args = parse_extra_params(ds.type, conf.extraJdbc)
+
     if equals_ignore_case(ds.type, "pg"):
+        connect_args = {**extra_args, "connect_timeout": conf.timeout}
         if conf.dbSchema is not None and conf.dbSchema != "":
-            engine = create_engine(get_uri(ds),
-                                   connect_args={"options": f"-c search_path={urllib.parse.quote(conf.dbSchema)}",
-                                                 "connect_timeout": conf.timeout}, **db_config)
-        else:
-            engine = create_engine(get_uri(ds), connect_args={"connect_timeout": conf.timeout}, **db_config)
+            connect_args["options"] = f"-c search_path={urllib.parse.quote(conf.dbSchema)}"
+        engine = create_engine(get_uri(ds), connect_args=connect_args, **db_config)
     elif equals_ignore_case(ds.type, 'sqlServer'):
         engine = create_engine('mssql+pymssql://', creator=lambda: get_origin_connect(ds.type, conf),
                                **db_config)
     elif equals_ignore_case(ds.type, 'oracle'):
-        engine = create_engine(get_uri(ds), **db_config)
+        engine = create_engine(get_uri(ds), connect_args=extra_args, **db_config)
     elif equals_ignore_case(ds.type, 'mysql'):  # mysql
         ssl_mode = {"require": True} if conf.ssl else None
-        engine = create_engine(get_uri(ds), connect_args={"connect_timeout": conf.timeout, "ssl": ssl_mode},
+        engine = create_engine(get_uri(ds),
+                               connect_args={**extra_args, "connect_timeout": conf.timeout, "ssl": ssl_mode},
                                **db_config)
-    else:  # ck
+    else:  # ck — tham số phụ đã nằm trong URL, xem get_uri_from_config
         engine = create_engine(get_uri(ds), connect_args={"connect_timeout": conf.timeout}, **db_config)
     return engine
 
@@ -190,7 +186,7 @@ def get_session(ds: CoreDatasource | AssistantOutDsSchema):
 
 def get_driver_connection(ds: CoreDatasource | AssistantOutDsSchema, db_config: dict = {}, use_pool: bool = False):
     conf = DatasourceConf(**json.loads(aes_decrypt(ds.configuration)))
-    extra_config_dict = get_extra_config(conf)
+    extra_config_dict = get_extra_config(conf, ds.type)
 
     pool_config = {
         'maxconnections': conf.poolSize if conf.poolSize else 5,
@@ -310,7 +306,7 @@ def check_connection(trans: Optional[Trans], ds: CoreDatasource | AssistantOutDs
             return False
     else:
         conf = DatasourceConf(**json.loads(aes_decrypt(ds.configuration)))
-        extra_config_dict = get_extra_config(conf)
+        extra_config_dict = get_extra_config(conf, ds.type)
         if equals_ignore_case(ds.type, 'dm'):
             with dmPython.connect(user=conf.username, password=conf.password, server=conf.host,
                                   port=conf.port, **extra_config_dict) as conn, conn.cursor() as cursor:
@@ -429,7 +425,7 @@ def get_version(ds: CoreDatasource | AssistantOutDsSchema):
                     res = result.fetchall()
                     version = res[0][0]
         else:
-            extra_config_dict = get_extra_config(conf)
+            extra_config_dict = get_extra_config(conf, ds.type)
             if equals_ignore_case(ds.type, 'dm'):
                 with get_driver_pool(ds).connection() as conn, conn.cursor() as cursor:
                     cursor.execute(sql, timeout=10, **extra_config_dict)
@@ -1147,15 +1143,6 @@ def check_sql_read(sql: str, ds: CoreDatasource | AssistantOutDsSchema) -> tuple
 
     except Exception as e:
         raise ValueError(f"Parse SQL Error: {e}")
-
-
-def checkParams(extraParams: str, illegalParams: List[str]):
-    kvs = extraParams.split('&')
-    for kv in kvs:
-        if kv and '=' in kv:
-            k, v = kv.split('=')
-            if k in illegalParams:
-                raise HTTPException(status_code=500, detail=f'Illegal Parameter: {k}')
 
 
 import threading
