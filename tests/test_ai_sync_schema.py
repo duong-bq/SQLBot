@@ -12,7 +12,7 @@ from apps.hooks.schemas.ai_sync_schema import (
     SyncHookResponse,
     UserSyncResult,
     find_duplicate_datasource_id,
-    find_duplicate_form_uuid,
+    find_duplicate_table_name,
     find_duplicate_user_id,
     normalize_queries,
     to_sync_version,
@@ -187,19 +187,19 @@ def test_to_sync_version_ton_trong_offset():
 _ONE_QUERY = [{"datasourceId": "d1", "datasourceType": "postgresql", "query": "SELECT 1"}]
 
 
-def test_find_duplicate_form_uuid():
+def test_find_duplicate_table_name():
     body = {
         "userId": "u1", "isAdmin": False,
         "formQueries": [
             {"formUuid": "f1", "tableInfo": {"databaseTableName": "t1", "queries": _ONE_QUERY}},
-            {"formUuid": "f1", "tableInfo": {"databaseTableName": "t2", "queries": _ONE_QUERY}},
+            {"formUuid": "f2", "tableInfo": {"databaseTableName": "t1", "queries": _ONE_QUERY}},
         ],
     }
     data = AuthorizationSyncData.model_validate(body)
-    assert find_duplicate_form_uuid(data.form_queries) == "f1"
+    assert find_duplicate_table_name(data.form_queries) == "t1"
 
 
-def test_find_duplicate_form_uuid_tra_none_khi_khong_trung():
+def test_find_duplicate_table_name_tra_none_khi_khong_trung():
     data = AuthorizationSyncData.model_validate(
         {
             "userId": "u1", "isAdmin": False,
@@ -209,7 +209,21 @@ def test_find_duplicate_form_uuid_tra_none_khi_khong_trung():
             ],
         }
     )
-    assert find_duplicate_form_uuid(data.form_queries) is None
+    assert find_duplicate_table_name(data.form_queries) is None
+
+
+def test_form_query_khong_can_form_uuid():
+    """`formUuid` giờ optional — khoá định danh thật là `database_table_name`, không phải form."""
+    data = AuthorizationSyncData.model_validate(
+        {
+            "userId": "u1", "isAdmin": False,
+            "formQueries": [
+                {"tableInfo": {"databaseTableName": "t1", "queries": _ONE_QUERY}},
+            ],
+        }
+    )
+    assert data.form_queries[0].form_uuid is None
+    assert data.form_queries[0].table_info.database_table_name == "t1"
 
 
 def test_table_info_queries_rong_bi_loai():

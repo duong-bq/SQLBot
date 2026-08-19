@@ -72,13 +72,18 @@ class TableInfo(BaseModel):
 
 
 class FormQuery(BaseModel):
-    """Quyền của user trên một form: bảng, field, và danh sách query theo datasource (trong
-    `table_info.queries`). Không còn field query riêng ở cấp này — đã dời hẳn vào `TableInfo`.
+    """Quyền của user trên một bảng nghiệp vụ: bảng, field, và danh sách query theo datasource
+    (trong `table_info.queries`). Không còn field query riêng ở cấp này — đã dời hẳn vào `TableInfo`.
+
+    `form_uuid` optional — khoá định danh THẬT của một dòng quyền là `(user_id, database_table_name)`
+    (xem `crud/ai_user_permission.py`), không phải `formUuid`. SW có thể không có khái niệm "form"
+    (chỉ cần biết user truy cập được bảng nào), nên trường này giờ chỉ mang tính tham khảo — lưu lại
+    nếu SW có gửi, không dùng để so khớp/xoá.
     """
 
     model_config = ConfigDict(populate_by_name=True, extra="ignore")
 
-    form_uuid: str = Field(alias="formUuid", min_length=1)
+    form_uuid: str | None = Field(default=None, alias="formUuid")
     table_info: TableInfo = Field(alias="tableInfo")
 
 
@@ -202,24 +207,27 @@ def normalize_queries(items: list[QueryItem]) -> list[dict[str, Any]]:
     ]
 
 
-def find_duplicate_form_uuid(form_queries: list[FormQuery]) -> str | None:
-    """Trả `formUuid` đầu tiên bị lặp trong payload, None nếu không có.
+def find_duplicate_table_name(form_queries: list[FormQuery]) -> str | None:
+    """Trả `databaseTableName` đầu tiên bị lặp trong `formQueries` của MỘT user, None nếu không có.
 
-    Kiểm tường minh thay vì để `UNIQUE(user_id, form_uuid)` xử lý: nếu để DB lo thì hành vi thành
-    "bản sau đè bản trước" một cách âm thầm, còn ở đây là lỗi 400 rõ ràng cho SW.
+    Kiểm tường minh thay vì để `UNIQUE(user_id, database_table_name)` xử lý: nếu để DB lo thì hành vi
+    thành "bản sau đè bản trước" một cách âm thầm, còn ở đây là lỗi 400 rõ ràng cho SW. Kiểm theo
+    bảng chứ không theo `formUuid` vì khoá định danh thật của một dòng quyền là
+    `(user_id, database_table_name)` — xem `FormQuery.form_uuid`.
     """
     seen: set[str] = set()
     for form in form_queries:
-        if form.form_uuid in seen:
-            return form.form_uuid
-        seen.add(form.form_uuid)
+        table_name = form.table_info.database_table_name
+        if table_name in seen:
+            return table_name
+        seen.add(table_name)
     return None
 
 
 def find_duplicate_datasource_id(queries: list[QueryItem]) -> str | None:
     """Trả `datasourceId` đầu tiên bị lặp trong `queries` của MỘT form, None nếu không có.
 
-    Cùng khuôn `find_duplicate_form_uuid` nhưng phạm vi kiểm là 1 form, không phải toàn batch —
+    Cùng khuôn `find_duplicate_table_name` nhưng phạm vi kiểm là 1 form, không phải toàn batch —
     kiểm tường minh để tránh DB âm thầm ghép đè khi lưu vào JSONB (JSONB không có ràng buộc unique
     trên phần tử mảng).
     """
@@ -249,7 +257,7 @@ def find_first_duplicate(values: list[str]) -> str | None:
 def find_duplicate_user_id(users: list[AuthorizationSyncData]) -> str | None:
     """Trả `userId` đầu tiên bị lặp trong batch, None nếu không có.
 
-    Giống `find_duplicate_form_uuid` nhưng ở cấp user: kiểm tường minh trước khi áp dụng, để phần
+    Giống `find_duplicate_table_name` nhưng ở cấp user: kiểm tường minh trước khi áp dụng, để phần
     tử sau không âm thầm đè kết quả của phần tử trước trong vòng lặp áp dụng của handler.
     """
     seen: set[str] = set()

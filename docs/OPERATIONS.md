@@ -525,7 +525,7 @@ kỳ tài liệu, log hay issue nào; nếu cần xoay vòng mật khẩu thì p
 | Bẫy | Chi tiết |
 |---|---|
 | `sync_version` không còn chống bản tin lùi | Cột này (và cơ chế `STALE` cũ) đã bỏ hẳn — SW không còn gửi `timestamp`, mọi bản tin `AUTHORIZATION_SYNC` hợp lệ về cấu trúc đều ghi đè bản trước bất kể thứ tự thời gian thật. Đừng đi tìm lại hành vi chống lùi trong code hiện tại |
-| `AUTHORIZATION_SYNC` là **full snapshot**, không phải patch | Gửi thiếu một `formUuid` đang có quyền là **thu hồi** form đó, không phải "giữ nguyên". `formQueries: []` thu hồi hết. Xem `AI_SYNC_HOOK_API_SPEC.md` §5 |
+| `AUTHORIZATION_SYNC` là **full snapshot**, không phải patch | Gửi thiếu một bảng (`databaseTableName`) đang có quyền là **thu hồi** quyền trên bảng đó, không phải "giữ nguyên". `formQueries: []` thu hồi hết. Khoá so khớp là `databaseTableName`, không phải `formUuid` (optional, chỉ tham khảo). Xem `AI_SYNC_HOOK_API_SPEC.md` §4-§5 |
 | Gọi hook mà không đăng nhập trước | Không có static token riêng — SW phải `POST /login/access-token` lấy `X-SQLBOT-TOKEN` như mọi client khác, và tài khoản đó phải có quyền `ws_admin` |
 | Thiếu quyền `ws_admin` trả **500**, không phải 403 | Quy ước chung của `require_permissions` toàn hệ thống (xem §7.4 / `BACKEND_ARCHITECTURE.md` §7), không riêng gì hook |
 | `DATASOURCE_SYNC` trả **200 + `status: SUCCESS`** ngay cả khi **mọi** nguồn trong batch đều hỏng | Ngữ nghĩa per-item, không all-or-nothing như `AUTHORIZATION_SYNC`: `status` cấp request chỉ nói "batch đã xử lý xong". Kết cục thật nằm ở `results[]`. SW dựng monitor theo HTTP status sẽ không bao giờ báo động |

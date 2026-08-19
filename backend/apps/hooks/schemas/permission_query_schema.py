@@ -32,11 +32,15 @@ class PermissionTableInfoOut(BaseModel):
 
 
 class PermissionFormQueryOut(BaseModel):
-    """Quyền trên 1 form, đọc lại từ 1 dòng `ai_user_permissions`."""
+    """Quyền trên 1 bảng, đọc lại từ 1 dòng `ai_user_permissions`.
+
+    `formUuid` optional — không còn là khoá định danh (đã đổi sang `databaseTableName`), chỉ trả lại
+    nếu SW có gửi lúc đồng bộ.
+    """
 
     model_config = ConfigDict(populate_by_name=True)
 
-    formUuid: str
+    formUuid: str | None = None
     tableInfo: PermissionTableInfoOut
 
 

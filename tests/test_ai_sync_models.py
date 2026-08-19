@@ -46,18 +46,21 @@ def test_permission_co_du_cot_va_unique_user_form():
     assert "table_description" not in cols, "cột table_description đã bị xoá — mô tả bảng chuyển sang endpoint riêng"
     assert cols["sync_version"].nullable is False
     assert cols["domain_code"].nullable is True
+    assert cols["form_uuid"].nullable is True, "formUuid optional ở SW — cột phải nullable"
     constraint_cols = {
         tuple(sorted(c.name for c in con.columns))
         for con in AiUserPermission.__table__.constraints
         if con.__class__.__name__ == "UniqueConstraint"
     }
-    assert ("form_uuid", "user_id") in constraint_cols
+    assert ("database_table_name", "user_id") in constraint_cols
+    assert ("form_uuid", "user_id") not in constraint_cols
 
 
-def test_permission_co_index_user_id_va_user_table():
+def test_permission_co_index_user_id():
+    """`idx_ai_user_permissions_user_table` cũ đã bỏ — trùng với index tự sinh của unique
+    constraint mới `uq_ai_user_permissions_user_table` trên `(user_id, database_table_name)`."""
     names = {i.name for i in AiUserPermission.__table__.indexes}
     assert "idx_ai_user_permissions_user_id" in names
-    assert "idx_ai_user_permissions_user_table" in names
 
 
 def test_permission_co_index_domain_code():

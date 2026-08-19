@@ -76,11 +76,13 @@ class AiSyncHookLog(SQLModel, table=True):
 class AiUserPermission(SQLModel, table=True):
     """Trạng thái quyền HIỆN TẠI của user sau khi parse bản tin AUTHORIZATION_SYNC.
 
-    Một dòng = một user + một form + một bảng nghiệp vụ + danh sách query theo từng datasource.
-    `queries` lưu nguyên mảng `{datasourceId, datasourceType, query}`, phase này không parse và
-    không chạy — giữ khoá camelCase để output API đọc thẳng không cần remap. Không còn field-level
-    metadata (`fields`) và mô tả bảng (`table_description`) — đã chuyển sang endpoint edit
-    field/table riêng, ngoài phạm vi sync này.
+    Một dòng = một user + một bảng nghiệp vụ + danh sách query theo từng datasource. Khoá định danh
+    là `(user_id, database_table_name)`, KHÔNG phải `form_uuid` — `formUuid` optional ở phía SW,
+    chỉ lưu tham khảo khi có gửi (xem `crud/ai_user_permission.py`). `queries` lưu nguyên mảng
+    `{datasourceId, datasourceType, query}`, phase này không parse và không chạy — giữ khoá
+    camelCase để output API đọc thẳng không cần remap. Không còn field-level metadata (`fields`) và
+    mô tả bảng (`table_description`) — đã chuyển sang endpoint edit field/table riêng, ngoài phạm vi
+    sync này.
 
     `domain_*` là metadata lĩnh vực (linh vực nghiệp vụ) của bảng do SW gửi kèm `tableInfo`, chỉ để
     đọc lại khi truy vấn quyền — không dùng để lọc/join gì trong phase này nên không chuẩn hoá
@@ -89,9 +91,8 @@ class AiUserPermission(SQLModel, table=True):
 
     __tablename__ = "ai_user_permissions"
     __table_args__ = (
-        UniqueConstraint("user_id", "form_uuid", name="uq_ai_user_permissions_user_form"),
+        UniqueConstraint("user_id", "database_table_name", name="uq_ai_user_permissions_user_table"),
         Index("idx_ai_user_permissions_user_id", "user_id"),
-        Index("idx_ai_user_permissions_user_table", "user_id", "database_table_name"),
         Index("idx_ai_user_permissions_domain_code", "domain_code"),
     )
 
@@ -104,7 +105,7 @@ class AiUserPermission(SQLModel, table=True):
     is_admin: bool = Field(
         default=False, sa_column=Column(Boolean, nullable=False, server_default=text("false"))
     )
-    form_uuid: str = Field(sa_column=Column(String(100), nullable=False))
+    form_uuid: str | None = Field(default=None, sa_column=Column(String(100), nullable=True))
     database_table_name: str = Field(sa_column=Column(String(255), nullable=False))
     table_display_name: str | None = Field(default=None, sa_column=Column(String(255), nullable=True))
     domain_code: str | None = Field(default=None, sa_column=Column(String(100), nullable=True))

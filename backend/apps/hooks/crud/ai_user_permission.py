@@ -22,27 +22,32 @@ def replace_user_permissions(
 ) -> tuple[int, int]:
     """Áp dụng FULL SNAPSHOT quyền của một user, trả `(số dòng upsert, số dòng xoá)`.
 
-    Ngữ nghĩa: `form_queries` là toàn bộ quyền hiện tại. Form nào không có trong đó thì bị xoá cứng
+    Ngữ nghĩa: `form_queries` là toàn bộ quyền hiện tại. Bảng nào không có trong đó thì bị xoá cứng
     — đây là cách duy nhất thu hồi được quyền vì payload của SW không có trường báo xoá. Danh sách
     rỗng nghĩa là thu hồi hết.
 
-    Dùng `INSERT ... ON CONFLICT (user_id, form_uuid) DO UPDATE` thay vì "xoá hết rồi chèn lại":
-    giữ được `id` và `created_at` của dòng cũ, và không có khoảng thời gian user mất sạch quyền
-    giữa hai câu lệnh.
+    Khoá định danh một dòng quyền là `(user_id, database_table_name)`, KHÔNG phải `form_uuid` —
+    `formUuid` optional ở phía SW (xem `FormQuery`), thứ SQLBot thực sự cần là "user này truy cập
+    được bảng nào", nên `database_table_name` mới là khoá so khớp giữa các lần đồng bộ. `form_uuid`
+    vẫn được ghi vào cột nếu SW có gửi, thuần tham khảo.
+
+    Dùng `INSERT ... ON CONFLICT (user_id, database_table_name) DO UPDATE` thay vì "xoá hết rồi chèn
+    lại": giữ được `id` và `created_at` của dòng cũ, và không có khoảng thời gian user mất sạch
+    quyền giữa hai câu lệnh.
 
     Không tự commit — caller chịu trách nhiệm commit sau khi lặp áp dụng xong cho cả batch, để
     nhiều user trong cùng request nằm trong đúng 1 transaction (xem `handlers/authorization.py`).
     """
     now = datetime.now(timezone.utc)
-    incoming_uuids = [form.form_uuid for form in form_queries]
+    incoming_table_names = [form.table_info.database_table_name for form in form_queries]
 
-    # Xoá trước: form không còn trong snapshot thì mất quyền ngay trong cùng transaction.
+    # Xoá trước: bảng không còn trong snapshot thì mất quyền ngay trong cùng transaction.
     delete_statement = AiUserPermission.__table__.delete().where(
         AiUserPermission.__table__.c.user_id == user_id
     )
-    if incoming_uuids:
+    if incoming_table_names:
         delete_statement = delete_statement.where(
-            AiUserPermission.__table__.c.form_uuid.notin_(incoming_uuids)
+            AiUserPermission.__table__.c.database_table_name.notin_(incoming_table_names)
         )
     result = session.execute(delete_statement)
     deleted = result.rowcount or 0
@@ -67,8 +72,8 @@ def replace_user_permissions(
         }
         statement = pg_insert(AiUserPermission.__table__).values(**values)
         statement = statement.on_conflict_do_update(
-            index_elements=["user_id", "form_uuid"],
-            set_={k: v for k, v in values.items() if k not in ("user_id", "form_uuid")},
+            index_elements=["user_id", "database_table_name"],
+            set_={k: v for k, v in values.items() if k not in ("user_id", "database_table_name")},
         )
         session.execute(statement)
         upserted += 1

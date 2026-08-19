@@ -153,6 +153,12 @@ change, không tương thích ngược) — field-level metadata (tên/mô tả 
 endpoint edit field/table riêng của SW. Gửi kèm 2 trường này vẫn không báo lỗi (bị bỏ qua âm thầm),
 nhưng không còn tác dụng gì.
 
+⚠ **`formUuid` không còn là khoá định danh.** Khoá thật để SQLBot nhận biết "đây là quyền nào" là
+`(userId, databaseTableName)`. Gửi lại đúng `databaseTableName` đó ở lần đồng bộ sau — dù kèm
+`formUuid` khác, thiếu hẳn `formUuid`, hay không gửi `formUuid` bao giờ — đều **ghi đè** đúng dòng
+quyền cũ, không tạo dòng mới. Hai `formQuery` khác nhau trỏ **cùng một bảng** trong CÙNG một request
+là lỗi (`DUPLICATE_DATABASE_TABLE_NAME`), kể cả khi `formUuid` của chúng khác nhau.
+
 | Trường | Kiểu | Bắt buộc | Ghi chú |
 |---|---|---|---|
 | `users` | array | Có | **Không được rỗng** — xem §8 mã lỗi `EMPTY_USER_LIST` |
@@ -160,9 +166,9 @@ nhưng không còn tác dụng gì.
 | `users[].fullName` | string | Không | |
 | `users[].isAdmin` | boolean | Có | |
 | `users[].formQueries` | array | Có | **Có thể rỗng** — xem §5 |
-| `formQueries[].formUuid` | string | Có | Không được rỗng, không được lặp trong `formQueries` của CÙNG một user |
+| `formQueries[].formUuid` | string | Không | Chỉ tham khảo, KHÔNG dùng để định danh dòng quyền — xem cảnh báo dưới |
 | `formQueries[].tableInfo` | object | Có | |
-| `tableInfo.databaseTableName` | string | Có | |
+| `tableInfo.databaseTableName` | string | Có | **Không được lặp trong `formQueries` của CÙNG một user** — đây mới là khoá định danh, xem §8 mã lỗi `DUPLICATE_DATABASE_TABLE_NAME` |
 | `tableInfo.tableDisplayName` | string | Không | |
 | `tableInfo.linhVucMa` | string | Không | Mã lĩnh vực nghiệp vụ của bảng |
 | `tableInfo.linhVucUuid` | string | Không | |
@@ -182,11 +188,12 @@ nhưng không còn tác dụng gì.
 - Với mỗi user trong `users`, SQLBot **thay thế toàn bộ** danh sách quyền của `userId` đó bằng đúng
   những gì có trong `formQueries` của chính user đó — không liên quan tới `formQueries` của user
   khác trong cùng batch.
-- Form nào **không có mặt** trong `formQueries` sẽ **bị xoá quyền** — kể cả khi trước đó user đã có
-  quyền trên form đó. Đây không phải "giữ nguyên", mà là "thu hồi".
+- Bảng nào (`databaseTableName`) **không có mặt** trong `formQueries` sẽ **bị xoá quyền** — kể cả
+  khi trước đó user đã có quyền trên bảng đó. Đây không phải "giữ nguyên", mà là "thu hồi". Khoá so
+  khớp giữa các lần đồng bộ là `databaseTableName`, không phải `formUuid` — xem cảnh báo ở §4.
 - `formQueries: []` nghĩa là **thu hồi toàn bộ quyền** của user.
 
-Nói cách khác: mỗi lần gọi hook, SW phải gửi đủ **toàn bộ** danh sách form user được phép truy cập
+Nói cách khác: mỗi lần gọi hook, SW phải gửi đủ **toàn bộ** danh sách bảng user được phép truy cập
 tại thời điểm đó, không chỉ phần vừa thêm/sửa.
 
 ⚠ **`formQueries: []` không phải là cách chặn một người dùng.** Nó xoá hết dòng quyền của user, và
@@ -316,7 +323,7 @@ tự áp dụng có ý nghĩa với nghiệp vụ.
 | 400 | `FAILED` | `MISSING_IDEMPOTENCY_KEY` | Thiếu header `X-Idempotency-Key` |
 | 400 | `FAILED` | `INVALID_ENVELOPE` | Envelope thiếu trường hoặc sai kiểu |
 | 400 | `FAILED` | `INVALID_PAYLOAD` | `payload` sai theo schema ở §4 / §6 (gồm cả `datasourceIds` chứa phần tử không phải số dạng chuỗi) |
-| 400 | `FAILED` | `DUPLICATE_FORM_UUID` | `formUuid` bị lặp trong `formQueries` của cùng một user |
+| 400 | `FAILED` | `DUPLICATE_DATABASE_TABLE_NAME` | `databaseTableName` bị lặp trong `formQueries` của cùng một user |
 | 400 | `FAILED` | `DUPLICATE_DATASOURCE_ID` | `datasourceId` bị lặp — trong `queries` của cùng một form (actionType 1), hoặc trong `datasourceIds` (actionType 4) |
 | 400 | `FAILED` | `DUPLICATE_USER_ID` | `userId` bị lặp giữa các phần tử trong `users` |
 | 400 | `FAILED` | `EMPTY_USER_LIST` | `payload.users` rỗng hoặc thiếu |
@@ -326,8 +333,8 @@ tự áp dụng có ý nghĩa với nghiệp vụ.
 | 500 | `FAILED` | `INTERNAL_ERROR` | Lỗi phía SQLBot |
 
 **actionType 1:** lỗi cấu trúc ở BẤT KỲ user nào trong `users` (kể cả `INVALID_PAYLOAD`,
-`DUPLICATE_FORM_UUID`, `DUPLICATE_USER_ID`, `EMPTY_USER_LIST`) làm **cả request FAILED** — không
-user nào trong batch được áp dụng.
+`DUPLICATE_DATABASE_TABLE_NAME`, `DUPLICATE_USER_ID`, `EMPTY_USER_LIST`) làm **cả request FAILED** —
+không user nào trong batch được áp dụng.
 
 **actionType 4:** chỉ ba lỗi cấu trúc `EMPTY_DATASOURCE_LIST` / `DUPLICATE_DATASOURCE_ID` /
 `INVALID_PAYLOAD` làm cả request FAILED. Mọi lý do khác (nguồn không tồn tại, không kết nối được,

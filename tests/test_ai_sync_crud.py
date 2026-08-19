@@ -118,3 +118,40 @@ def test_replace_user_permissions_upsert_cap_nhat_domain_khac(db_session):
     assert len(rows) == 1
     assert rows[0].domain_code == "LV_B"
     assert rows[0].domain_name == "Lĩnh vực B"
+
+
+def test_replace_user_permissions_khong_can_form_uuid(db_session):
+    """`form_uuid=None` (SW không gửi `formUuid`) vẫn ghi được — khoá là `database_table_name`."""
+    form = FormQuery.model_validate({
+        "tableInfo": {
+            "databaseTableName": "t-no-form-uuid",
+            "queries": [{"datasourceId": "d1", "datasourceType": "postgresql", "query": "SELECT 1"}],
+        },
+    })
+    replace_user_permissions(
+        db_session, user_id="u-no-form", full_name=None, is_admin=False,
+        form_queries=[form], sync_version=100,
+    )
+    db_session.commit()
+    rows = get_user_permissions(db_session, "u-no-form")
+    assert len(rows) == 1
+    assert rows[0].form_uuid is None
+    assert rows[0].database_table_name == "t-no-form-uuid"
+
+
+def test_replace_user_permissions_upsert_theo_bang_khong_theo_form_uuid(db_session):
+    """Gửi lại đúng bảng đó với `formUuid` khác — GHI ĐÈ dòng cũ, không tạo dòng mới."""
+    replace_user_permissions(
+        db_session, user_id="u-table-key", full_name="A", is_admin=False,
+        form_queries=[_form_query(form_uuid="f1")], sync_version=100,
+    )
+    db_session.commit()
+    replace_user_permissions(
+        db_session, user_id="u-table-key", full_name="A", is_admin=False,
+        form_queries=[_form_query(form_uuid="f2")], sync_version=200,
+    )
+    db_session.commit()
+    rows = get_user_permissions(db_session, "u-table-key")
+    assert len(rows) == 1
+    assert rows[0].form_uuid == "f2"
+    assert rows[0].sync_version == 200

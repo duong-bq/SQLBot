@@ -42,13 +42,19 @@ class SyncStatus(str, Enum):
 
 
 class SyncErrorCode(str, Enum):
-    """Mã lỗi trả cho SW. Giá trị là hợp đồng tích hợp, đổi tên là breaking change."""
+    """Mã lỗi trả cho SW. Giá trị là hợp đồng tích hợp, đổi tên là breaking change.
+
+    `DUPLICATE_FORM_UUID` không còn handler nào phát sinh (khoá định danh dòng quyền đã đổi từ
+    `formUuid` sang `database_table_name` — xem `DUPLICATE_DATABASE_TABLE_NAME`), nhưng giữ nguyên
+    trong enum vì xoá mã lỗi đã release cũng là breaking change.
+    """
 
     MALFORMED_JSON = "MALFORMED_JSON"
     MISSING_IDEMPOTENCY_KEY = "MISSING_IDEMPOTENCY_KEY"
     INVALID_ENVELOPE = "INVALID_ENVELOPE"
     INVALID_PAYLOAD = "INVALID_PAYLOAD"
     DUPLICATE_FORM_UUID = "DUPLICATE_FORM_UUID"
+    DUPLICATE_DATABASE_TABLE_NAME = "DUPLICATE_DATABASE_TABLE_NAME"
     DUPLICATE_DATASOURCE_ID = "DUPLICATE_DATASOURCE_ID"
     EMPTY_USER_LIST = "EMPTY_USER_LIST"
     DUPLICATE_USER_ID = "DUPLICATE_USER_ID"

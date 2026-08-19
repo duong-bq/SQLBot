@@ -24,7 +24,9 @@ class _FakeAuthMiddleware(BaseHTTPMiddleware):
         return await call_next(request)
 
 
-def _body(user_id: str, form_uuids: list[str]) -> dict:
+def _body(user_id: str, table_names: list[str]) -> dict:
+    """Dựng body AUTHORIZATION_SYNC — mỗi phần tử `table_names` thành 1 `formQuery` trên đúng bảng
+    đó. Không gửi `formUuid`: khoá định danh dòng quyền là `databaseTableName`, không phải form."""
     return {
         "actionType": 1,
         "payload": {
@@ -35,16 +37,15 @@ def _body(user_id: str, form_uuids: list[str]) -> dict:
                     "isAdmin": False,
                     "formQueries": [
                         {
-                            "formUuid": form_uuid,
                             "tableInfo": {
-                                "databaseTableName": "kdl_nhan_khau_row_values",
+                                "databaseTableName": table_name,
                                 "tableDisplayName": "Dữ liệu Nhân khẩu",
                                 "queries": [
-                                    {"datasourceId": "ds-pg", "datasourceType": "postgresql", "query": "SELECT * FROM kdl_nhan_khau_row_values WHERE province_id = '01'"},
+                                    {"datasourceId": "ds-pg", "datasourceType": "postgresql", "query": f"SELECT * FROM {table_name} WHERE province_id = '01'"},
                                 ],
                             },
                         }
-                        for form_uuid in form_uuids
+                        for table_name in table_names
                     ],
                 }
             ]
@@ -76,16 +77,16 @@ def _headers(key: str) -> dict:
 
 
 def test_e2e_dong_bo_roi_thu_hoi_va_retry(e2e_client, db_session):
-    # 1. Bản tin đầu: cấp 2 form
+    # 1. Bản tin đầu: cấp quyền trên 2 bảng
     resp = e2e_client.post(
         "/api/v1/hooks/ai-sync",
-        json=_body("usr-e2e", ["form-1", "form-2"]),
+        json=_body("usr-e2e", ["tbl-1", "tbl-2"]),
         headers=_headers("idem-e2e-1"),
     )
     assert resp.status_code == 200, resp.text
     assert resp.json()["status"] == "SUCCESS"
     assert resp.json()["applied"] == {"upserted": 2, "deleted": 0}
-    assert {r.form_uuid for r in get_user_permissions(db_session, "usr-e2e")} == {"form-1", "form-2"}
+    assert {r.database_table_name for r in get_user_permissions(db_session, "usr-e2e")} == {"tbl-1", "tbl-2"}
     log = get_log_by_idempotency_key(db_session, "idem-e2e-1")
     assert log.status == "SUCCESS"
     assert log.sync_version is not None
@@ -95,25 +96,47 @@ def test_e2e_dong_bo_roi_thu_hoi_va_retry(e2e_client, db_session):
     # 2. Retry đúng bản tin đó: DUPLICATE, không xử lý lại
     again = e2e_client.post(
         "/api/v1/hooks/ai-sync",
-        json=_body("usr-e2e", ["form-1", "form-2"]),
+        json=_body("usr-e2e", ["tbl-1", "tbl-2"]),
         headers=_headers("idem-e2e-1"),
     )
     assert again.json()["status"] == "DUPLICATE"
 
-    # 3. Bản tin mới hơn chỉ còn form-2: form-1 bị thu hồi
+    # 3. Bản tin mới hơn chỉ còn tbl-2: tbl-1 bị thu hồi
     newer = e2e_client.post(
         "/api/v1/hooks/ai-sync",
-        json=_body("usr-e2e", ["form-2"]),
+        json=_body("usr-e2e", ["tbl-2"]),
         headers=_headers("idem-e2e-2"),
     )
     assert newer.json()["applied"] == {"upserted": 1, "deleted": 1}
-    assert {r.form_uuid for r in get_user_permissions(db_session, "usr-e2e")} == {"form-2"}
+    assert {r.database_table_name for r in get_user_permissions(db_session, "usr-e2e")} == {"tbl-2"}
 
     # 4. Thu hồi hết quyền
     revoke = _body("usr-e2e", [])
     revoked = e2e_client.post("/api/v1/hooks/ai-sync", json=revoke, headers=_headers("idem-e2e-3"))
     assert revoked.json()["status"] == "SUCCESS"
     assert get_user_permissions(db_session, "usr-e2e") == []
+
+
+def test_e2e_trung_bang_trong_cung_request_tra_400(e2e_client, db_session):
+    """`formUuid` khác nhau nhưng cùng `databaseTableName` trong 1 request — lỗi, vì khoá định danh
+    giờ là bảng."""
+    body = {
+        "actionType": 1,
+        "payload": {
+            "users": [{
+                "userId": "usr-dup-table",
+                "isAdmin": False,
+                "formQueries": [
+                    {"formUuid": "f1", "tableInfo": {"databaseTableName": "tbl-x", "queries": [{"datasourceId": "d1", "datasourceType": "postgresql", "query": "SELECT 1"}]}},
+                    {"formUuid": "f2", "tableInfo": {"databaseTableName": "tbl-x", "queries": [{"datasourceId": "d1", "datasourceType": "postgresql", "query": "SELECT 1"}]}},
+                ],
+            }],
+        },
+    }
+    resp = e2e_client.post("/api/v1/hooks/ai-sync", json=body, headers=_headers("idem-dup-table"))
+    assert resp.status_code == 400
+    assert resp.json()["errorCode"] == "DUPLICATE_DATABASE_TABLE_NAME"
+    assert get_user_permissions(db_session, "usr-dup-table") == []
 
 
 def test_e2e_action_type_chua_ho_tro_van_de_lai_vet(e2e_client, db_session):
@@ -171,7 +194,7 @@ def test_e2e_batch_nhieu_user_deu_thanh_cong(e2e_client, db_session):
     results_by_user = {r["userId"]: r["status"] for r in body["results"]}
     assert results_by_user == {"usr-fresh": "SUCCESS", "usr-two": "SUCCESS"}
     assert body["applied"] == {"upserted": 1, "deleted": 0}
-    assert {r.form_uuid for r in get_user_permissions(db_session, "usr-fresh")} == {"form-y"}
+    assert {r.database_table_name for r in get_user_permissions(db_session, "usr-fresh")} == {"t"}
 
 
 def test_e2e_batch_1_user_loi_thi_khong_ai_duoc_ap_dung(e2e_client, db_session):

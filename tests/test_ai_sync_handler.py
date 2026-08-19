@@ -92,13 +92,55 @@ def test_trung_user_id_raise_duplicate_user_id_khong_ai_duoc_ap_dung(db_session)
     assert get_user_permissions(db_session, "u1") == []
 
 
-def test_trung_form_uuid_trong_1_user_raise_duplicate_form_uuid(db_session):
-    data = _user(forms=(("f1", "t1"), ("f1", "t2")))
+def test_trung_database_table_name_trong_1_user_raise_duplicate_database_table_name(db_session):
+    """Trùng `formUuid` không còn là lỗi — khoá định danh giờ là bảng, không phải form."""
+    data = _user(forms=(("f1", "t1"), ("f2", "t1")))
     with pytest.raises(SyncHookError) as exc:
         handle_authorization_sync(db_session, _envelope(_batch(data)), 1000)
     assert exc.value.http_status == 400
-    assert exc.value.error_code is SyncErrorCode.DUPLICATE_FORM_UUID
-    assert "f1" in exc.value.message
+    assert exc.value.error_code is SyncErrorCode.DUPLICATE_DATABASE_TABLE_NAME
+    assert "t1" in exc.value.message
+
+
+def test_trung_form_uuid_khac_bang_khong_con_la_loi(db_session):
+    """2 form cùng `formUuid` nhưng khác bảng — hợp lệ, vì `formUuid` chỉ còn tham khảo."""
+    data = _user(forms=(("f1", "t1"), ("f1", "t2")))
+    result = handle_authorization_sync(db_session, _envelope(_batch(data)), 1000)
+    assert result.results[0].status == "SUCCESS"
+    assert len(get_user_permissions(db_session, "u1")) == 2
+
+
+def test_form_uuid_khong_bat_buoc(db_session):
+    """SW không gửi `formUuid` — vẫn áp dụng được, khoá định danh là `databaseTableName`."""
+    data = {
+        "userId": "u1", "isAdmin": False,
+        "formQueries": [{
+            "tableInfo": {
+                "databaseTableName": "t1",
+                "queries": [{"datasourceId": "d1", "datasourceType": "postgresql", "query": "SELECT 1"}],
+            },
+        }],
+    }
+    result = handle_authorization_sync(db_session, _envelope(_batch(data)), 1000)
+    assert result.results[0].status == "SUCCESS"
+    rows = get_user_permissions(db_session, "u1")
+    assert len(rows) == 1
+    assert rows[0].form_uuid is None
+    assert rows[0].database_table_name == "t1"
+
+
+def test_gui_lai_cung_bang_khac_form_uuid_thi_ghi_de_khong_tao_dong_moi(db_session):
+    """Full-snapshot lần sau gửi lại đúng bảng đó nhưng `formUuid` khác (hoặc thiếu) — ghi đè dòng
+    cũ, không tạo dòng mới, vì khoá so khớp là bảng chứ không phải form."""
+    handle_authorization_sync(db_session, _envelope(_batch(_user(forms=(("f1", "t1"),)))), 1000)
+    result = handle_authorization_sync(
+        db_session, _envelope(_batch(_user(forms=(("f2", "t1"),)))), 2000
+    )
+    assert result.results[0].status == "SUCCESS"
+    assert (result.results[0].applied.upserted, result.results[0].applied.deleted) == (1, 0)
+    rows = get_user_permissions(db_session, "u1")
+    assert len(rows) == 1
+    assert rows[0].form_uuid == "f2"
 
 
 def test_trung_datasource_id_trong_1_form_raise_duplicate_datasource_id(db_session):
@@ -124,9 +166,9 @@ def test_trung_datasource_id_trong_1_form_raise_duplicate_datasource_id(db_sessi
 
 
 def test_1_user_loi_cau_truc_thi_ca_batch_khong_ai_duoc_ap_dung(db_session):
-    """all-or-nothing: user thứ 2 trùng formUuid thì user thứ 1 (hợp lệ) cũng không được áp dụng."""
+    """all-or-nothing: user thứ 2 trùng bảng thì user thứ 1 (hợp lệ) cũng không được áp dụng."""
     valid_user = _user("u1", (("f1", "t1"),))
-    invalid_user = _user("u2", (("f2", "t2"), ("f2", "t3")))
+    invalid_user = _user("u2", (("f2", "t2"), ("f3", "t2")))
     with pytest.raises(SyncHookError):
         handle_authorization_sync(db_session, _envelope(_batch(valid_user, invalid_user)), 1000)
     assert get_user_permissions(db_session, "u1") == []
