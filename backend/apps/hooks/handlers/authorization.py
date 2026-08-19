@@ -1,10 +1,10 @@
 """Handler cho `actionType = 1` (AUTHORIZATION_SYNC).
 
-Handler nhận BATCH nhiều user (`data.users`). Validate cấu trúc TOÀN BỘ batch trước khi áp dụng bất
-kỳ ai (all-or-nothing với lỗi cấu trúc: 1 user sai thì cả batch FAILED). Sau khi qua được bước đó,
-lặp áp dụng — mỗi user tự so `sync_version` với mốc đã áp của CHÍNH user đó, nên `STALE` tính riêng
-theo từng user chứ không theo cả batch. Không ghi audit log và không biết gì về HTTP — route lo hai
-việc đó.
+Handler nhận BATCH nhiều user (`payload.users`). Validate cấu trúc TOÀN BỘ batch trước khi áp dụng
+bất kỳ ai (all-or-nothing với lỗi cấu trúc: 1 user sai thì cả batch FAILED). Sau khi qua được bước
+đó, mỗi user trong batch LUÔN được áp full snapshot — không còn kiểm chống bản tin lùi (STALE), bản
+tin nào tới sau cũng ghi đè bản trước bất kể thứ tự thời gian thật. Không ghi audit log và không
+biết gì về HTTP — route lo hai việc đó.
 """
 
 from dataclasses import dataclass, field
@@ -13,7 +13,6 @@ from pydantic import ValidationError
 from sqlmodel import Session
 
 from apps.hooks.constants import SyncErrorCode, SyncStatus
-from apps.hooks.crud.ai_sync_log import get_last_applied_version
 from apps.hooks.crud.ai_user_permission import replace_user_permissions
 from apps.hooks.errors import SyncHookError
 from apps.hooks.schemas.ai_sync_schema import (
@@ -33,8 +32,8 @@ class HandlerResult:
     """Kết quả một lần xử lý bản tin batch, để route dựng response và chốt audit log.
 
     `status` luôn là `SUCCESS` khi hàm trả về bình thường (không raise) — batch đã qua validate cấu
-    trúc và được xử lý xong, bất kể có phần tử nào bên trong bị `STALE`/`FAILED`. Chi tiết từng
-    phần tử (user hoặc datasource, tùy actionType) nằm trong `results`.
+    trúc và được xử lý xong. Chi tiết từng phần tử (user hoặc datasource, tùy actionType) nằm trong
+    `results`.
     """
 
     status: SyncStatus
@@ -47,18 +46,18 @@ def handle_authorization_sync(
     """Parse payload batch rồi áp FULL SNAPSHOT cho từng user.
 
     Validate cấu trúc CẢ BATCH trước (schema, `userId` trùng, `formUuid` trùng trong từng user) —
-    bất kỳ lỗi nào ở bước này thì raise ngay, KHÔNG áp dụng cho ai. Qua được bước đó mới lặp áp dụng:
-    user nào `STALE` (`sync_version` không mới hơn mốc đã áp của CHÍNH user đó) bị bỏ qua, không phải
-    lỗi. Toàn bộ vòng lặp áp dụng nằm trong một transaction, commit đúng 1 lần ở cuối — lỗi bất ngờ
-    giữa batch phải để caller rollback sạch, không để nửa batch commit dở dang.
+    bất kỳ lỗi nào ở bước này thì raise ngay, KHÔNG áp dụng cho ai. Qua được bước đó thì mọi user đều
+    được áp dụng — không còn nhánh STALE. Toàn bộ vòng lặp áp dụng nằm trong một transaction, commit
+    đúng 1 lần ở cuối — lỗi bất ngờ giữa batch phải để caller rollback sạch, không để nửa batch
+    commit dở dang.
     """
     try:
-        batch = AuthorizationSyncBatch.model_validate(envelope.data)
+        batch = AuthorizationSyncBatch.model_validate(envelope.payload)
     except ValidationError as e:
         raise SyncHookError(400, SyncErrorCode.INVALID_PAYLOAD, str(e)) from e
 
     if not batch.users:
-        raise SyncHookError(400, SyncErrorCode.EMPTY_USER_LIST, "data.users không được rỗng")
+        raise SyncHookError(400, SyncErrorCode.EMPTY_USER_LIST, "payload.users không được rỗng")
 
     duplicated_user = find_duplicate_user_id(batch.users)
     if duplicated_user:
@@ -88,10 +87,6 @@ def handle_authorization_sync(
 
     results: list[UserSyncResult] = []
     for user_data in batch.users:
-        last_applied = get_last_applied_version(session, user_data.user_id)
-        if sync_version <= last_applied:
-            results.append(UserSyncResult(userId=user_data.user_id, status=SyncStatus.STALE.value))
-            continue
         upserted, deleted = replace_user_permissions(
             session,
             user_id=user_data.user_id,
