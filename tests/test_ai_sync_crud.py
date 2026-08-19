@@ -10,13 +10,12 @@ from apps.hooks.constants import SyncActionType, SyncStatus
 from apps.hooks.crud.ai_sync_log import (
     create_received_log,
     finish_log,
-    get_last_applied_version,
     get_log_by_idempotency_key,
 )
 from apps.hooks.crud.ai_user_permission import get_user_permissions, replace_user_permissions
 from apps.hooks.schemas.ai_sync_schema import FormQuery
 
-PAYLOAD = {"actionType": 1, "version": "1.0", "data": {"userId": "u1"}}
+PAYLOAD = {"actionType": 1, "payload": {"userId": "u1"}}
 
 
 def _new_log(session, key="key-1", user_id="u1"):
@@ -74,27 +73,6 @@ def test_finish_log_ghi_loi(db_session):
     assert log.status == SyncStatus.FAILED.value
     assert log.error_code == "INVALID_PAYLOAD"
     assert log.error_message == "userId rỗng"
-
-
-def test_get_last_applied_version_tra_0_khi_chua_co_gi(db_session):
-    assert get_last_applied_version(db_session, "user-moi") == 0
-
-
-def test_get_last_applied_version_chi_tinh_ban_success(db_session):
-    ok = _new_log(db_session, key="k-ok", user_id="u9")
-    finish_log(db_session, ok, status=SyncStatus.SUCCESS.value, sync_version=100)
-    failed = _new_log(db_session, key="k-failed", user_id="u9")
-    finish_log(db_session, failed, status=SyncStatus.FAILED.value, sync_version=999)
-    stale = _new_log(db_session, key="k-stale", user_id="u9")
-    finish_log(db_session, stale, status=SyncStatus.STALE.value, sync_version=888)
-    # chỉ bản SUCCESS được coi là "đã áp dụng"
-    assert get_last_applied_version(db_session, "u9") == 100
-
-
-def test_get_last_applied_version_tach_theo_user(db_session):
-    a = _new_log(db_session, key="k-a", user_id="ua")
-    finish_log(db_session, a, status=SyncStatus.SUCCESS.value, sync_version=500)
-    assert get_last_applied_version(db_session, "ub") == 0
 
 
 def _form_query(*, form_uuid="f1", domain_code="LV_DAN_CU", domain_name="Lĩnh vực Dân cư"):

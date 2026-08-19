@@ -8,7 +8,7 @@ nghiệp vụ rollback.
 from datetime import datetime, timezone
 from typing import Any
 
-from sqlalchemy import func, select
+from sqlalchemy import select
 from sqlmodel import Session
 
 from apps.hooks.constants import SyncStatus
@@ -65,8 +65,8 @@ def finish_log(
 ) -> AiSyncHookLog:
     """Chốt kết quả xử lý vào dòng audit và commit.
 
-    `sync_version` chỉ được ghi khi biết (envelope đã parse được). Với bản SUCCESS thì trường này
-    chính là mốc để `get_last_applied_version` chống bản tin lùi, nên không được bỏ.
+    `sync_version` chỉ được ghi khi biết (envelope đã parse được) — thuần thông tin để tra cứu lần
+    đồng bộ gần nhất, không còn dùng để chống bản tin lùi.
     """
     log.status = status
     log.error_code = error_code
@@ -78,17 +78,3 @@ def finish_log(
     session.commit()
     session.refresh(log)
     return log
-
-
-def get_last_applied_version(session: Session, user_id: str) -> int:
-    """`sync_version` lớn nhất đã áp dụng THÀNH CÔNG cho user, 0 nếu chưa có.
-
-    Cố ý đọc từ bảng log chứ không từ `ai_user_permissions`: sau một bản tin thu hồi hết quyền,
-    bảng permission không còn dòng nào của user nên mốc version sẽ mất, và một bản tin cũ gửi lại
-    sau đó sẽ được áp dụng ngược — đúng cái ca cần chống.
-    """
-    statement = select(func.max(AiSyncHookLog.sync_version)).where(
-        AiSyncHookLog.user_id == user_id,
-        AiSyncHookLog.status == SyncStatus.SUCCESS.value,
-    )
-    return session.execute(statement).scalar() or 0
