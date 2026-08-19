@@ -42,7 +42,7 @@ def _failed(ds_id: str, message: str) -> DatasourceSyncResult:
 def handle_datasource_sync(
     session: Session, envelope: SyncEnvelope, sync_version: int
 ) -> HandlerResult:
-    """Parse `data.datasourceIds` rồi resync từng datasource theo catalog DB nguồn của nó.
+    """Parse `payload.datasourceIds` rồi resync từng datasource theo catalog DB nguồn của nó.
 
     `sync_version` nhận cho khớp chữ ký chung của ACTION_HANDLERS nhưng cố ý không dùng — xem
     docstring module. `status` tổng thể luôn SUCCESS khi hàm trả về bình thường (batch đã được xử
@@ -57,13 +57,13 @@ def handle_datasource_sync(
     from apps.datasource.crud.datasource import resync_ds_metadata
 
     try:
-        payload = DatasourceSyncData.model_validate(envelope.data)
+        payload = DatasourceSyncData.model_validate(envelope.payload)
     except ValidationError as e:
         raise SyncHookError(400, SyncErrorCode.INVALID_PAYLOAD, str(e)) from e
 
     if not payload.datasource_ids:
         raise SyncHookError(
-            400, SyncErrorCode.EMPTY_DATASOURCE_LIST, "data.datasourceIds không được rỗng"
+            400, SyncErrorCode.EMPTY_DATASOURCE_LIST, "payload.datasourceIds không được rỗng"
         )
 
     duplicated = find_first_duplicate(payload.datasource_ids)
