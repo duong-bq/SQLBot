@@ -26,9 +26,7 @@ from apps.hooks.schemas.ai_sync_schema import SyncAppliedCounts, UserSyncResult
 
 VALID_BODY = {
     "actionType": 1,
-    "version": "1.0",
-    "timestamp": "2026-08-10T10:00:00Z",
-    "data": {"users": [{"userId": "usr-1", "fullName": "A", "isAdmin": False, "formQueries": []}]},
+    "payload": {"users": [{"userId": "usr-1", "fullName": "A", "isAdmin": False, "formQueries": []}]},
 }
 HEADERS = {"X-Request-ID": "req-1", "X-Idempotency-Key": "idem-1"}
 
@@ -135,8 +133,9 @@ def test_thanh_cong_tra_200_va_dem_dung(client, crud_patches):
     assert body["idempotencyKey"] == "idem-1"
     assert body["applied"] == {"upserted": 2, "deleted": 1}
     assert body["errorCode"] is None
-    # sync_version = epoch millis của 2026-08-10T10:00:00Z
-    assert handler.call_args[0][2] == 1786356000000
+    # sync_version giờ sinh từ thời điểm server xử lý — chỉ còn kiểm kiểu, không kiểm giá trị cố định
+    assert isinstance(handler.call_args[0][2], int)
+    assert handler.call_args[0][2] > 0
     # response KHÔNG bị bọc envelope {code,data,msg}
     assert "code" not in body and "data" not in body
 
@@ -214,12 +213,20 @@ def test_action_type_khong_hop_le_tra_422(client, crud_patches, action_type):
     crud_patches["create_log"].assert_called_once()
 
 
-def test_envelope_thieu_truong_tra_400(client, crud_patches):
-    body = {"actionType": 1, "data": {"userId": "u1", "isAdmin": False, "formQueries": []}}
+def test_envelope_thieu_payload_tra_400(client, crud_patches):
+    body = {"actionType": 1}
     resp = client.post("/api/v1/hooks/ai-sync", json=body, headers=HEADERS)
     assert resp.status_code == 400
     assert resp.json()["errorCode"] == "INVALID_ENVELOPE"
     crud_patches["create_log"].assert_called_once()
+
+
+def test_envelope_gui_key_data_cu_khong_con_hop_le(client, crud_patches):
+    """Key `data` (tên gốc trước khi đổi sang `payload`) không còn được chấp nhận."""
+    body = {"actionType": 1, "data": {"users": []}}
+    resp = client.post("/api/v1/hooks/ai-sync", json=body, headers=HEADERS)
+    assert resp.status_code == 400
+    assert resp.json()["errorCode"] == "INVALID_ENVELOPE"
 
 
 def test_trung_idempotency_key_tra_200_duplicate_va_khong_xu_ly_lai(client, crud_patches):
@@ -271,24 +278,6 @@ def test_handler_loi_khong_luong_truoc_tra_500(client, crud_patches):
     assert crud_patches["finish_log"].call_args.kwargs["status"] == SyncStatus.FAILED.value
 
 
-def test_ket_qua_voi_user_stale_tra_200_va_giu_status_stale_trong_results(client, crud_patches):
-    ctx, _ = _patch_handler(
-        result=HandlerResult(
-            status=SyncStatus.SUCCESS,
-            results=[UserSyncResult(userId="usr-1", status="STALE")],
-        )
-    )
-    with ctx:
-        resp = client.post("/api/v1/hooks/ai-sync", json=VALID_BODY, headers=HEADERS)
-    assert resp.status_code == 200
-    body = resp.json()
-    assert body["status"] == "SUCCESS"
-    assert body["results"] == [
-        {"userId": "usr-1", "status": "STALE", "applied": {"upserted": 0, "deleted": 0}}
-    ]
-    assert body["applied"] == {"upserted": 0, "deleted": 0}
-
-
 def test_body_voi_nhieu_user_tra_ket_qua_tung_user(client, crud_patches):
     ctx, _ = _patch_handler(
         result=HandlerResult(
@@ -298,13 +287,16 @@ def test_body_voi_nhieu_user_tra_ket_qua_tung_user(client, crud_patches):
                     userId="usr-1", status="SUCCESS",
                     applied=SyncAppliedCounts(upserted=1, deleted=0),
                 ),
-                UserSyncResult(userId="usr-2", status="STALE"),
+                UserSyncResult(
+                    userId="usr-2", status="SUCCESS",
+                    applied=SyncAppliedCounts(upserted=1, deleted=0),
+                ),
             ],
         )
     )
     body = dict(
         VALID_BODY,
-        data={
+        payload={
             "users": [
                 {"userId": "usr-1", "isAdmin": False, "formQueries": []},
                 {"userId": "usr-2", "isAdmin": False, "formQueries": []},
@@ -315,9 +307,9 @@ def test_body_voi_nhieu_user_tra_ket_qua_tung_user(client, crud_patches):
         resp = client.post("/api/v1/hooks/ai-sync", json=body, headers=HEADERS)
     assert resp.status_code == 200
     r = resp.json()
-    assert r["applied"] == {"upserted": 1, "deleted": 0}
+    assert r["applied"] == {"upserted": 2, "deleted": 0}
     assert [x["userId"] for x in r["results"]] == ["usr-1", "usr-2"]
-    assert [x["status"] for x in r["results"]] == ["SUCCESS", "STALE"]
+    assert [x["status"] for x in r["results"]] == ["SUCCESS", "SUCCESS"]
 
 
 def test_userid_trung_trong_batch_tra_400(client, crud_patches):
@@ -329,7 +321,7 @@ def test_userid_trung_trong_batch_tra_400(client, crud_patches):
     )
     body = dict(
         VALID_BODY,
-        data={
+        payload={
             "users": [
                 {"userId": "usr-1", "isAdmin": False, "formQueries": []},
                 {"userId": "usr-1", "isAdmin": False, "formQueries": []},
@@ -347,9 +339,9 @@ def test_users_rong_tra_400(client, crud_patches):
     from apps.hooks.errors import SyncHookError
 
     ctx, _ = _patch_handler(
-        error=SyncHookError(400, SyncErrorCode.EMPTY_USER_LIST, "data.users không được rỗng")
+        error=SyncHookError(400, SyncErrorCode.EMPTY_USER_LIST, "payload.users không được rỗng")
     )
-    body = dict(VALID_BODY, data={"users": []})
+    body = dict(VALID_BODY, payload={"users": []})
     with ctx:
         resp = client.post("/api/v1/hooks/ai-sync", json=body, headers=HEADERS)
     assert resp.status_code == 400
@@ -363,23 +355,8 @@ def test_path_hooks_khong_nam_trong_whitelist():
     assert whiteUtils.is_whitelisted("/api/v1/hooks/ai-sync") is False
 
 
-@pytest.mark.parametrize("missing", ["version", "timestamp"])
-def test_action_type_1_thieu_version_hoac_timestamp_tra_400(client, crud_patches, missing):
-    """Hai trường này optional ở model (để actionType 4 miễn) nhưng route vẫn bắt buộc với type 1.
-
-    Thiếu `timestamp` mà vẫn cho qua là mất mốc chống bản tin lùi — bản tin quyền cũ tới muộn sẽ
-    lặng lẽ ghi đè quyền mới.
-    """
-    body = dict(VALID_BODY)
-    body.pop(missing)
-    resp = client.post("/api/v1/hooks/ai-sync", json=body, headers=HEADERS)
-    assert resp.status_code == 400
-    assert resp.json()["errorCode"] == "INVALID_ENVELOPE"
-    assert missing in resp.json()["errorMessage"]
-
-
-def test_action_type_4_nhan_payload_khong_can_version_timestamp(client, crud_patches):
-    """Hợp đồng của bên tích hợp DATASOURCE_SYNC: chỉ `actionType` + `payload`, không vỏ thời gian."""
+def test_action_type_4_nhan_payload_dung_hop_dong(client, crud_patches):
+    """Hợp đồng của bên tích hợp DATASOURCE_SYNC: chỉ `actionType` + `payload`."""
     from apps.hooks.handlers import ACTION_HANDLERS
     from apps.hooks.schemas.ai_sync_schema import DatasourceSyncResult
 
@@ -399,7 +376,6 @@ def test_action_type_4_nhan_payload_khong_can_version_timestamp(client, crud_pat
     assert resp.status_code == 200
     assert resp.json()["status"] == "SUCCESS"
     assert resp.json()["applied"] == {"upserted": 102, "deleted": 1}
-    # handler vẫn nhận đủ payload dù nó tới dưới tên `payload`
-    assert handler.call_args.args[1].data == {"datasourceIds": ["50"]}
-    # thiếu timestamp thì KHÔNG bịa mốc: cột sync_version để trống
-    assert crud_patches["finish_log"].call_args.kwargs["sync_version"] is None
+    assert handler.call_args.args[1].payload == {"datasourceIds": ["50"]}
+    # sync_version luôn được ghi (server tự sinh), không còn None
+    assert crud_patches["finish_log"].call_args.kwargs["sync_version"] is not None

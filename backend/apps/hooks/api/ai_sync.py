@@ -31,6 +31,7 @@ Lưu ý: lỗi xác thực (401, thiếu/sai JWT) và lỗi thiếu quyền (`ws
 """
 
 import asyncio
+from datetime import datetime, timezone
 from typing import Any
 
 from fastapi import APIRouter, Request
@@ -189,9 +190,8 @@ async def ai_sync(request: Request, session: SessionDep) -> JSONResponse:
     logged_action_type = (
         int(action_type) if action_type else int(SyncActionType.UNKNOWN)
     )
-    raw_data = raw.get("data")
+    raw_data = raw.get("payload")
     best_effort_user_id = _best_effort_single_user_id(raw_data)
-    schema_version = raw.get("version") if isinstance(raw.get("version"), str) else None
 
     try:
         log = create_received_log(
@@ -199,7 +199,7 @@ async def ai_sync(request: Request, session: SessionDep) -> JSONResponse:
             request_id=request_id,
             idempotency_key=idempotency_key,
             action_type=logged_action_type,
-            schema_version=schema_version,
+            schema_version=None,
             user_id=best_effort_user_id if isinstance(best_effort_user_id, str) else None,
             request_payload=raw,
         )
@@ -253,23 +253,10 @@ async def ai_sync(request: Request, session: SessionDep) -> JSONResponse:
     except ValidationError as e:
         return fail(400, SyncErrorCode.INVALID_ENVELOPE, str(e))
 
-    # `version`/`timestamp` optional ở model nhưng bắt buộc cho AUTHORIZATION_SYNC: thiếu
-    # `timestamp` là mất hẳn mốc chống bản tin lùi (STALE), một bản tin quyền cũ tới muộn sẽ ghi
-    # đè quyền mới mà không ai biết. DATASOURCE_SYNC không có cơ chế đó nên không cần.
-    missing = [
-        name for name, value in (("version", envelope.version), ("timestamp", envelope.timestamp))
-        if value is None
-    ]
-    if action_type is SyncActionType.AUTHORIZATION_SYNC and missing:
-        return fail(
-            400,
-            SyncErrorCode.INVALID_ENVELOPE,
-            f"actionType 1 bắt buộc có {', '.join(missing)}",
-        )
-
-    # None (không phải 0) khi thiếu timestamp: `finish_log` bỏ qua giá trị None nên cột
-    # `sync_version` để trống, không sinh ra mốc giả mà `get_last_applied_version` có thể đọc nhầm.
-    sync_version = to_sync_version(envelope.timestamp) if envelope.timestamp is not None else None
+    # Không còn `timestamp` do SW gửi (đã bỏ khỏi envelope) — `sync_version` giờ là mốc server tự
+    # sinh tại thời điểm xử lý, thuần thông tin để tra cứu lần đồng bộ gần nhất, không còn dùng để
+    # chống bản tin lùi (cơ chế đó đã bỏ, xem handlers/authorization.py).
+    sync_version = to_sync_version(datetime.now(timezone.utc))
     handler = ACTION_HANDLERS[action_type]
     try:
         # PHẢI chạy ở thread riêng: handler làm việc chặn (DATASOURCE_SYNC đọc catalog + ghi
@@ -277,7 +264,7 @@ async def ai_sync(request: Request, session: SessionDep) -> JSONResponse:
         # loop dùng chung của cả tiến trình — mọi request khác đứng xếp hàng cho tới khi xong, và
         # triệu chứng là "backend chết" chứ không phải "hook chậm". `to_thread` (không phải
         # `executor.submit`) vì nó copy contextvar sang thread mới, giữ nguyên RequestContext.
-        result = await asyncio.to_thread(handler, session, envelope, sync_version or 0)
+        result = await asyncio.to_thread(handler, session, envelope, sync_version)
     except SyncHookError as e:
         session.rollback()
         return fail(e.http_status, e.error_code, e.message)
