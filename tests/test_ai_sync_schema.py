@@ -43,37 +43,36 @@ VALID_DATA = {
 
 
 def test_envelope_hop_le():
-    env = SyncEnvelope.model_validate(
-        {"actionType": 1, "version": "1.0", "timestamp": "2026-08-10T10:00:00Z", "data": VALID_DATA}
-    )
+    env = SyncEnvelope.model_validate({"actionType": 1, "payload": VALID_DATA})
     assert env.action_type == 1
-    assert env.version == "1.0"
-    assert env.timestamp == datetime(2026, 8, 10, 10, 0, tzinfo=timezone.utc)
-    assert env.data["userId"] == "usr-12345-67890"
+    assert env.payload["userId"] == "usr-12345-67890"
+    assert not hasattr(env, "version")
+    assert not hasattr(env, "timestamp")
+    assert not hasattr(env, "data")
 
 
-@pytest.mark.parametrize("missing", ["actionType", "data"])
+@pytest.mark.parametrize("missing", ["actionType", "payload"])
 def test_envelope_thieu_truong_bat_buoc(missing):
-    body = {"actionType": 1, "version": "1.0", "timestamp": "2026-08-10T10:00:00Z", "data": VALID_DATA}
+    body = {"actionType": 1, "payload": VALID_DATA}
     body.pop(missing)
     with pytest.raises(ValidationError):
         SyncEnvelope.model_validate(body)
 
 
-@pytest.mark.parametrize("missing", ["version", "timestamp"])
-def test_envelope_thieu_version_timestamp_van_parse_duoc(missing):
-    """`version`/`timestamp` optional ở MODEL — route mới là nơi bắt buộc chúng cho actionType 1."""
-    body = {"actionType": 1, "version": "1.0", "timestamp": "2026-08-10T10:00:00Z", "data": VALID_DATA}
-    body.pop(missing)
-    env = SyncEnvelope.model_validate(body)
-    assert getattr(env, "version" if missing == "version" else "timestamp") is None
+def test_envelope_khong_con_nhan_key_data():
+    """Key `data` (tên gốc trước khi đổi sang `payload`) không còn được chấp nhận."""
+    with pytest.raises(ValidationError):
+        SyncEnvelope.model_validate({"actionType": 4, "data": {"datasourceIds": ["50"]}})
 
 
-def test_envelope_nhan_ca_payload_lan_data():
-    """Bên tích hợp DATASOURCE_SYNC gửi khoá `payload`, hợp đồng gốc dùng `data` — nhận cả hai."""
-    env = SyncEnvelope.model_validate({"actionType": 4, "payload": {"datasourceIds": ["50"]}})
-    assert env.data == {"datasourceIds": ["50"]}
-    assert env.version is None and env.timestamp is None
+def test_envelope_bo_qua_version_va_timestamp_neu_sw_van_gui():
+    """SW gửi thừa `version`/`timestamp` (chưa kịp bỏ ở phía họ) thì hook bỏ qua âm thầm nhờ
+    `extra="ignore"`, không lỗi, không có tác dụng."""
+    env = SyncEnvelope.model_validate(
+        {"actionType": 1, "version": "1.0", "timestamp": "2026-08-10T10:00:00Z", "payload": VALID_DATA}
+    )
+    assert not hasattr(env, "version")
+    assert not hasattr(env, "timestamp")
 
 
 def test_payload_hop_le_va_parse_dung_alias():
