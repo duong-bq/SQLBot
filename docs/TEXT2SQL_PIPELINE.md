@@ -344,13 +344,13 @@ upstream, **cố ý giữ khi merge**:
 
 ### Tầng 3 — `check_sql_read`
 
-[db.py:1084](../backend/apps/db/db.py#L1084). Bốn kiểm tra độc lập:
+[db.py:1080](../backend/apps/db/db.py#L1080). Bốn kiểm tra độc lập:
 
 1. Từ khóa đầu phải thuộc `{SELECT, WITH}` (thêm `SHOW/DESCRIBE/DESC/EXPLAIN` nếu
    `SQLBOT_ALLOW_METADATA_QUERIES=True`); từ khóa ghi (`INSERT/UPDATE/DELETE/CREATE/DROP/ALTER/
    TRUNCATE/MERGE/COPY/REPLACE/GRANT/REVOKE/USE/SET/CALL`) bị chặn thẳng.
 2. Regex `DANGEROUS_PATTERNS`.
-3. Hàm nguy hiểm theo dialect (`get_dangerous_functions`, [db.py:1062](../backend/apps/db/db.py#L1062))
+3. Hàm nguy hiểm theo dialect (`get_dangerous_functions`, [db.py:1058](../backend/apps/db/db.py#L1058))
    — quét `exp.Anonymous` trong AST.
 4. Node ghi trong AST (`exp.Insert`, `exp.Update`, …) — bắt được cả câu lồng.
 

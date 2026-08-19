@@ -672,3 +672,30 @@ export SQLBOT_TEST_DB_URL="postgresql+psycopg://test:test@127.0.0.1:55432/sqlbot
 Chạy test không có DB (48 test skip): `set -a && . ./env.txt && set +a` rồi
 `backend/.venv/bin/python -m pytest tests/ -q`. Cần `env.txt` vì `sqlbot_xpack` `mkdir` `UPLOAD_DIR`
 ngay lúc import, mặc định là `/opt/sqlbot` — user thường không ghi được vào đó (§1).
+
+### 7.13. `extraJdbc` — tham số driver nhận nhưng không giữ lời hứa
+
+Ô "tham số phụ" của datasource đi thẳng vào driver dưới dạng keyword argument, sau khi
+[extra_params.py](../backend/apps/db/extra_params.py) ép tên và ép kiểu. Các hành vi dưới đây **đã
+đo trên server thật** (SQL Server 2019 + pymssql 2.3.13 gói FreeTDS 1.4.27; MySQL 8 + PyMySQL 2.2.8),
+không suy từ tài liệu driver.
+
+| Bẫy | Chi tiết |
+|---|---|
+| `encrypt` / `encryption` (sqlServer) **không mã hoá gì cả** | pymssql gọi `DBSETLENCRYPT` nhưng không kiểm giá trị trả về. TDSDUMP cho thấy gói PRELOGIN giống hệt nhau ở cả `off`/`request`/`require`, byte ENCRYPTION luôn bằng 0, và `sys.dm_exec_connections.encrypt_option` trả `FALSE`. Nay bị chặn ở 400 thay vì im lặng chạy trần |
+| Muốn mã hoá kênh SQL Server thì phải cấu hình ở **mức tiến trình** | Cách duy nhất còn tác dụng là một file `freetds.conf` có `encryption = required` cộng biến môi trường `FREETDSCONF` trỏ vào nó (đã kiểm: `encrypt_option` chuyển sang `TRUE`). Đây là cấu hình toàn tiến trình — bật là áp cho **mọi** datasource SQL Server của backend đó, không chọn riêng nguồn nào được |
+| FreeTDS phân biệt hoa thường ở tên charset | `UTF-8`, `utf8`, `UTF8` đều chạy; riêng `utf-8` viết thường làm **hỏng kết nối**. PyMySQL thì ngược lại: chỉ hiểu `utf8mb4`, không hiểu tên IANA. Vì vậy lớp kiểm tra chuẩn hoá giá trị trước khi đưa xuống driver (`Param.emit`) chứ không truyền nguyên |
+| `compress` (mysql) làm PyMySQL ném `NotImplementedError` ngay lúc mở kết nối | Không phải "không nén" — là hỏng hẳn, 500 ở tầng kết nối. Nay chặn ở 400 |
+| `read_timeout` (mysql) cắt cả truy vấn đang chạy | Không chỉ là timeout đọc socket lúc rảnh: query lâu hơn ngưỡng thì bị ngắt và kết nối đóng luôn. Đặt thấp là tự chặn báo cáo nặng của mình |
+| `read_only=true` (sqlServer) **không** chặn ghi | Chỉ là cờ `ApplicationIntent=ReadOnly` để AlwaysOn định tuyến sang replica. Trên instance thường, `CREATE TABLE` + `INSERT` vẫn chạy. Tầng chặn ghi thật là `check_sql_read` |
+| `ssl_verify_cert=true` không kèm `ssl_ca` thường **không kết nối được** | Driver đối chiếu chứng chỉ server với kho CA của máy chủ SQLBot; MySQL mặc định dùng chứng chỉ tự ký nên trượt với `CERTIFICATE_VERIFY_FAILED`. Muốn xác thực thật thì chép CA của server sang và trỏ `ssl_ca` |
+| `program_name` (mysql) không hiện trong `SHOW PROCESSLIST` | Nó là connection attribute, tra ở `performance_schema.session_connect_attrs`. Khác `appname` của SQL Server — cái đó `SELECT APP_NAME()` thấy ngay |
+
+Bảng tham số nạp lúc import module. Uvicorn chạy **không** có `--reload` (đường deploy hiện tại) thì
+sửa `extra_params.py` xong phải restart backend mới có hiệu lực — trước đó API vẫn trả kết quả theo
+luật cũ, rất dễ tưởng là sửa không ăn.
+
+⚠ Nguồn dữ liệu đi theo đường **assistant nhúng** không qua endpoint lưu nguồn: `extraParams` trong
+cấu hình bên ngoài được gán thẳng vào `extraJdbc`
+([assistant.py:295](../backend/apps/system/crud/assistant.py#L295)), nên sai tên tham số không lộ ra
+lúc cấu hình mà tới lúc người dùng hỏi mới báo 400.

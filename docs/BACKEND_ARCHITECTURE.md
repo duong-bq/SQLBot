@@ -45,7 +45,7 @@ backend/
 | `apps/chat/` | Hội thoại + **toàn bộ pipeline** | `task/llm.py` (2.5K dòng, trái tim hệ thống), `api/chat.py`, `curd/chat.py`, `models/chat_model.py`, `utils/attachment.py` (đọc file `.docx` đính kèm), `permission/sw_permission.py` (quyền dữ liệu theo user, đồng bộ từ SW) |
 | `apps/datasource/` | Datasource, bảng, cột, quan hệ, M-Schema | `crud/datasource.py`, `api/datasource.py`, `api/table_relation.py`, `embedding/table_embedding.py`, `crud/permission.py` |
 | `apps/datasource/task/` | Ba vòng chạy nền của luồng nạp Excel bất đồng bộ (xem §5) | `excel_import_task.py`, `callback_sender.py`, `excel_recovery.py` |
-| `apps/db/` | Tầng truy cập DB nghiệp vụ đa engine | `db.py` (1.3K dòng), `constant.py` (enum `DB`) |
+| `apps/db/` | Tầng truy cập DB nghiệp vụ đa engine | `db.py` (1.3K dòng), `constant.py` (enum `DB`), `extra_params.py` (kiểm tra tham số kết nối phụ) |
 | `apps/ai_model/` | Nạp và cache LLM / embedding model | `model_factory.py`, `embedding.py` |
 | `apps/terminology/` | Từ điển thuật ngữ nghiệp vụ + vector | `curd/terminology.py` |
 | `apps/data_training/` | Ví dụ SQL mẫu + vector | `curd/data_training.py` |
@@ -135,12 +135,13 @@ sinh khi merge nhánh), `072_add_chat_external_id.py`.
 | Đổi điểm dừng pipeline | [chat_model.py:54](../backend/apps/chat/models/chat_model.py#L54) `ChatFinishStep` |
 | Sửa M-Schema đưa vào prompt | [datasource.py:1063](../backend/apps/datasource/crud/datasource.py#L1063) `get_table_schema` |
 | Đổi cách chọn bảng theo embedding | [table_embedding.py:43](../backend/apps/datasource/embedding/table_embedding.py#L43) |
-| Sửa kiểm tra an toàn SQL | [llm.py:103](../backend/apps/chat/task/llm.py#L103) (whitelist bảng) + [db.py:1084](../backend/apps/db/db.py#L1084) (`check_sql_read`) |
+| Sửa kiểm tra an toàn SQL | [llm.py:103](../backend/apps/chat/task/llm.py#L103) (whitelist bảng) + [db.py:1080](../backend/apps/db/db.py#L1080) (`check_sql_read`) |
 | Sửa quyền dữ liệu theo user (bảng / cột / hàng) | [apps/chat/permission/sw_permission.py](../backend/apps/chat/permission/sw_permission.py) — suy diễn quyền và viết lại SQL; hai điểm cưỡng chế nằm ở `choose_table_schema` và ngay trước `execute_sql` trong `llm.py`. **Rồi cập nhật `TEXT2SQL_PIPELINE.md` §13** |
 | Thêm một loại database | [db/constant.py](../backend/apps/db/constant.py) enum `DB` + [db.py](../backend/apps/db/db.py) + một file `templates/sql_examples/*.yaml` |
 | Sửa endpoint hỏi đáp | [chat.py:485](../backend/apps/chat/api/chat.py#L485) |
 | Sửa xử lý file `.docx` đính kèm | `apps/chat/utils/attachment.py` (tải + trích + render khối prompt) + `apps/chat/curd/attachment.py` (lưu/đọc bảng) — **rồi cập nhật `API_SPEC.md` §6.10** |
 | Sửa quản trị datasource | [apps/datasource/api/datasource.py](../backend/apps/datasource/api/datasource.py) |
+| Thêm/bỏ tham số phụ hợp lệ của một loại DB | [apps/db/extra_params.py](../backend/apps/db/extra_params.py) — sửa `Spec` tương ứng. **Rồi cập nhật `DATASOURCE_API_SPEC.md` §3.1.1** và restart backend ([OPERATIONS.md §7.13](OPERATIONS.md)) |
 | Sửa luồng nạp Excel bất đồng bộ | `apps/datasource/task/` (3 vòng nền, §5) + `crud/excel_job.py` (mọi câu SQL của hàng đợi) + `utils/excel_import.py` (hàm thuần nạp file) + `utils/remote_file.py` (kiểm URL nguồn và tải file) |
 | Sửa hợp đồng callback với hệ ngoài | [callback_sender.py](../backend/apps/datasource/task/callback_sender.py) `send_callback` — **rồi cập nhật `DATASOURCE_API_SPEC.md` §9.3** |
 | Sửa auth / token | [apps/system/middleware/auth.py](../backend/apps/system/middleware/auth.py) + [apps/system/api/login.py](../backend/apps/system/api/login.py) |
@@ -291,16 +292,29 @@ số bị cấm trong `extraParams`.
 
 | Hàm | Dòng | Việc |
 |---|---|---|
-| `get_engine` | [139](../backend/apps/db/db.py#L139) | Engine SQLAlchemy, tùy chọn dùng pool |
-| `get_driver_connection` | [191](../backend/apps/db/db.py#L191) | Nhánh `py_driver` cho DB không có dialect SQLAlchemy tốt |
-| `check_connection` | [294](../backend/apps/db/db.py#L294) | Kiểm tra kết nối trước khi chạy pipeline |
-| `get_tables` / `get_fields` / `get_relations` | [497](../backend/apps/db/db.py#L497) / [547](../backend/apps/db/db.py#L547) / [597](../backend/apps/db/db.py#L597) | Đồng bộ metadata |
-| `exec_sql` | [775](../backend/apps/db/db.py#L775) | Chạy SQL, chuẩn hóa kiểu dữ liệu về JSON-safe |
-| `get_sqlglot_dialect` | [1026](../backend/apps/db/db.py#L1026) | Ánh xạ loại DB → dialect sqlglot, dùng ở cả bảo mật lẫn parse |
-| `check_sql_read` | [1084](../backend/apps/db/db.py#L1084) | Tầng bảo mật thứ 3 |
+| `get_engine` | [131](../backend/apps/db/db.py#L131) | Engine SQLAlchemy, tùy chọn dùng pool |
+| `get_driver_connection` | [187](../backend/apps/db/db.py#L187) | Nhánh `py_driver` cho DB không có dialect SQLAlchemy tốt |
+| `check_connection` | [290](../backend/apps/db/db.py#L290) | Kiểm tra kết nối trước khi chạy pipeline |
+| `get_tables` / `get_fields` / `get_relations` | [493](../backend/apps/db/db.py#L493) / [543](../backend/apps/db/db.py#L543) / [593](../backend/apps/db/db.py#L593) | Đồng bộ metadata |
+| `exec_sql` | [771](../backend/apps/db/db.py#L771) | Chạy SQL, chuẩn hóa kiểu dữ liệu về JSON-safe |
+| `get_sqlglot_dialect` | [1022](../backend/apps/db/db.py#L1022) | Ánh xạ loại DB → dialect sqlglot, dùng ở cả bảo mật lẫn parse |
+| `check_sql_read` | [1080](../backend/apps/db/db.py#L1080) | Tầng bảo mật thứ 3 |
+
+Tham số phụ người dùng nhập (`extraJdbc`) không đi thẳng vào driver mà qua
+[extra_params.py](../backend/apps/db/extra_params.py). Mỗi loại DB khai một `Spec` gồm ba nhóm tên:
+`params` (tên hợp lệ + kiểu, có ép kiểu và chuẩn hoá giá trị), `aliases` (tên quen tay kiểu JDBC →
+tên driver, có thể dịch cả giá trị), `reserved` (tên bị từ chối kèm lý do — gộp luôn
+`DB.illegalParams`). Tên lạ hoặc sai kiểu thì `400` ngay lúc lưu / kiểm tra kết nối, thay vì lỗi mờ
+ở tầng driver hoặc trôi qua im lặng. Ép kiểu là bắt buộc chứ không phải cho đẹp: chuỗi `"false"`
+khác rỗng nên với driver nó là giá trị **đúng**.
+
+Đường đi khác nhau theo loại: ClickHouse nhận tham số qua query string của URL
+(`build_extra_query`), các loại còn lại nhận qua `connect_args` / kwargs của driver. Năm loại chưa
+khai spec (`dm`, `redshift`, `hive`, `es`, `kingbase`) giữ hành vi nới cũ — truyền nguyên chuỗi,
+không kiểm.
 
 Hai pool manager riêng: `ConnectionPoolManager` (SQLAlchemy) và `DriverConnectionPoolManager`
-(py_driver), [db.py:1165](../backend/apps/db/db.py#L1165) và [1222](../backend/apps/db/db.py#L1222).
+(py_driver), [db.py:1152](../backend/apps/db/db.py#L1152) và [1220](../backend/apps/db/db.py#L1220).
 Pool của **DB metadata** thì cấu hình bằng `PG_POOL_SIZE` / `PG_MAX_OVERFLOW` / `PG_POOL_RECYCLE` /
 `PG_POOL_PRE_PING`.
 
