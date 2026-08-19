@@ -19,12 +19,12 @@ def test_mapping_action_type_dung_so():
     assert SyncActionType.DOCUMENT_SYNC == 6
 
 
-def test_chi_authorization_sync_duoc_implement():
+def test_chi_authorization_va_datasource_sync_duoc_implement():
     assert SyncActionType.AUTHORIZATION_SYNC in IMPLEMENTED_ACTION_TYPES
+    assert SyncActionType.DATASOURCE_SYNC in IMPLEMENTED_ACTION_TYPES
     for action in (
         SyncActionType.USER_SYNC,
         SyncActionType.ORGANIZATION_SYNC,
-        SyncActionType.DATASOURCE_SYNC,
         SyncActionType.KNOWLEDGE_SYNC,
         SyncActionType.DOCUMENT_SYNC,
     ):
