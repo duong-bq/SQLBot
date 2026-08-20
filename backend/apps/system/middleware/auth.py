@@ -23,10 +23,9 @@ from common.utils.utils import SQLBotLogUtil, get_origin_from_referer, origin_ma
 from common.utils.whitelist import whiteUtils
 from fastapi.security.utils import get_authorization_scheme_param
 from common.core.deps import get_i18n
+
+
 class TokenMiddleware(BaseHTTPMiddleware):
-    
-    
-    
     def __init__(self, app):
         super().__init__(app)
 
