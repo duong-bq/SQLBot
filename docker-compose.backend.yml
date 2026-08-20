@@ -12,29 +12,48 @@ services:
         condition: service_healthy
     ports:
       - "${BACKEND_HOST_PORT:-8001}:8000"
+    # Thứ tự các nhóm giống .env.example: sức ảnh hưởng giảm dần, sai nhóm đầu thì container không
+    # lên được, sai nhóm cuối chỉ đổi hành vi một tính năng. Thêm biến mới thì đặt đúng nhóm của nó
+    # ở cả hai file để hai nơi còn đối chiếu được với nhau.
     environment:
+      # --- Cơ sở dữ liệu hệ thống (service postgres bên dưới, nói chuyện trong mạng nội bộ) ---
       POSTGRES_SERVER: postgres
       POSTGRES_PORT: 5432
       POSTGRES_USER: ${POSTGRES_USER:-root}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?can POSTGRES_PASSWORD}
       POSTGRES_DB: ${POSTGRES_DB:-sqlbot}
 
-      # --- Cache ---
-      CACHE_TYPE: redis
-      CACHE_REDIS_URL: redis://redis:6379/0
-
+      # --- Bí mật ký token ---
+      # Không có mặc định là cố ý: code tự sinh khóa ngẫu nhiên mỗi lần khởi động, nên quên khai
+      # ở đây thì mọi phiên đăng nhập chết theo mỗi lần restart container.
       SECRET_KEY: "${SECRET_KEY:?can SECRET_KEY, sinh bang openssl rand -base64 32}"
+
+      # --- Đường dẫn dữ liệu: cố tình KHÔNG khai, dùng mặc định /opt/sqlbot/... của code ---
+      # Đổi các biến BASE_DIR/UPLOAD_DIR/EXCEL_PATH/MCP_IMAGE_PATH mà quên sửa `volumes` bên dưới
+      # là dữ liệu rơi vào lớp ghi của container và mất sạch sau mỗi lần dựng lại.
 
       # --- Embedding qua API, không nhúng model vào image ---
       EMBEDDING_PROVIDER: api
       EMBEDDING_API_BASE_URL: ${EMBEDDING_API_BASE_URL}
       EMBEDDING_API_MODEL: ${EMBEDDING_API_MODEL:-BAAI/bge-m3}
 
+      # --- Cache (service redis bên dưới) ---
+      CACHE_TYPE: redis
+      CACHE_REDIS_URL: redis://redis:6379/0
+
       # --- CORS: origin của ứng dụng đối tác, cách nhau bằng dấu phẩy ---
       BACKEND_CORS_ORIGINS: ${BACKEND_CORS_ORIGINS}
       FRONTEND_HOST: ${FRONTEND_HOST:-http://localhost:5173}
 
-      # --- Callback báo kết quả nạp Excel bất đồng bộ về hệ ngoài ---
+      # --- Tải file nguồn về và báo kết quả cho hệ ngoài ---
+      # Danh sách host được phép tải file về, ngăn cách bằng dấu phẩy, có thể kèm cổng.
+      # ĐỂ TRỐNG LÀ CHẶN SẠCH, không phải cho phép tất cả: đây là allowlist chống SSRF nên nó hỏng
+      # theo hướng đóng. Một biến này chi phối HAI tính năng — nạp excel bất đồng bộ
+      # (POST /datasource/createFromExcelAsync) và file .docx đính kèm câu hỏi (`fileUrl` của
+      # POST /chat/question) — nên quên điền là cả hai cùng trả 400 URL_HOST_NOT_ALLOWED, thông
+      # điệp trông như lỗi của bên gửi URL chứ không giống lỗi cấu hình.
+      FILE_DOWNLOAD_ALLOWED_HOSTS: ${FILE_DOWNLOAD_ALLOWED_HOSTS:-}
+
       # ĐỂ TRỐNG LÀ TẮT HẲN VIỆC GỬI. Không phải "gửi rồi lỗi": vòng gửi thoát ngay khi thấy URL
       # rỗng, nên thư nằm nguyên trong hàng đợi (bảng excel_import_jobs) và không đốt lần thử nào.
       # Nạp dữ liệu vẫn chạy đúng, chỉ là hệ ngoài không bao giờ biết kết quả — phải tự hỏi bằng
@@ -43,8 +62,21 @@ services:
       # Mã sự kiện trong phong bì gửi cho hệ ngoài; do đối tác quy định, không tự đổi.
       AI_CALLBACK_ACTION_TYPE: ${AI_CALLBACK_ACTION_TYPE:-999}
 
-      # --- Khác ---
+      # --- Hành vi pipeline chat ---
       LLM_DISABLE_THINKING: ${LLM_DISABLE_THINKING:-True}
+
+      # Gợi ý câu hỏi tiếp theo ngay trong POST /chat/question.
+      # Khác endpoint rời ở hai chỗ, và đó là lý do tồn tại của nó: câu hỏi cũ đưa vào prompt chỉ lấy
+      # của CHÍNH user đang hỏi (endpoint rời lấy 20 câu gần nhất của mọi user chung datasource), và
+      # kết quả chỉ ghi vào `chat_record` chứ không bao giờ ghi đè gợi ý cấp hội thoại.
+      CHAT_INLINE_RECOMMEND_ENABLED: ${CHAT_INLINE_RECOMMEND_ENABLED:-True}
+      # Số câu gợi ý tối đa. Đây là trần đưa vào prompt, LLM có thể trả ít hơn.
+      CHAT_INLINE_RECOMMEND_COUNT: ${CHAT_INLINE_RECOMMEND_COUNT:-2}
+      # Số câu hỏi cũ CỦA CHÍNH user đưa vào prompt gợi ý. Chỉ dùng để LLM đoán thói quen hỏi, nhiều
+      # hơn không tốt hơn mà chỉ tốn token.
+      CHAT_INLINE_RECOMMEND_HISTORY: ${CHAT_INLINE_RECOMMEND_HISTORY:-20}
+
+      # --- Môi trường container ---
       TZ: Asia/Ho_Chi_Minh
     volumes:
       - sqlbot_data:/opt/sqlbot/data
