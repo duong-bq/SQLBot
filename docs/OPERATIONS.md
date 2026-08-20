@@ -83,8 +83,9 @@ dụng thật**, không theo thứ tự trong file.
 |---|---|---|
 | `GENERATE_CHART_ENABLED` | `True` | Chạy pha sinh biểu đồ sau pha answer trên `POST /chat/question`. Thực chất là chọn `finish_step` mặc định của endpoint đó: `True` → `GENERATE_CHART`, `False` → `GENERATE_ANSWER` |
 
-Cái giá khi bật: thêm **một** lượt gọi LLM cho mỗi câu hỏi (2 → 3). Lượt này chạy song song với pha
-answer nên độ trễ tới `finish` tăng ít hơn nhiều so với chi phí token.
+Cái giá khi bật: thêm **một** lượt gọi LLM cho mỗi câu hỏi (2 → 3, hoặc 3 → 4 nếu đang bật gợi ý câu
+hỏi ở §2.10). Lượt này chạy song song với pha answer nên độ trễ tới `finish` tăng ít hơn nhiều so
+với chi phí token.
 
 Không đụng tới nhánh MCP (tự truyền `QUERY_DATA`) lẫn nhánh hạ cấp — không có dữ liệu thì biểu đồ vô
 nghĩa, `run_task` bỏ qua bất kể biến này.
@@ -205,14 +206,32 @@ người dùng bấm gửi lại chính là vòng retry.
 Hai trần cuối ảnh hưởng trực tiếp tới prompt nhưng **chưa được đo bằng harness** (§4) — đổi thì phải
 đo lại chứ đừng tin cảm giác.
 
-### 2.10. Khác
+### 2.10. Gợi ý câu hỏi tiếp theo trong lượt hỏi
+
+| Biến | Mặc định | Tác dụng |
+|---|---|---|
+| `CHAT_INLINE_RECOMMEND_ENABLED` | `True` | Sinh gợi ý câu hỏi tiếp theo ngay trong `POST /chat/question`, trả về ở event `recommended_question`. Tắt thì client phải tự gọi `POST /chat/recommend_questions` như cũ |
+| `CHAT_INLINE_RECOMMEND_COUNT` | `2` | Số câu gợi ý tối đa. Là trần đưa vào prompt, LLM có thể trả ít hơn |
+| `CHAT_INLINE_RECOMMEND_HISTORY` | `20` | Số câu hỏi cũ **của chính user đó** đưa vào prompt gợi ý. Nhiều hơn không tốt hơn, chỉ tốn token |
+
+Cái giá khi bật: thêm **một** lượt gọi LLM cho mỗi câu hỏi. Chạy song song với pha answer và pha
+biểu đồ nên gần như không đội thêm độ trễ tới `finish`.
+
+Chỉ áp dụng cho nhánh SSE (`in_chat`), không đụng tới nhánh MCP. Lượt hỏi **hỏng hẳn** (event
+`error`) thoát trước điểm khởi động nên không tốn lượt gọi nào; lượt **hạ cấp** thì vẫn có gợi ý —
+xem TEXT2SQL_PIPELINE.md §6.
+
+Không dùng chung đường với endpoint rời `/chat/recommend_questions`: endpoint đó giữ nguyên hành vi
+cũ, kể cả phần đọc câu hỏi của user khác (§7.2).
+
+### 2.11. Khác
 
 `CACHE_TYPE` (`memory`/`redis`/`None`), `CACHE_REDIS_URL`, `LOG_LEVEL`, `LOG_DIR`, `SQL_DEBUG`,
 `PG_POOL_SIZE`/`PG_MAX_OVERFLOW`/`PG_POOL_RECYCLE`/`PG_POOL_PRE_PING` (pool của **DB metadata**),
 `ORACLE_CLIENT_PATH`, `CONTEXT_PATH` (prefix URL, mặc định rỗng).
 
 Biến bool nhận cả `"true"`/`"True"`/`"false"` nhờ validator `lowercase_bool`
-([config.py:277](../backend/common/core/config.py#L277)).
+([config.py:305](../backend/common/core/config.py#L305)).
 
 ---
 
@@ -487,6 +506,11 @@ hoa-thường, scope query hỏng cú pháp, bảng có nhiều scope mâu thu�
 `GET /datasource/list` và `GET /datasource/get/{id}`. Bất kỳ tài khoản nào đọc được datasource là
 đọc được credential. Cân nhắc trước khi cấp token cho bên thứ ba.
 
+**`POST /chat/recommend_questions` đọc câu hỏi của người dùng khác.** Nó lấy 20 câu hỏi gần nhất
+của **mọi** tài khoản dùng chung datasource (`get_old_questions`) rồi nhồi vào prompt, nên gợi ý trả
+về cho A có thể lộ chuyện B đang hỏi gì. Chưa sửa — endpoint giữ nguyên hành vi cũ có chủ ý. Pha gợi
+ý chạy trong `POST /chat/question` (§2.10) không dính lỗi này: nó chỉ đọc câu hỏi của chính user.
+
 **`.mcp.json` đang được git track và chứa credential thật** của hai server MCP (một DB nghiệp vụ
 remote và DB metadata local). File này đã nằm trong lịch sử commit. Đừng chép giá trị của nó vào bất
 kỳ tài liệu, log hay issue nào; nếu cần xoay vòng mật khẩu thì phải xử lý cả lịch sử git.
@@ -514,6 +538,7 @@ kỳ tài liệu, log hay issue nào; nếu cần xoay vòng mật khẩu thì p
 | Số liệu nằm ở trường `data` của `sql-data`, **không** phải `content` | `content` vẫn là chuỗi `"execute-success"` — giữ nguyên để client cũ không vỡ |
 | Dựng payload `sql-data` **trước** `save_sql_data` → client nhận nhiều dòng hơn bản lưu DB | Bước lưu mới là chỗ cắt xuống 1000 dòng và gắn `limit`. Xem `build_sql_data_payload` |
 | Tài liệu `.docx` đính kèm **biến mất** khỏi ngữ cảnh sau vài lượt | Cố ý: nó là message, không phải hạ tầng, nên trôi theo cửa sổ lịch sử như câu hỏi thường. Người dùng báo "hỏi lại thì bot quên file" là đúng thiết kế, không phải bug — xem TEXT2SQL_PIPELINE.md §10 |
+| Pha gợi ý câu hỏi hỏng **không** giết lượt hỏi | Giống pha biểu đồ: chỉ phát `info: recommended question failed` rồi đi tiếp. LLM trả rác thì lưu `[]`, client nhận `content: "[]"` chứ không phải thiếu event |
 | Pha biểu đồ hỏng **không** giết lượt hỏi | Phát `info: chart failed` rồi đi tiếp; vẫn có `answer` + `finish`. Cố ý không gọi `save_error` vì web UI hiện khối lỗi đỏ với mọi record có `error` khác rỗng |
 | Lỗi giữa stream vẫn là **HTTP 200** | Phải đọc event `error`, không dựa vào status code |
 | Cắt dòng dữ liệu mà không kèm `build_data_scope_note` → LLM bịa số tổng | Xem [TEXT2SQL_PIPELINE.md §6](TEXT2SQL_PIPELINE.md) |

@@ -368,6 +368,9 @@ event `answer`. SQL vẫn dùng được bình thường.
 | `info` | `{type, msg: "answer generated"}` | Kết thúc pha answer |
 | `info` | `{type, msg: "answer failed"}` | Pha answer lỗi — sẽ **không có** event `answer` |
 | `answer` | `{type, content}` | Cùng câu trả lời đó, gộp sẵn một chuỗi — tùy chọn |
+| `info` | `{type, msg: "recommended question generated"}` | Pha gợi ý câu hỏi tiếp theo xong |
+| `recommended_question` | `{type, content}` | **Gợi ý câu hỏi tiếp theo**, `content` là **chuỗi JSON** chứa mảng câu hỏi — xem [§6.12](#612-gợi-ý-câu-hỏi-tiếp-theo) |
+| `info` | `{type, msg: "recommended question failed"}` | Pha gợi ý lỗi — **không có** event `recommended_question`, phần còn lại của lượt hỏi vẫn bình thường |
 | `finish` | `{type}` | Kết thúc |
 | `error` | `{type, content}` | Lỗi pipeline — xem [§6.7](#67--lỗi-giữa-stream-vẫn-là-http-200) |
 
@@ -376,12 +379,18 @@ thống bật pha sinh biểu đồ** (mặc định bật). Không dùng biểu
 hợp đồng không đổi.
 
 Cấu hình biểu đồ **không** được stream theo từng token: nó là một khối JSON, mảnh dở dang thì không
-parse được nên chẳng dùng vào việc gì. Client nhận trọn gói ở event `chart`.
+parse được nên chẳng dùng vào việc gì. Client nhận trọn gói ở event `chart`. Gợi ý câu hỏi tiếp theo
+cũng vậy — về trọn gói ở event `recommended_question`.
+
+Nhóm event gợi ý (`info: recommended question generated` + `recommended_question`, hoặc
+`info: recommended question failed`) **chỉ có khi hệ thống bật pha gợi ý** (mặc định bật). Không
+dùng thì bỏ qua cả nhóm, phần còn lại của hợp đồng không đổi.
 
 ### 6.4. Trình tự thực tế
 
 Capture thật, câu hỏi *"Có tổng số bao nhiêu Nghị quyết"* trên datasource `id = 1`, tổng thời gian
-**4 giây**:
+**4 giây**. Đây là bộ event **lõi** — chụp khi tắt cả hai nhóm tùy chọn (biểu đồ và gợi ý câu hỏi);
+mỗi nhóm chèn thêm event gì thì xem hai mục con ngay dưới:
 
 ```
    event            số lượng
@@ -422,9 +431,25 @@ event biểu đồ. Tỷ lệ trước/sau phụ thuộc pha nào xong trước,
 
 Ba điều **giữ nguyên** so với khi tắt biểu đồ, dựa vào được:
 
-- `answer` vẫn là event áp chót, ngay trước `finish`.
 - `chart` luôn đứng ngay sau `info: chart generated`.
 - Không có event token nào mới — chỉ `sql-result` và `answer-result` như cũ.
+- Phần đuôi sau `answer` không đổi.
+
+#### Khi bật gợi ý câu hỏi tiếp theo
+
+Chen thêm hai event mốc vào **cuối** stream, ngay trước `finish` (capture thật, một lượt hỏi bình
+thường mất **5.2 giây**):
+
+```
+answer                  1     ★ câu trả lời gộp sẵn
+info                    1     {"msg":"recommended question generated"}   ← hoặc {"msg":"recommended question failed"}
+recommended_question    1     ★ gợi ý câu hỏi tiếp theo                  ← không có nếu failed
+finish                  1
+```
+
+`recommended_question` luôn đứng ngay sau `info: recommended question generated`, và `finish` vẫn là
+event cuối cùng. Bật nhóm này thì **`answer` không còn là event áp chót** — client nào đang lấy
+`answer` làm dấu hiệu sắp đóng stream phải chuyển sang `finish`.
 
 #### Mốc thời gian thực đo — dữ liệu về **dần theo pha**
 
@@ -451,6 +476,9 @@ Ba điều **giữ nguyên** so với khi tắt biểu đồ, dựa vào đượ
 - Pha biểu đồ lỗi → `info: chart failed` thay cho `info: chart generated` + `chart`; **mọi thứ khác
   giữ nguyên**, vẫn có đủ `answer` và `finish`
 - Hệ thống tắt pha biểu đồ → không có `info: chart generated` / `chart` / `info: chart failed`
+- Pha gợi ý lỗi → `info: recommended question failed` thay cho `info: recommended question
+  generated` + `recommended_question`; **mọi thứ khác giữ nguyên**
+- Hệ thống tắt pha gợi ý → không có nhóm event gợi ý; `answer` quay lại làm event áp chót
 
 ### 6.5. Nội dung câu trả lời và câu SQL
 
@@ -718,6 +746,37 @@ lặng mở rộng phạm vi câu hỏi trong trường hợp đó là điều n
 cần gửi lại `domainCode`.
 
 **Phạm vi dữ liệu của câu trả lời** — xem [§7.7](#77-câu-trả-lời-nằm-trong-phạm-vi-quyền-của-tài-khoản).
+
+---
+
+### 6.12. Gợi ý câu hỏi tiếp theo
+
+Mỗi lượt hỏi kèm sẵn vài câu hỏi gợi ý cho lượt sau, hợp với nội dung vừa hỏi và dữ liệu tài khoản
+đó được phép khai thác. Client **không phải gọi thêm API nào** — gợi ý về ngay trên stream của
+chính lượt hỏi đó.
+
+```json
+{"content": "[\"Hiển thị biểu đồ tròn tỷ lệ giới tính đại biểu\",\"Liệt kê danh sách 10 đại biểu nữ mới nhất\"]", "type": "recommended_question"}
+```
+
+Trường `content` là **chuỗi JSON**, không phải mảng — phải `JSON.parse` một lần nữa mới ra danh sách
+câu hỏi. Cùng quy ước với event `chart`.
+
+**Bốn điều cần phòng khi render:**
+
+| Tình huống | Client nhận được | Nên làm |
+|---|---|---|
+| Bình thường | 2 câu hỏi | Hiện thành nút bấm, bấm là gửi thẳng câu đó làm lượt hỏi mới |
+| Không đoán được gợi ý nào | `content` là `"[]"` | Ẩn khu vực gợi ý, **không** hiện khối rỗng |
+| Pha gợi ý lỗi | Chỉ có `info: recommended question failed` | Ẩn khu vực gợi ý |
+| Lượt hỏi hỏng hẳn (`error`) | Không có event nào của nhóm này | Ẩn khu vực gợi ý |
+
+Số lượng câu gợi ý do hệ thống cấu hình (hiện là **2**) và có thể đổi mà không báo trước — **đừng
+hard-code layout theo đúng 2 ô**. Nội dung câu hỏi luôn là chuỗi thuần, gửi lại nguyên văn ở trường
+`question` của lượt hỏi tiếp theo.
+
+Gợi ý sinh ra cho **riêng tài khoản đang hỏi**, dựa trên lịch sử hỏi của chính họ, nên không dùng
+chung được giữa các tài khoản: đừng cache theo `chat_id` hay theo datasource.
 
 ---
 

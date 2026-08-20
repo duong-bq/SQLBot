@@ -16,13 +16,14 @@ xa khỏi upstream**, cả về pipeline lẫn mục tiêu sản phẩm.
 ## 2. Fork này khác upstream ở đâu
 
 Đây là phần quan trọng nhất của cả file. Kiến thức về SQLBot upstream (kể cả từ tài liệu trên
-mạng) sẽ dẫn bạn đi sai ở đúng năm chỗ này:
+mạng) sẽ dẫn bạn đi sai ở đúng sáu chỗ này:
 
 | Điểm | Upstream | Repo này |
 |---|---|---|
 | Pha cuối pipeline | Sinh **biểu đồ** (chart JSON) | Sinh **câu trả lời bằng lời** (answer), rồi chart chạy **song song** với nó. Bật/tắt chart bằng `GENERATE_CHART_ENABLED` |
 | Khi pha SQL hỏng | Trả event `error`, hết lượt | Sinh lại SQL (`LLM_SQL_MAX_RETRY`), vẫn hỏng thì **hạ cấp** sang trả lời dựa trên lịch sử hội thoại |
-| Đối tượng dùng | Web UI là chính | **API-first**: đối tác tích hợp gọi thẳng `POST /chat/question` qua SSE. Một lời gọi trả đủ `sql`, số liệu, `answer`, `chart` — không phải gọi thêm API nào |
+| Đối tượng dùng | Web UI là chính | **API-first**: đối tác tích hợp gọi thẳng `POST /chat/question` qua SSE. Một lời gọi trả đủ `sql`, số liệu, `answer`, `chart` và **gợi ý câu hỏi tiếp theo** — không phải gọi thêm API nào |
+| Gợi ý câu hỏi tiếp theo | Endpoint rời `POST /chat/recommend_questions`, client phải gọi thêm một lượt | Sinh sẵn **trong chính lượt hỏi**, về ở event `recommended_question`. Endpoint rời vẫn còn nhưng là đường khác, và câu hỏi cũ nạp vào prompt chỉ lấy của **chính user đang hỏi** |
 | Ngôn ngữ prompt | Tiếng Trung | Tiếng Việt (`backend/templates/template.yaml` đã dịch và viết lại) |
 | Phân quyền dữ liệu | Row/column permission cấu hình tay trên UI, nhờ LLM viết lại điều kiện lọc | Thêm một lớp **độc lập**: quyền bảng/cột/hàng đồng bộ từ hệ SW, cưỡng chế **tất định** bằng `sqlglot` |
 
@@ -37,8 +38,9 @@ Hệ quả cụ thể: `ChatFinishStep` đã bị **đánh số lại** để ch
   quyết định (mặc định bật) qua `default_finish_step`
   ([chat.py:465](../backend/apps/chat/api/chat.py#L465)); nhánh MCP truyền `QUERY_DATA`
   ([mcp.py:258](../backend/apps/mcp/mcp.py#L258)).
-- Số lần gọi LLM cho một lượt hỏi bình thường: **3** (sinh SQL + answer + chart; hai lần sau chạy
-  song song). Tắt chart thì còn 2.
+- Số lần gọi LLM cho một lượt hỏi bình thường: **4** (sinh SQL + answer + chart + gợi ý câu hỏi
+  tiếp theo; ba lần sau chạy song song). Tắt chart còn 3, tắt cả gợi ý
+  (`CHAT_INLINE_RECOMMEND_ENABLED=false`) còn 2.
 - Kết quả SQL đi kèm luôn trong event `sql-data` của stream. Endpoint
   `GET /chat/record/{id}/data` vẫn còn để web UI dựng lại hội thoại cũ, nhưng đối tác không cần
   dùng tới và `API_SPEC.md` đã bỏ mô tả nó.

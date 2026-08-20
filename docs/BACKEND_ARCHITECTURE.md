@@ -126,12 +126,13 @@ sinh khi merge nhánh), `072_add_chat_external_id.py`.
 
 | Muốn | Mở |
 |---|---|
-| Sửa cách sinh SQL / thứ tự message | [llm.py:358](../backend/apps/chat/task/llm.py#L358) `init_messages` + [llm.py:1116](../backend/apps/chat/task/llm.py#L1116) `generate_sql` |
+| Sửa cách sinh SQL / thứ tự message | [llm.py:358](../backend/apps/chat/task/llm.py#L358) `init_messages` + [llm.py:1222](../backend/apps/chat/task/llm.py#L1222) `generate_sql` |
 | Sửa nội dung prompt (bất kỳ pha nào) | [templates/template.yaml](../backend/templates/template.yaml) — bản đồ khối ở [TEXT2SQL_PIPELINE.md §10](TEXT2SQL_PIPELINE.md) |
 | Sửa prompt riêng cho một loại DB | [templates/sql_examples/](../backend/templates/sql_examples/) |
 | Sửa pha trả lời bằng lời | [llm.py:662](../backend/apps/chat/task/llm.py#L662) + khối `answer` ở [template.yaml:630](../backend/templates/template.yaml#L630) |
-| Sửa vòng retry / hạ cấp | [llm.py:1697-1870](../backend/apps/chat/task/llm.py#L1697) |
-| Thêm/sửa event SSE | `run_task` ([llm.py:1622](../backend/apps/chat/task/llm.py#L1622)) — **rồi cập nhật `API_SPEC.md` §6.3** |
+| Sửa vòng retry / hạ cấp | [llm.py:1803-1976](../backend/apps/chat/task/llm.py#L1803) |
+| Sửa pha gợi ý câu hỏi tiếp theo (chạy trong lượt hỏi) | [llm.py:842](../backend/apps/chat/task/llm.py#L842) `generate_inline_recommend` + [chat.py:1406](../backend/apps/chat/curd/chat.py#L1406) `get_user_old_questions`. Endpoint rời `/chat/recommend_questions` là **đường khác**, đừng sửa nhầm |
+| Thêm/sửa event SSE | `run_task` ([llm.py:1728](../backend/apps/chat/task/llm.py#L1728)) — **rồi cập nhật `API_SPEC.md` §6.3** |
 | Đổi điểm dừng pipeline | [chat_model.py:54](../backend/apps/chat/models/chat_model.py#L54) `ChatFinishStep` |
 | Sửa M-Schema đưa vào prompt | [datasource.py:1063](../backend/apps/datasource/crud/datasource.py#L1063) `get_table_schema` |
 | Đổi cách chọn bảng theo embedding | [table_embedding.py:43](../backend/apps/datasource/embedding/table_embedding.py#L43) |
@@ -361,7 +362,7 @@ Hai cái bẫy đi kèm nằm ở [OPERATIONS.md §7.9](OPERATIONS.md).
    ([permission.py:49](../backend/apps/system/schemas/permission.py#L49)) dùng làm FastAPI dependency
    trên route.
 3. **Row/column permission của xpack** — cấu hình bằng tay trên UI SQLBot, sinh điều kiện `WHERE` bổ
-   sung chèn vào SQL của LLM (`generate_filter`, [llm.py:1298](../backend/apps/chat/task/llm.py#L1298)).
+   sung chèn vào SQL của LLM (`generate_filter`, [llm.py:1404](../backend/apps/chat/task/llm.py#L1404)).
 4. **Quyền dữ liệu đồng bộ từ SW** — lọc bảng/cột khỏi M-Schema và bọc phạm vi dòng vào SQL, dữ liệu
    lấy từ `ai_user_permissions` (`apps/chat/permission/sw_permission.py`).
 
