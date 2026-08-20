@@ -132,7 +132,7 @@ class FetchSourceFileTest(unittest.TestCase):
         return f"http://127.0.0.1:{self.port}/bucket/bao_cao.csv" + (f"?{query}" if query else "")
 
     def hosts(self):
-        return override(EXCEL_DOWNLOAD_ALLOWED_HOSTS=f"127.0.0.1:{self.port}",
+        return override(FILE_DOWNLOAD_ALLOWED_HOSTS=f"127.0.0.1:{self.port}",
                         EXCEL_DOWNLOAD_MIN_TTL_SECONDS=300)
 
     def test_downloads_to_the_path_the_sync_phase_reserved(self):
@@ -161,7 +161,7 @@ class FetchSourceFileTest(unittest.TestCase):
     def test_url_is_revalidated_at_run_time_not_trusted_from_db(self):
         """Hạn chữ ký phải soi lại theo HIỆN TẠI: job có thể nằm hàng đợi hàng giờ trước khi chạy."""
         expired = self.url(sigv4_query(60, signed_at=None))
-        with override(EXCEL_DOWNLOAD_ALLOWED_HOSTS=f"127.0.0.1:{self.port}",
+        with override(FILE_DOWNLOAD_ALLOWED_HOSTS=f"127.0.0.1:{self.port}",
                       EXCEL_DOWNLOAD_MIN_TTL_SECONDS=3600):
             with self.assertRaises(ExcelImportError) as ctx:
                 _fetch_source_file(expired, self.dest)
@@ -171,7 +171,7 @@ class FetchSourceFileTest(unittest.TestCase):
 
     def test_host_removed_from_allowlist_blocks_a_queued_job(self):
         """Allowlist bị siết lại sau khi job đã vào hàng đợi thì job đó phải hỏng, không được tải."""
-        with override(EXCEL_DOWNLOAD_ALLOWED_HOSTS="minio-hdnd.example.com"):
+        with override(FILE_DOWNLOAD_ALLOWED_HOSTS="minio-hdnd.example.com"):
             with self.assertRaises(ExcelImportError) as ctx:
                 _fetch_source_file(self.url(), self.dest)
         self.assertEqual(ctx.exception.error_code, remote_file.ERR_URL_HOST_NOT_ALLOWED)

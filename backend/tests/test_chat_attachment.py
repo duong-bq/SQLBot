@@ -117,7 +117,7 @@ class TestValidateSourceUrlForDocx:
 
     @pytest.fixture(autouse=True)
     def _allow_host(self, monkeypatch):
-        monkeypatch.setattr(settings, 'EXCEL_DOWNLOAD_ALLOWED_HOSTS', self.HOST)
+        monkeypatch.setattr(settings, 'FILE_DOWNLOAD_ALLOWED_HOSTS', self.HOST)
 
     def test_docx_extension_accepted(self):
         src = validate_source_url(self._url(), allowed_extensions=('docx',))

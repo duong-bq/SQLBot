@@ -17,7 +17,7 @@
 
 ### `.env` nằm ở **repo root**, không phải trong `backend/`
 
-`config.py` khai `env_file="../.env"` ([config.py:27](../backend/common/core/config.py#L27)) — đường
+`config.py` khai `env_file="../.env"` ([config.py:29](../backend/common/core/config.py#L29)) — đường
 dẫn tương đối so với thư mục làm việc `backend/`. Đặt `.env` trong `backend/` thì nó bị bỏ qua im
 lặng. File này nằm trong `.gitignore`.
 
@@ -167,22 +167,35 @@ callback, vòng quét phục hồi) — xem [BACKEND_ARCHITECTURE.md §5](BACKEN
 URL, worker tự tải. Nhóm biến này chi phối bước tải đó
 ([remote_file.py](../backend/apps/datasource/utils/remote_file.py)).
 
+Ba biến mang tiền tố **`FILE_DOWNLOAD_`** dùng chung với luồng `.docx` đính kèm chat (§2.9) — đó là
+lý do chúng không mang tiền tố `EXCEL_`; sửa một chỗ là đổi cho cả hai tính năng. Các biến còn lại
+giữ tiền tố `EXCEL_` vì luồng docx không đụng tới.
+
 | Biến | Mặc định | Tác dụng |
 |---|---|---|
-| `EXCEL_DOWNLOAD_ALLOWED_HOSTS` | `''` | Danh sách host được phép tải về, ngăn cách bằng dấu phẩy. **Rỗng = chặn tất cả**, không phải cho phép tất cả — xem bẫy ở §7.3. Ghi được cả `host`, `host:port` lẫn URL đầy đủ |
+| `FILE_DOWNLOAD_ALLOWED_HOSTS` | `''` | **Dùng chung.** Danh sách host được phép tải về, ngăn cách bằng dấu phẩy. **Rỗng = chặn tất cả**, không phải cho phép tất cả — xem bẫy ở §7.3. Ghi được cả `host`, `host:port` lẫn URL đầy đủ |
+| `FILE_DOWNLOAD_CONNECT_TIMEOUT` / `_READ_TIMEOUT` | `5` / `30` | **Dùng chung.** Timeout bắt tay và timeout giữa hai lần đọc |
 | `EXCEL_DOWNLOAD_MAX_MB` | `100` | Trần dung lượng file nguồn. Ép **hai lần**: theo `Content-Length` khai báo, rồi theo số byte thật đếm trong lúc tải |
 | `EXCEL_DOWNLOAD_MIN_TTL_SECONDS` | `300` | Hạn chữ ký còn lại tối thiểu để nhận việc. Job có thể xếp hàng sau job khác nên URL sắp hết hạn phải bị từ chối ngay chứ không để hỏng ở nền. **Đối tác được yêu cầu ký ≥ 1 giờ** |
-| `EXCEL_DOWNLOAD_CONNECT_TIMEOUT` / `_READ_TIMEOUT` | `5` / `30` | Timeout bắt tay và timeout giữa hai lần đọc |
 | `EXCEL_DOWNLOAD_TOTAL_TIMEOUT` | `1800` | Trần cho **cả** lượt tải. Không thừa: timeout đọc chỉ bắt được kết nối đứng im, một nguồn nhỏ giọt đều đặn sẽ giữ worker vô hạn mà không lần đọc nào quá hạn |
 | `EXCEL_DOWNLOAD_RETRIES` | `2` | Số lần tải lại, **chỉ** với lỗi mạng và `5xx`. Mọi `4xx` là câu trả lời dứt khoát, thử lại vô nghĩa và chỉ đẩy job tới gần hạn chữ ký hơn |
 | `EXCEL_DOWNLOAD_PROBE_ENABLED` / `_PROBE_TIMEOUT` | `true` / `3` | Hỏi nguồn 1 byte ngay trong pha đồng bộ để bắt sớm `403`/`404`/quá cỡ. Tắt đi thì các lỗi đó lùi xuống callback chứ không mất |
 
-**Bật callback ở deployment Docker**: `docker-compose.backend.yml` truyền `AI_CALLBACK_URL` xuống
-container, giá trị lấy từ file `.env` **cạnh compose file**. Chạy backend thẳng trên host thì đặt
-trong `.env` ở repo root như mọi biến khác. Điền URL rồi restart là các thư đang chờ tự đi — không
-cần bắn lại tay, và không lần thử nào bị đốt trong lúc URL còn rỗng.
+**Tên cũ vẫn nhận được**: ba biến `FILE_DOWNLOAD_*` khai `validation_alias` nên `.env` còn ghi
+`EXCEL_DOWNLOAD_ALLOWED_HOSTS` / `_CONNECT_TIMEOUT` / `_READ_TIMEOUT` vẫn nạp đúng, khai cả hai thì
+tên mới thắng. Alias tồn tại vì `Settings` đặt `extra="ignore"`: không có nó, một `.env` cũ sẽ bị bỏ
+qua **im lặng** và allowlist thành rỗng, tức tắt sạch hai tính năng mà không một dòng log nào.
+Alias chỉ cứu biến đi thẳng vào process — với Docker thì compose nội suy đúng cái tên viết trong
+file YAML, nên `.env` cạnh compose phải đổi sang tên mới.
 
-Chỉ `AI_CALLBACK_URL` là bắt buộc; các biến còn lại có mặc định dùng được ngay.
+**Bật ở deployment Docker**: `docker-compose.backend.yml` truyền `FILE_DOWNLOAD_ALLOWED_HOSTS` và
+`AI_CALLBACK_URL` xuống container, giá trị lấy từ file `.env` **cạnh compose file** (trên server
+triển khai là `/data/ngocpt/sqlbot/.env`, xem `.gitlab-ci.yml`). Chạy backend thẳng trên host thì
+đặt trong `.env` ở repo root như mọi biến khác. Điền URL rồi restart là các thư đang chờ tự đi —
+không cần bắn lại tay, và không lần thử nào bị đốt trong lúc URL còn rỗng.
+
+Chỉ `AI_CALLBACK_URL` và `FILE_DOWNLOAD_ALLOWED_HOSTS` là bắt buộc; các biến còn lại có mặc định
+dùng được ngay.
 
 ### 2.9. Tài liệu `.docx` đính kèm câu hỏi
 
@@ -197,11 +210,12 @@ Chi phối trường `fileUrl` của `POST /chat/question` — xem
 | `CHAT_DOC_PROMPT_MAX_CHARS` | `30000` | Phần tài liệu đưa vào prompt của **chính lượt đính kèm** |
 | `CHAT_DOC_HISTORY_MAX_CHARS` | `10000` | Phần tài liệu đưa vào prompt của các **lượt sau**, qua lịch sử answer |
 
-**Không có biến allowlist riêng**: dùng chung `EXCEL_DOWNLOAD_ALLOWED_HOSTS` ở §2.8 vì cùng trỏ về
-một MinIO. Rỗng vẫn là **chặn tất cả** — chưa khai host thì tính năng đính kèm coi như chưa mở, mọi
-`fileUrl` trả `400 URL_HOST_NOT_ALLOWED`. Timeout bắt tay và timeout đọc cũng lấy từ nhóm
-`EXCEL_DOWNLOAD_*`; riêng `EXCEL_DOWNLOAD_RETRIES` **không** áp dụng — luồng này không thử lại, việc
-người dùng bấm gửi lại chính là vòng retry.
+**Không có biến allowlist riêng**: dùng chung `FILE_DOWNLOAD_ALLOWED_HOSTS` ở §2.8 vì cùng trỏ về
+một MinIO — tên biến không mang tiền tố của luồng nào chính là để nhắc điều đó. Rỗng vẫn là **chặn
+tất cả**: chưa khai host thì tính năng đính kèm coi như chưa mở, mọi `fileUrl` trả
+`400 URL_HOST_NOT_ALLOWED`. Timeout bắt tay và timeout đọc cũng lấy từ cặp `FILE_DOWNLOAD_*`; riêng
+`EXCEL_DOWNLOAD_RETRIES` **không** áp dụng — luồng này không thử lại, việc người dùng bấm gửi lại
+chính là vòng retry.
 
 Hai trần cuối ảnh hưởng trực tiếp tới prompt nhưng **chưa được đo bằng harness** (§4) — đổi thì phải
 đo lại chứ đừng tin cảm giác.
@@ -231,7 +245,7 @@ cũ, kể cả phần đọc câu hỏi của user khác (§7.2).
 `ORACLE_CLIENT_PATH`, `CONTEXT_PATH` (prefix URL, mặc định rỗng).
 
 Biến bool nhận cả `"true"`/`"True"`/`"false"` nhờ validator `lowercase_bool`
-([config.py:305](../backend/common/core/config.py#L305)).
+([config.py:323](../backend/common/core/config.py#L323)).
 
 ---
 
@@ -525,7 +539,7 @@ kỳ tài liệu, log hay issue nào; nếu cần xoay vòng mật khẩu thì p
 | `BACKEND_CORS_ORIGINS='*'` không dùng được | Kiểu là `AnyUrl`. Muốn mở hết thì đặt `CORS_ALLOW_ALL_ORIGINS=True` |
 | Sửa `template.yaml` mà không restart | `apps/template/template.py` có `@cache` |
 | Đổi cấu hình model trong DB mà không restart | `LLMFactory.create_llm` có `@lru_cache(maxsize=32)` |
-| `EXCEL_DOWNLOAD_ALLOWED_HOSTS` rỗng làm chết **cả** đính kèm `.docx` của chat | Một biến chi phối hai tính năng (§2.9). Triệu chứng phía client là `400 URL_HOST_NOT_ALLOWED` chứ không phải lỗi cấu hình — dễ đi tìm nhầm phía đối tác |
+| `FILE_DOWNLOAD_ALLOWED_HOSTS` rỗng làm chết **cả** đính kèm `.docx` của chat | Một biến chi phối hai tính năng (§2.9). Triệu chứng phía client là `400 URL_HOST_NOT_ALLOWED` chứ không phải lỗi cấu hình — dễ đi tìm nhầm phía đối tác |
 
 ### 7.4. Hành vi pipeline
 
@@ -571,7 +585,7 @@ kỳ tài liệu, log hay issue nào; nếu cần xoay vòng mật khẩu thì p
 | **`AI_CALLBACK_URL` rỗng thì im lặng không gửi** | Không có log lỗi, không có lần thử nào bị đốt. Job vẫn `success`, thư vẫn nằm chờ trong `excel_import_jobs`, và hệ ngoài chờ mãi. Triệu chứng: `SELECT count(*) FROM excel_import_jobs WHERE callback_status='pending'` tăng dần |
 | **Callback là "ít nhất một lần"** | Bên nhận trả 2xx chậm hơn timeout thì lá thư đó vẫn được gửi lại. Không có cách nào biến thành "đúng một lần" — bên nhận phải idempotent theo `Id` |
 | **Nguồn dữ liệu `Failed` tồn đọng, và tự nhân lên** | Nạp hỏng để lại một dòng `core_datasource` trạng thái `Failed`. Nó **không** chiếm tên (`find_conflicting_ds` loại trừ `FAILED`), nên gọi lại cùng tên vẫn ra `202` — chính vì thế mỗi lần thử lại đẻ thêm một dòng nữa, và không có lỗi nào báo cho ai biết. Chúng vẫn hiện trong `GET /datasource/list` vì hàm đó không lọc theo status. Kiểm tra tồn đọng: `SELECT id, name FROM core_datasource WHERE status = 'Failed'` |
-| **`EXCEL_DOWNLOAD_ALLOWED_HOSTS` rỗng chặn sạch, không phải mở sạch** | Hỏng theo hướng đóng là cố ý — đây là allowlist chống SSRF, mà mặc định "mở" của một biến chưa ai điền thì nguy hiểm hơn hẳn một endpoint chết. Triệu chứng khi quên điền: **mọi** lời gọi `createFromExcelAsync` trả `400 URL_HOST_NOT_ALLOWED` với thông điệp nói thẳng là chưa cấu hình |
+| **`FILE_DOWNLOAD_ALLOWED_HOSTS` rỗng chặn sạch, không phải mở sạch** | Hỏng theo hướng đóng là cố ý — đây là allowlist chống SSRF, mà mặc định "mở" của một biến chưa ai điền thì nguy hiểm hơn hẳn một endpoint chết. Triệu chứng khi quên điền: **mọi** lời gọi `createFromExcelAsync` trả `400 URL_HOST_NOT_ALLOWED` với thông điệp nói thẳng là chưa cấu hình |
 | **URL ký sẵn là credential, không phải đường dẫn** | Chữ ký nằm trong query string và nó được ghi nguyên văn xuống cột `excel_import_jobs.file_url`. Không bao giờ log cả URL, không dán vào issue hay chat: dùng `RemoteSource.safe_label` (host + object key). Hệ quả vận hành: ai đọc được bảng đó là đọc được file nguồn cho tới khi chữ ký hết hạn |
 | **Hạn chữ ký tính từ lúc ký, không phải từ lúc worker chạy** | Job xếp hàng sau các job khác, hoặc được vòng phục hồi nhặt lại sau khi tiến trình chết, đều có thể tới lượt tải hàng chục phút sau khi nhận việc. Vì vậy URL được kiểm hạn **lại lần nữa** ngay trước khi tải, và đối tác được yêu cầu ký ≥ 1 giờ. Triệu chứng khi ký quá ngắn: `400 URL_EXPIRED` ở pha đồng bộ, hoặc `DOWNLOAD_FORBIDDEN` trong callback |
 | **`status` thành `Failed` trước khi `error_code` được ghi** | `fail_import_job` đổi trạng thái nguồn dữ liệu rồi mới ghi dòng job. Hệ ngoài hỏi `excelImportStatus` đúng khe giữa hai bước sẽ thấy `Failed` kèm `errorCode: null`. Khe này rất hẹp và tự khỏi ở lần hỏi sau, nhưng đủ để một client hỏi liên tục gặp phải |

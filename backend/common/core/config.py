@@ -3,8 +3,10 @@ import urllib.parse
 from typing import Annotated, Any, Literal
 
 from pydantic import (
+    AliasChoices,
     AnyUrl,
     BeforeValidator,
+    Field,
     PostgresDsn,
     computed_field,
     field_validator
@@ -251,17 +253,41 @@ class Settings(BaseSettings):
     # xác thực, nên mặc định rỗng; giữ lại biến để sau này họ đổi ý thì không phải sửa code.
     AI_CALLBACK_AUTH_HEADER: str = ''
 
-    # --- Tải file nguồn từ presigned URL (thay cho việc hệ ngoài đẩy bytes lên bằng multipart) ---
+    # --- Tải file nguồn từ presigned URL: phần DÙNG CHUNG cho mọi luồng tải ---
+    # Ba biến FILE_DOWNLOAD_* dưới đây chi phối CẢ HAI tính năng đang tải file từ presigned URL:
+    # import excel bất đồng bộ (POST /datasource/createFromExcelAsync) và tài liệu .docx đính kèm
+    # câu hỏi (`fileUrl` của POST /chat/question). Sửa ở đây là sửa cho cả hai — đó là lý do chúng
+    # không còn mang tiền tố EXCEL_.
+    #
+    # Mỗi biến vẫn nhận TÊN CŨ làm alias để .env của các bản đã deploy không chết lặng: tên không
+    # khớp field nào thì `extra="ignore"` nuốt luôn, allowlist thành rỗng, và cả hai tính năng tắt
+    # ngóm mà không có lấy một dòng log. Tên mới được ưu tiên khi khai cả hai.
+    #
     # Danh sách host được phép tải về, ngăn cách bằng dấu phẩy, có thể kèm cổng. RỖNG LÀ CẤM TẤT
     # CẢ: đây là lớp chống SSRF — server tự đi gọi một URL do client đưa, từ bên trong mạng nội bộ
     # — nên nó phải hỏng theo hướng đóng. Mặc định mở là lớp bảo vệ coi như không tồn tại.
-    EXCEL_DOWNLOAD_ALLOWED_HOSTS: str = ''
+    FILE_DOWNLOAD_ALLOWED_HOSTS: str = Field(
+        default='',
+        validation_alias=AliasChoices('FILE_DOWNLOAD_ALLOWED_HOSTS',
+                                      'EXCEL_DOWNLOAD_ALLOWED_HOSTS'))
+    FILE_DOWNLOAD_CONNECT_TIMEOUT: int = Field(
+        default=5,
+        validation_alias=AliasChoices('FILE_DOWNLOAD_CONNECT_TIMEOUT',
+                                      'EXCEL_DOWNLOAD_CONNECT_TIMEOUT'))
+    # Timeout cho MỖI lần đọc, không phải cho cả lượt tải.
+    FILE_DOWNLOAD_READ_TIMEOUT: int = Field(
+        default=30,
+        validation_alias=AliasChoices('FILE_DOWNLOAD_READ_TIMEOUT',
+                                      'EXCEL_DOWNLOAD_READ_TIMEOUT'))
+
+    # --- Tải file nguồn: phần CHỈ RIÊNG luồng import excel bất đồng bộ ---
+    # Giữ tiền tố EXCEL_ vì luồng docx không đụng tới biến nào dưới đây: nó tải thẳng vào RAM ngay
+    # trong request nên có trần dung lượng, trần thời gian và hạn ký riêng (nhóm CHAT_DOC_*), lại
+    # không thăm dò và không tự tải lại.
+    #
     # Trần dung lượng file tải về. Ép ở HAI chỗ: dung lượng nguồn khai lúc thăm dò, và số byte đếm
     # được trong lúc stream — lời khai của nguồn không phải sự thật.
     EXCEL_DOWNLOAD_MAX_MB: int = 100
-    EXCEL_DOWNLOAD_CONNECT_TIMEOUT: int = 5
-    # Timeout cho MỖI lần đọc, không phải cho cả lượt tải.
-    EXCEL_DOWNLOAD_READ_TIMEOUT: int = 30
     # Trần tổng thời gian một lượt tải. Bắt buộc phải có riêng: timeout đọc chỉ bắt được kết nối
     # đứng im, nó bất lực trước nguồn nhỏ giọt đều đặn vài byte mỗi giây — thứ giữ một worker vô hạn.
     EXCEL_DOWNLOAD_TOTAL_TIMEOUT: int = 1800
@@ -277,7 +303,8 @@ class Settings(BaseSettings):
     EXCEL_DOWNLOAD_PROBE_TIMEOUT: int = 3
 
     # --- Tài liệu .docx đính kèm lượt hỏi chat (`fileUrl` của POST /chat/question) ---
-    # Allowlist host dùng CHUNG EXCEL_DOWNLOAD_ALLOWED_HOSTS (cùng một MinIO), rỗng vẫn là cấm tất.
+    # Allowlist host và hai timeout kết nối/đọc lấy từ nhóm FILE_DOWNLOAD_* phía trên (cùng một
+    # MinIO, cùng một lớp chống SSRF); rỗng vẫn là cấm tất. Dưới đây chỉ là phần riêng của docx.
     # Trần dung lượng file tải về. Nhỏ hơn hẳn trần excel có chủ ý: docx là zip, trần byte này đồng
     # thời là chốt đầu tiên chống zip bomb (chốt thứ hai là trần ký tự lúc trích).
     CHAT_DOC_MAX_MB: int = 15

@@ -166,8 +166,8 @@ def fetch_docx_attachment(file_url: str) -> AttachmentContent:
     data = download_bytes(
         src,
         limit=max(1, settings.CHAT_DOC_MAX_MB) * 1024 * 1024,
-        connect_timeout=settings.EXCEL_DOWNLOAD_CONNECT_TIMEOUT,
-        read_timeout=settings.EXCEL_DOWNLOAD_READ_TIMEOUT,
+        connect_timeout=settings.FILE_DOWNLOAD_CONNECT_TIMEOUT,
+        read_timeout=settings.FILE_DOWNLOAD_READ_TIMEOUT,
         total_timeout=settings.CHAT_DOC_DOWNLOAD_TIMEOUT,
     )
     content, truncated = extract_docx_text(data, settings.CHAT_DOC_EXTRACT_MAX_CHARS)

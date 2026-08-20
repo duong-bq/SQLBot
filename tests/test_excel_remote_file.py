@@ -56,7 +56,7 @@ class ValidateSourceUrlTest(unittest.TestCase):
     HOSTS = "minio-hdnd.example.com,192.168.254.145:9000"
 
     def _validate(self, url: str, hosts: str | None = None):
-        with override(EXCEL_DOWNLOAD_ALLOWED_HOSTS=hosts if hosts is not None else self.HOSTS,
+        with override(FILE_DOWNLOAD_ALLOWED_HOSTS=hosts if hosts is not None else self.HOSTS,
                       EXCEL_DOWNLOAD_MIN_TTL_SECONDS=300):
             return remote_file.validate_source_url(url)
 
@@ -226,7 +226,7 @@ class _ServerCase(unittest.TestCase):
 
     def source(self, path: str = "/bucket/a.csv"):
         url = f"http://127.0.0.1:{self.port}{path}"
-        with override(EXCEL_DOWNLOAD_ALLOWED_HOSTS=f"127.0.0.1:{self.port}"):
+        with override(FILE_DOWNLOAD_ALLOWED_HOSTS=f"127.0.0.1:{self.port}"):
             return remote_file.validate_source_url(url)
 
     def dest(self, name: str = "out.csv") -> str:

@@ -61,13 +61,13 @@ Hệ quả cụ thể: `ChatFinishStep` đã bị **đánh số lại** để ch
 - Nạp nguồn dữ liệu từ file Excel/CSV có đường **bất đồng bộ**: `POST
   /datasource/createFromExcelAsync` nhận một **presigned URL** trỏ tới file (không nhận bytes), trả
   `202` ngay, rồi tự tải và nạp ở nền, báo kết quả về SW bằng callback HTTP. Cần đặt
-  `AI_CALLBACK_URL` (rỗng là tắt gửi) và `EXCEL_DOWNLOAD_ALLOWED_HOSTS` (rỗng là **chặn hết**).
+  `AI_CALLBACK_URL` (rỗng là tắt gửi) và `FILE_DOWNLOAD_ALLOWED_HOSTS` (rỗng là **chặn hết**).
   Kiến trúc ở [BACKEND_ARCHITECTURE.md](BACKEND_ARCHITECTURE.md) §5, hợp đồng ở
   `DATASOURCE_API_SPEC.md` §9.
 - `POST /chat/question` nhận thêm `fileUrl` — presigned URL của một file `.docx` đính kèm câu hỏi.
   File được tải và trích text ngay trong request, ghép vào **trước** câu hỏi thành khối
   `<attached-document>`, lưu ở bảng `chat_attachment`. Dùng chung
-  `EXCEL_DOWNLOAD_ALLOWED_HOSTS` với luồng Excel. Thiết kế cốt lõi: tài liệu là **message**, không
+  `FILE_DOWNLOAD_ALLOWED_HOSTS` với luồng Excel. Thiết kế cốt lõi: tài liệu là **message**, không
   phải hạ tầng — nó trôi theo cửa sổ lịch sử chứ không sống mãi trong hội thoại. Chi tiết ở
   [TEXT2SQL_PIPELINE.md](TEXT2SQL_PIPELINE.md) §10.
 - Có thư mục test: `backend/tests/` (`uv run pytest tests/`, 31 ca), phủ phần trích `.docx` và toàn

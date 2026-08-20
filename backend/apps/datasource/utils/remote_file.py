@@ -81,7 +81,7 @@ class RemoteSource:
 
 def _allowed_hosts() -> set[str]:
     """Đọc allowlist từ cấu hình, chuẩn hóa để so khớp được cả khi khai kèm scheme hoặc cổng."""
-    raw = (settings.EXCEL_DOWNLOAD_ALLOWED_HOSTS or '').split(',')
+    raw = (settings.FILE_DOWNLOAD_ALLOWED_HOSTS or '').split(',')
     hosts = set()
     for item in raw:
         item = item.strip().lower()
@@ -126,7 +126,8 @@ def validate_source_url(url: str, allowed_extensions: tuple[str, ...] = ALLOWED_
     ``allowed_extensions``/``min_ttl_seconds`` tham số hóa được vì module này giờ phục vụ hai luồng:
     import excel bất đồng bộ (mặc định — đuôi excel, TTL tối thiểu dài vì job còn xếp hàng chờ
     worker) và tài liệu docx đính kèm chat (tải ngay trong request nên chỉ cần URL còn sống).
-    Allowlist host thì cố ý dùng CHUNG một biến cấu hình: cả hai luồng cùng trỏ về một MinIO.
+    Allowlist host thì cố ý dùng CHUNG ``FILE_DOWNLOAD_ALLOWED_HOSTS``: cả hai luồng cùng trỏ về
+    một MinIO, nên tên biến không mang tiền tố của riêng luồng nào.
     """
     if not url or not url.strip():
         raise ExcelImportError(ERR_URL_INVALID, "fileUrl is required")
@@ -146,7 +147,7 @@ def validate_source_url(url: str, allowed_extensions: tuple[str, ...] = ALLOWED_
         # phải mở cho mọi host.
         raise ExcelImportError(
             ERR_URL_HOST_NOT_ALLOWED,
-            "File download is not configured (EXCEL_DOWNLOAD_ALLOWED_HOSTS is empty)"
+            "File download is not configured (FILE_DOWNLOAD_ALLOWED_HOSTS is empty)"
         )
 
     host = parsed.hostname.lower()
@@ -275,10 +276,10 @@ def _stream_once(src: RemoteSource, part_path: str, limit: int) -> int:
     """Một lượt tải trọn vẹn vào file ``.part``. Ném ``_Retryable`` cho những hỏng hóc có thể tự khỏi."""
     deadline = time.monotonic() + settings.EXCEL_DOWNLOAD_TOTAL_TIMEOUT
     timeout = httpx.Timeout(
-        connect=settings.EXCEL_DOWNLOAD_CONNECT_TIMEOUT,
-        read=settings.EXCEL_DOWNLOAD_READ_TIMEOUT,
-        write=settings.EXCEL_DOWNLOAD_READ_TIMEOUT,
-        pool=settings.EXCEL_DOWNLOAD_CONNECT_TIMEOUT,
+        connect=settings.FILE_DOWNLOAD_CONNECT_TIMEOUT,
+        read=settings.FILE_DOWNLOAD_READ_TIMEOUT,
+        write=settings.FILE_DOWNLOAD_READ_TIMEOUT,
+        pool=settings.FILE_DOWNLOAD_CONNECT_TIMEOUT,
     )
     written = 0
     with httpx.Client(timeout=timeout, follow_redirects=False) as client:

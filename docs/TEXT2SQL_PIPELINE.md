@@ -483,7 +483,7 @@ cột gì.
 Hệ quả đã biết và chấp nhận: lượt đính kèm trôi khỏi cửa sổ thì mô hình mất tài liệu. Đổi lại, tài
 liệu không chiếm chỗ vĩnh viễn trong mọi prompt về sau.
 
-**Ba trần ký tự khác nhau, đừng gộp** ([config.py:288](../backend/common/core/config.py#L288)):
+**Ba trần ký tự khác nhau, đừng gộp** ([config.py:315](../backend/common/core/config.py#L315)):
 
 | Trần | Mặc định | Chặn cái gì |
 |---|---|---|

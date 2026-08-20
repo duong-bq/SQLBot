@@ -545,7 +545,7 @@ class ChatQuestionBase(BaseModel):
                                      default=None)
     # Presigned URL trỏ tới file .docx đính kèm lượt hỏi này. Nội dung file được trích text và
     # trở thành một phần ngữ cảnh của câu hỏi (cả pha sinh SQL lẫn pha answer). Host phải nằm
-    # trong EXCEL_DOWNLOAD_ALLOWED_HOSTS; URL chỉ cần sống qua một lần tải ngay trong request.
+    # trong FILE_DOWNLOAD_ALLOWED_HOSTS; URL chỉ cần sống qua một lần tải ngay trong request.
     fileUrl: Optional[str] = Body(description='Presigned URL của file .docx đính kèm câu hỏi',
                                   default=None)
     # Mã lĩnh vực (linhVucMa phía SW) giới hạn phạm vi câu hỏi của lượt này. Chỉ có tác dụng với
