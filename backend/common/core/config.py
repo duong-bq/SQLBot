@@ -186,6 +186,22 @@ class Settings(BaseSettings):
     # vẫn nhận đủ `answer` + `finish`. Xem API_SPEC.md §6.8.
     GENERATE_CHART_ENABLED: bool = True
 
+    # --- Gợi ý câu hỏi tiếp theo ngay trong POST /chat/question ---
+    # Sinh gợi ý ngay trong lượt hỏi thay vì bắt client gọi thêm `POST /chat/recommend_questions`.
+    # Chạy SONG SONG với pha answer/chart nên gần như không cộng thêm độ trễ tới `finish`, cái giá
+    # là thêm MỘT lượt gọi LLM cho mỗi câu hỏi. Chỉ áp dụng cho nhánh in_chat (SSE của UI); nhánh
+    # MCP và các `finish_step` dừng sớm (<= QUERY_DATA) không đụng tới.
+    #
+    # Khác endpoint rời ở hai chỗ, và đó là lý do tồn tại của nó: câu hỏi cũ đưa vào prompt chỉ lấy
+    # của CHÍNH user đang hỏi (endpoint rời lấy 20 câu gần nhất của mọi user chung datasource), và
+    # kết quả chỉ ghi vào `chat_record` chứ không bao giờ ghi đè gợi ý cấp hội thoại.
+    CHAT_INLINE_RECOMMEND_ENABLED: bool = True
+    # Số câu gợi ý tối đa. Đây là trần đưa vào prompt, LLM có thể trả ít hơn.
+    CHAT_INLINE_RECOMMEND_COUNT: int = 2
+    # Số câu hỏi cũ CỦA CHÍNH user đưa vào prompt gợi ý. Chỉ dùng để LLM đoán thói quen hỏi, nhiều
+    # hơn không tốt hơn mà chỉ tốn token.
+    CHAT_INLINE_RECOMMEND_HISTORY: int = 20
+
     PG_POOL_SIZE: int = 20
     PG_MAX_OVERFLOW: int = 30
     PG_POOL_RECYCLE: int = 3600
@@ -288,11 +304,17 @@ class Settings(BaseSettings):
                      'LLM_ANSWER_HISTORY_ENABLED',
                      'LLM_SQL_HISTORY_JSON_ONLY',
                      'GENERATE_CHART_ENABLED',
+                     'CHAT_INLINE_RECOMMEND_ENABLED',
                      'EXCEL_DOWNLOAD_PROBE_ENABLED',
                      mode='before')
     @classmethod
     def lowercase_bool(cls, v: Any) -> Any:
-        """将字符串形式的布尔值转换为Python布尔值"""
+        """Ép chuỗi trong .env về bool cho các biến khai ở decorator phía trên.
+
+        Chạy ở mode='before' nên nhận nguyên văn chuỗi người vận hành gõ. Thêm biến bool mới thì
+        nhớ khai tên nó vào danh sách trên, nếu không `"False"` viết hoa có thể lọt qua thành giá
+        trị khác ý định.
+        """
         if isinstance(v, str):
             v_lower = v.lower().strip()
             if v_lower == 'true':

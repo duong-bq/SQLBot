@@ -34,7 +34,8 @@ from apps.chat.curd.chat import save_question, save_sql_answer, save_sql, \
     get_old_questions, save_analysis_predict_record, rename_chat, get_chart_config, \
     get_chat_chart_data, list_generate_sql_logs, list_generate_chart_logs, start_log, end_log, \
     get_last_execute_sql_error, format_json_data, format_chart_fields, get_chat_brief_generate, get_chat_predict_data, \
-    get_chat_chart_config, trigger_log_error, save_answer, get_recent_qa_history
+    get_chat_chart_config, trigger_log_error, save_answer, get_recent_qa_history, \
+    get_user_old_questions, save_record_recommend_questions
 from apps.chat.models.chat_model import ChatQuestion, ChatRecord, Chat, RenameChat, ChatLog, OperationEnum, \
     ChatFinishStep, AxisObj, SystemPromptMessage, HumanPromptMessage, AIPromptMessage
 from apps.chat.permission.sw_permission import resolve_sw_permission, apply_scope_to_sql
@@ -836,6 +837,111 @@ class LLMService:
                     yield 'data:' + orjson.dumps({'type': 'info', 'msg': 'answer generated'}).decode() + '\n\n'
                     yield 'data:' + orjson.dumps(
                         {'content': state.get('text', '').strip(), 'type': 'answer'}).decode() + '\n\n'
+                return
+
+    def generate_inline_recommend(self, _session: Session):
+        """Sinh gợi ý câu hỏi tiếp theo cho CHÍNH lượt hỏi này, chạy trong thread riêng.
+
+        Dùng lại prompt `guess` của endpoint rời nhưng thay hai đầu vào:
+        - schema: lấy thẳng `chat_question.db_schema` mà `init_messages` đã dựng, tức là bản đã qua
+          phễu quyền SW của lượt này — không tự gọi lại `get_table_schema` như task rời;
+        - câu hỏi cũ: chỉ của chính user (xem `get_user_old_questions`).
+
+        Không yield chunk ra ngoài: kết quả là MỘT khối JSON, mảnh dở dang thì client không parse
+        được nên stream theo token vô nghĩa (cùng lý do với pha biểu đồ). Trả về chuỗi JSON đã lưu.
+        """
+        articles_number = max(1, settings.CHAT_INLINE_RECOMMEND_COUNT)
+        guess_msg: List[Union[BaseMessage, dict[str, Any]]] = []
+        guess_msg.append(SystemPromptMessage(content=self.chat_question.guess_sys_question(articles_number)))
+
+        old_questions = [q.strip() for q in get_user_old_questions(
+            session=_session,
+            datasource=self.record.datasource,
+            create_by=self.record.create_by,
+            domain_code=self.chat_question.domain_code,
+            limit=max(0, settings.CHAT_INLINE_RECOMMEND_HISTORY))]
+        guess_msg.append(
+            HumanMessage(content=self.chat_question.guess_user_question(orjson.dumps(old_questions).decode())))
+
+        self.current_logs[OperationEnum.GENERATE_RECOMMENDED_QUESTIONS] = start_log(
+            session=_session,
+            ai_modal_id=self.chat_question.ai_modal_id,
+            ai_modal_name=self.chat_question.ai_modal_name,
+            operate=OperationEnum.GENERATE_RECOMMENDED_QUESTIONS,
+            record_id=self.record.id,
+            full_message=[{'type': msg.type,
+                           'sqlbot_system': getattr(msg, 'sqlbot_system', False) is True,
+                           'content': msg.content} for msg in guess_msg])
+
+        full_thinking_text = ''
+        full_guess_text = ''
+        token_usage = {}
+        for chunk in process_stream(self.llm.stream(guess_msg), token_usage):
+            if chunk.get('content'):
+                full_guess_text += chunk.get('content')
+            if chunk.get('reasoning_content'):
+                full_thinking_text += chunk.get('reasoning_content')
+
+        guess_msg.append(AIMessage(full_guess_text))
+        self.current_logs[OperationEnum.GENERATE_RECOMMENDED_QUESTIONS] = end_log(
+            session=_session,
+            log=self.current_logs[OperationEnum.GENERATE_RECOMMENDED_QUESTIONS],
+            full_message=[{'type': msg.type,
+                           'sqlbot_system': getattr(msg, 'sqlbot_system', False) is True,
+                           'content': msg.content} for msg in guess_msg],
+            reasoning_content=full_thinking_text,
+            token_usage=token_usage)
+
+        return save_record_recommend_questions(session=_session, record_id=self.record.id,
+                                              answer={'content': full_guess_text})
+
+    def run_recommend_worker(self, out_queue: queue.Queue):
+        """Thân thread của pha gợi ý. Cùng khuôn với `run_answer_worker`.
+
+        Session riêng vì session_maker là scoped_session (thread-local), và sentinel 'done' đặt
+        trong finally để luồng chính không chờ vô hạn khi thread chết giữa chừng.
+        """
+        _session = None
+        try:
+            _session = session_maker()
+            out_queue.put(('result', self.generate_inline_recommend(_session)))
+        except Exception as e:
+            traceback.print_exc()
+            out_queue.put(('error', e))
+        finally:
+            out_queue.put(('done', None))
+            if _session is not None:
+                session_maker.remove()
+
+    def drain_recommend_queue(self, recommend_queue: Optional[queue.Queue], state: Dict[str, Any], block: bool):
+        """Vét kết quả pha gợi ý và phát event SSE.
+
+        Pha gợi ý hỏng thì chỉ báo bằng event `info` rồi đi tiếp, KHÔNG phát `error` và KHÔNG gọi
+        save_error: câu trả lời chính đã sinh xong, giết cả lượt hỏi vì một pha phụ là mất dữ liệu
+        vô ích (giống hệt cách xử lý pha answer và pha chart).
+        """
+        if recommend_queue is None or state.get('done'):
+            return
+        while True:
+            try:
+                kind, payload = recommend_queue.get(block=block, timeout=None if block else 0.01)
+            except queue.Empty:
+                return
+            if kind == 'result':
+                state['text'] = payload
+            elif kind == 'error':
+                SQLBotLogUtil.error(f'Generate inline recommended questions failed: {payload}')
+                state['failed'] = True
+            else:
+                state['done'] = True
+                if state.get('failed'):
+                    yield 'data:' + orjson.dumps(
+                        {'type': 'info', 'msg': 'recommended question failed'}).decode() + '\n\n'
+                else:
+                    yield 'data:' + orjson.dumps(
+                        {'type': 'info', 'msg': 'recommended question generated'}).decode() + '\n\n'
+                    yield 'data:' + orjson.dumps(
+                        {'content': state.get('text', '[]'), 'type': 'recommended_question'}).decode() + '\n\n'
                 return
 
     def generate_predict(self, _session: Session):
@@ -1917,6 +2023,8 @@ class LLMService:
             # dùng tới nên chưa nối vào, tránh đổi hành vi của client MCP đang chạy.
             answer_queue: Optional[queue.Queue] = None
             answer_state: Dict[str, Any] = {}
+            recommend_queue: Optional[queue.Queue] = None
+            recommend_state: Dict[str, Any] = {}
             if in_chat:
                 if degraded_reason:
                     # Lượt này không có dữ liệu mới: trả lời dựa trên lịch sử hội thoại.
@@ -1932,10 +2040,20 @@ class LLMService:
                 answer_queue = queue.Queue()
                 executor.submit(self.run_answer_worker, answer_sys_prompt, answer_user_prompt, answer_queue)
 
+                # Pha gợi ý câu hỏi tiếp theo: thread thứ ba, song song với answer và chart. Khởi
+                # động ở ĐÂY chứ không sớm hơn là có chủ ý — mọi lỗi cứng của pha SQL (mất kết nối,
+                # domainCode ngoài quyền, phễu bảng rỗng) đều thoát trước điểm này, nên lượt hỏng
+                # hẳn không tốn thêm một lời gọi LLM nào. Lượt hạ cấp thì ngược lại, VẪN đi qua đây:
+                # người dùng vừa hỏi hụt là lúc gợi ý có ích nhất.
+                if settings.CHAT_INLINE_RECOMMEND_ENABLED and self.chat_question.db_schema:
+                    recommend_queue = queue.Queue()
+                    executor.submit(self.run_recommend_worker, recommend_queue)
+
             # Nhánh hạ cấp không có SQL lẫn dữ liệu nên mọi pha sau answer (biểu đồ, phân tích) đều
             # vô nghĩa — dừng ngay tại đây bất kể finish_step yêu cầu đi xa tới đâu.
             if degraded_reason or finish_step.value <= ChatFinishStep.GENERATE_ANSWER.value:
                 yield from self.drain_answer_queue(answer_queue, answer_state, block=True)
+                yield from self.drain_recommend_queue(recommend_queue, recommend_state, block=True)
                 if in_chat:
                     yield 'data:' + orjson.dumps({'type': 'finish'}).decode() + '\n\n'
                 if not stream:
@@ -2018,6 +2136,7 @@ class LLMService:
                 # Chart xong trước answer là chuyện bình thường (chart thường nhanh hơn), nên chặn
                 # chờ nốt ở đây. 'finish' phải là event cuối cùng — client dừng đọc ngay khi thấy nó.
                 yield from self.drain_answer_queue(answer_queue, answer_state, block=True)
+                yield from self.drain_recommend_queue(recommend_queue, recommend_state, block=True)
                 yield 'data:' + orjson.dumps({'type': 'finish'}).decode() + '\n\n'
             else:
                 # generate picture

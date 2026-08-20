@@ -1403,6 +1403,72 @@ def finish_record(session: SessionDep, record_id: int) -> ChatRecord:
     return result
 
 
+def get_user_old_questions(session: SessionDep, datasource: int, create_by: int,
+                           domain_code: Optional[str] = None, limit: int = 20) -> List[str]:
+    """Câu hỏi cũ CỦA CHÍNH user, dùng làm gợi ý ngữ cảnh cho pha sinh câu hỏi tiếp theo.
+
+    Tồn tại song song với `get_old_questions` chứ không thay thế: hàm kia lọc mỗi theo datasource
+    nên trả về câu hỏi của MỌI user dùng chung nguồn dữ liệu — chấp nhận được với endpoint rời
+    (đang giữ nguyên hợp đồng cũ), nhưng không chấp nhận được ở đây vì chuỗi câu hỏi thô của người
+    khác lọt thẳng vào prompt rồi hiện lên màn hình người đang hỏi.
+
+    `domain_code` khác None thì siết thêm về đúng lĩnh vực của lượt hiện tại, để gợi ý không kéo
+    người dùng sang lĩnh vực họ đang không làm việc. Để None thì lấy câu hỏi cũ ở mọi lĩnh vực —
+    an toàn vì mọi record lấy ra đều do chính user này tạo, tức đã nằm trong quyền của họ tại thời
+    điểm hỏi.
+
+    Chỉ lấy lượt thành công (`error IS NULL`): câu hỏi làm gãy pipeline lần trước mà đem gợi ý lại
+    thì khả năng cao gãy tiếp.
+    """
+    records: List[str] = []
+    if not datasource or not create_by:
+        return records
+    conditions = [ChatRecord.datasource == datasource,
+                  ChatRecord.create_by == create_by,
+                  ChatRecord.question.isnot(None),
+                  ChatRecord.error.is_(None)]
+    if domain_code:
+        conditions.append(ChatRecord.domain_code == domain_code)
+    stmt = select(ChatRecord.question).where(and_(*conditions)).order_by(
+        ChatRecord.create_time.desc()).limit(limit)
+    for r in session.execute(stmt):
+        records.append(r.question)
+    return records
+
+
+def save_record_recommend_questions(session: SessionDep, record_id: int, answer: dict) -> str:
+    """Ghi gợi ý câu hỏi vào ĐÚNG một record, không đụng tới bản ghi hội thoại.
+
+    Khác `save_recommend_question_answer` ở chỗ bỏ hẳn nhánh `articles_number > 4` — ngưỡng đó
+    thực chất mã hoá "panel nào của UI đang gọi" chứ không phải ý định của người dùng, và tác dụng
+    phụ của nó (bật cờ `recommended_generate` cấp hội thoại) sẽ khoá cache gợi ý của cả hội thoại
+    theo kết quả của một lượt hỏi lẻ.
+
+    LLM trả JSON hỏng thì lưu mảng rỗng và ghi warning chứ không ném: gợi ý là pha phụ, giết lượt
+    hỏi vì nó là mất cả câu trả lời đã sinh xong.
+
+    Trả về chuỗi JSON đã lưu để luồng gọi phát thẳng ra SSE, khỏi đọc lại record.
+    """
+    if not record_id:
+        raise Exception("Record id cannot be None")
+
+    recommended_question = '[]'
+    content = (answer or {}).get('content')
+    if content:
+        try:
+            recommended_question = extract_nested_json(content) or '[]'
+        except Exception as e:
+            SQLBotLogUtil.warning(f'Parse inline recommended questions failed, saving empty list: {e}')
+
+    stmt = update(ChatRecord).where(and_(ChatRecord.id == record_id)).values(
+        recommended_question_answer=orjson.dumps(answer).decode(),
+        recommended_question=recommended_question,
+    )
+    session.execute(stmt)
+    session.commit()
+    return recommended_question
+
+
 def get_old_questions(session: SessionDep, datasource: int):
     records = []
     if not datasource:
