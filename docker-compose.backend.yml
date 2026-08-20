@@ -42,6 +42,7 @@ services:
       CACHE_REDIS_URL: redis://redis:6379/0
 
       # --- CORS: origin của ứng dụng đối tác, cách nhau bằng dấu phẩy ---
+      CORS_ALLOW_ALL_ORIGINS: ${CORS_ALLOW_ALL_ORIGINS:-False}
       BACKEND_CORS_ORIGINS: ${BACKEND_CORS_ORIGINS}
       FRONTEND_HOST: ${FRONTEND_HOST:-http://localhost:5173}
 
