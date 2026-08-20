@@ -28,14 +28,15 @@ from common.utils.utils import SQLBotLogUtil
 from ..crud.datasource import get_datasource_list, check_status, create_ds, update_ds, delete_ds, getTables, getFields, \
     update_table_and_fields, getTablesByDs, chooseTables, preview, updateTable, updateField, get_ds, fieldEnum, \
     check_status_by_id, sync_single_fields, check_name, create_ds_importing, find_conflicting_ds, \
-    update_table_comments_by_name, update_field_comments_by_name
+    update_table_comments_by_name, update_field_comments_by_name, update_table_status_by_name
 from ..crud.excel_job import create_job, get_job_by_ds_id, resend_callback
 from ..crud.field import get_fields_by_table_id
 from ..crud.table import get_tables_by_ds_id
 from ..models.datasource import CoreDatasource, CreateDatasource, TableObj, CoreTable, CoreField, FieldObj, \
     TableSchemaResponse, ColumnSchemaResponse, PreviewResponse, ImportRequest, SheetFields, FieldInfo, CreatedExcelTable, \
     CreateFromExcelResponse, CreateFromExcelAcceptedResponse, CreateFromExcelUrlRequest, DatasourceStatus, \
-    ExcelImportStatusResponse, EditTableCommentsByNameRequest, EditFieldCommentsByNameRequest
+    ExcelImportStatusResponse, EditTableCommentsByNameRequest, EditFieldCommentsByNameRequest, \
+    EditTableStatusByNameRequest
 from ..task.excel_import_task import submit_import_job
 from ..utils.excel import parse_excel_preview
 from ..utils.excel_import import ExcelImportError, import_sheets_to_db
@@ -396,6 +397,9 @@ async def edit_field(session: SessionDep, field: CoreField):
 @router.post("/editTableCommentsByName", response_model=None,
              summary=f"{PLACEHOLDER_PREFIX}ds_edit_table_comments_by_name")
 @require_permissions(permission=SqlbotPermission(role=['ws_admin'], type='ds', keyExpression="payload.ds_id"))
+@system_log(
+    LogConfig(operation_type=OperationType.UPDATE, module=OperationModules.DATASOURCE,
+              resource_id_expr="payload.ds_id"))
 async def edit_table_comments_by_name(session: SessionDep, payload: EditTableCommentsByNameRequest):
     """
     Ghi chú thích tùy chỉnh cho nhiều bảng của một nguồn dữ liệu, định danh bảng bằng TÊN — quyền
@@ -412,6 +416,9 @@ async def edit_table_comments_by_name(session: SessionDep, payload: EditTableCom
 @router.post("/editFieldCommentsByName", response_model=None,
              summary=f"{PLACEHOLDER_PREFIX}ds_edit_field_comments_by_name")
 @require_permissions(permission=SqlbotPermission(role=['ws_admin'], type='ds', keyExpression="payload.ds_id"))
+@system_log(
+    LogConfig(operation_type=OperationType.UPDATE, module=OperationModules.DATASOURCE,
+              resource_id_expr="payload.ds_id"))
 async def edit_field_comments_by_name(session: SessionDep, payload: EditFieldCommentsByNameRequest):
     """
     Ghi chú thích tùy chỉnh cho nhiều cột của MỘT bảng, định danh bảng và cột bằng TÊN — quyền
@@ -421,6 +428,26 @@ async def edit_field_comments_by_name(session: SessionDep, payload: EditFieldCom
     404 có cấu trúc khi tên bảng/cột không tồn tại trong nguồn.
     """
     return update_field_comments_by_name(session, payload)
+
+
+@router.post("/editTableStatusByName", response_model=None,
+             summary=f"{PLACEHOLDER_PREFIX}ds_edit_table_status_by_name")
+@require_permissions(permission=SqlbotPermission(role=['ws_admin'], type='ds', keyExpression="payload.ds_id"))
+@system_log(
+    LogConfig(operation_type=OperationType.UPDATE_STATUS, module=OperationModules.DATASOURCE,
+              resource_id_expr="payload.ds_id"))
+async def edit_table_status_by_name(session: SessionDep, payload: EditTableStatusByNameRequest):
+    """
+    Bật/tắt nhiều bảng của một nguồn dữ liệu, định danh bảng bằng TÊN — quyền ws_admin và nguồn phải
+    thuộc workspace hiện tại.
+
+    Tắt một bảng là loại nó khỏi ngữ cảnh gửi cho LLM, không xóa dữ liệu đã đồng bộ; muốn đổi hẳn
+    tập bảng được đồng bộ thì dùng ``/chooseTables/{id}``. Chỉ ghi ``checked``, không đụng chú thích
+    — đó là việc của ``editTableCommentsByName``.
+
+    Tắt hết mọi bảng là hợp lệ; ``enabled_count`` trong response cho client tự thấy hậu quả.
+    """
+    return update_table_status_by_name(session, payload)
 
 
 @router.get("/previewData/{id}", response_model=PreviewResponse, summary=f"{PLACEHOLDER_PREFIX}ds_preview_data")

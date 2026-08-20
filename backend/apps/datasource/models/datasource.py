@@ -173,6 +173,41 @@ class EditTableCommentsByNameRequest(BaseModel):
         return v
 
 
+class TableStatusByName(BaseModel):
+    """Một phần tử bảng trong body của ``POST /datasource/editTableStatusByName``.
+
+    ``checked`` cố ý bắt buộc, cùng lý do với ``TableCommentByName``: đã liệt kê bảng thì phải nói rõ
+    bật hay tắt; muốn giữ nguyên bảng nào thì không liệt kê bảng đó. Nhờ vậy không cần gán nghĩa ngầm
+    cho ``null``/vắng mặt như ``editTable`` theo id — nơi thiếu ``checked`` là âm thầm bật lại bảng
+    vì model SQLModel có ``default=True``.
+    """
+    table_name: str
+    checked: bool
+
+
+class EditTableStatusByNameRequest(BaseModel):
+    """Body của ``POST /datasource/editTableStatusByName``: bật/tắt nhiều bảng theo tên.
+
+    Tách riêng khỏi ``EditTableCommentsByNameRequest`` thay vì gộp thành một endpoint tổng quát vì
+    hai thao tác có tác dụng phụ khác hẳn nhau: ghi chú thích buộc phải tính lại embedding, còn
+    bật/tắt thì không (``checked`` không nằm trong chuỗi đem đi embed).
+    """
+    ds_id: int
+    tables: List[TableStatusByName]
+
+    @field_validator("tables")
+    @classmethod
+    def _validate_tables(cls, v: List[TableStatusByName]):
+        """Chặn mảng rỗng và tên bảng lặp — cùng lý do với ``EditTableCommentsByNameRequest``."""
+        if not v:
+            raise ValueError("tables must not be empty")
+        names = [t.table_name for t in v]
+        duplicated = sorted({n for n in names if names.count(n) > 1})
+        if duplicated:
+            raise ValueError(f"duplicated table_name: {duplicated}")
+        return v
+
+
 class FieldCommentByName(BaseModel):
     """Một phần tử cột trong body của ``POST /datasource/editFieldCommentsByName``.
 

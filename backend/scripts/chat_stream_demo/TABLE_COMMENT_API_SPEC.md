@@ -1,11 +1,20 @@
-# Đặc tả API cập nhật chú thích bảng / cột theo tên
+# Đặc tả API cập nhật bảng / cột theo tên
 
 Dành cho hệ thống bên thứ ba cần **ghi chú thích mô tả** cho các bảng và cột của một nguồn dữ liệu
-đã tạo trong SQLBot.
+đã tạo trong SQLBot, và **bật/tắt** từng bảng trong phạm vi hỏi đáp.
 
-Phạm vi: **2 endpoint**. Bảng và cột được chỉ định bằng **tên** (đúng tên trong database gốc), không
+Phạm vi: **3 endpoint**. Bảng và cột được chỉ định bằng **tên** (đúng tên trong database gốc), không
 cần tra id. Thông tin duy nhất cần giữ từ phía SQLBot là `ds_id` — id nguồn dữ liệu mà hệ thống của
 bạn đã nhận khi tạo nguồn.
+
+| Endpoint | Ghi gì |
+|---|---|
+| [`editTableCommentsByName`](#3-post-datasourceedittablecommentsbyname) | Chú thích của nhiều bảng |
+| [`editFieldCommentsByName`](#4-post-datasourceeditfieldcommentsbyname) | Chú thích của nhiều cột trong một bảng |
+| [`editTableStatusByName`](#5-post-datasourceedittablestatusbyname) | Trạng thái bật/tắt của nhiều bảng |
+
+Mỗi endpoint ghi đúng một thứ và không đụng tới thứ của endpoint kia — đổi chú thích không làm bảng
+bật/tắt, và ngược lại.
 
 Mọi ví dụ response trong tài liệu là **capture thật** từ một hệ thống đang chạy.
 
@@ -59,7 +68,7 @@ X-SQLBOT-TOKEN: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
 ⚠ Tên header là `X-SQLBOT-TOKEN`, **không phải** `Authorization`. Tiền tố `Bearer ` là bắt buộc,
 thiếu nó sẽ nhận lỗi `Token schema error!`.
 
-**Quyền:** cả hai endpoint yêu cầu tài khoản có vai trò `ws_admin`, và nguồn dữ liệu `ds_id` phải
+**Quyền:** cả ba endpoint yêu cầu tài khoản có vai trò `ws_admin`, và nguồn dữ liệu `ds_id` phải
 thuộc workspace của tài khoản đó.
 
 **Response thành công:** mọi mã 2xx đều được bọc cùng một vỏ.
@@ -73,7 +82,7 @@ thuộc workspace của tài khoản đó.
 | HTTP | Body | Ý nghĩa |
 |---|---|---|
 | 401 | `"Authentication invalid【...】"` | Token thiếu, sai định dạng, hoặc hết hạn |
-| 404 | JSON — xem [§3](#3-post-datasourceedittablecommentsbyname) / [§4](#4-post-datasourceeditfieldcommentsbyname) | Tên bảng/cột không tồn tại trong nguồn dữ liệu. **Không có gì được ghi** |
+| 404 | JSON — xem [§3](#3-post-datasourceedittablecommentsbyname) / [§4](#4-post-datasourceeditfieldcommentsbyname) / [§5](#5-post-datasourceedittablestatusbyname) | Tên bảng/cột không tồn tại trong nguồn dữ liệu. **Không có gì được ghi** |
 | 422 | `{"detail":[...]}` (định dạng chuẩn FastAPI) | Body sai cấu trúc: thiếu trường bắt buộc, mảng rỗng, tên lặp |
 | 500 | `"<thông điệp>"` | `ds_id` không tồn tại / không thuộc workspace (`"Access denied or resource not found!"`), hoặc lỗi hệ thống |
 
@@ -115,8 +124,8 @@ Ghi chú thích cho **nhiều bảng** của một nguồn dữ liệu trong m�
 
 - Bảng **không được liệt kê** trong `tables` thì **giữ nguyên**, không bị đụng tới. Đây là cách duy
   nhất để "giữ nguyên" — đã liệt kê một bảng thì phải nói rõ ghi gì.
-- Endpoint chỉ ghi chú thích. Các thuộc tính khác của bảng (kể cả trạng thái bật/tắt dùng cho hỏi
-  đáp) không bị thay đổi.
+- Endpoint chỉ ghi chú thích. Các thuộc tính khác của bảng không bị thay đổi — muốn bật/tắt bảng
+  trong phạm vi hỏi đáp thì dùng [§5](#5-post-datasourceedittablestatusbyname).
 - Bảng phải là bảng **đã đồng bộ vào SQLBot**. Tên có trong database gốc nhưng chưa được chọn đồng
   bộ cũng tính là không tìm thấy.
 
@@ -227,7 +236,73 @@ Tên bảng đúng nhưng có tên cột không khớp (không cột nào đư�
 
 ---
 
-## 5. Ví dụ luồng hoàn chỉnh
+## 5. `POST /datasource/editTableStatusByName`
+
+Bật/tắt **nhiều bảng** của một nguồn dữ liệu trong một lời gọi.
+
+Tắt một bảng nghĩa là **loại nó khỏi ngữ cảnh gửi cho mô hình ngôn ngữ**: bảng vẫn còn nguyên trong
+SQLBot cùng chú thích và cấu hình quan hệ, chỉ là không được dùng để trả lời câu hỏi nữa. Bật lại là
+thao tác đối xứng, không mất gì. Dùng khi một bảng chưa sẵn sàng cho người dùng cuối, dữ liệu đang
+sai, hoặc muốn thu hẹp phạm vi để mô hình chọn bảng chính xác hơn.
+
+**Request**
+
+```json
+{
+  "ds_id": 1,
+  "tables": [
+    {"table_name": "NQ01_CE5BE0_7E59_row_values", "checked": true},
+    {"table_name": "DB01_978A87_DACC_row_values", "checked": false}
+  ]
+}
+```
+
+| Field | Kiểu | Bắt buộc | Ghi chú |
+|---|---|---|---|
+| `ds_id` | int | ✔ | Id nguồn dữ liệu trong SQLBot |
+| `tables` | array | ✔ | Ít nhất 1 phần tử, tên bảng không được lặp |
+| `tables[].table_name` | string | ✔ | Tên bảng thật trong database, khớp **chính xác**, phân biệt hoa thường |
+| `tables[].checked` | bool | ✔ | `true` = bảng được dùng cho hỏi đáp, `false` = không |
+
+**Ngữ nghĩa:**
+
+- Bảng **không được liệt kê** thì **giữ nguyên** trạng thái. Đã liệt kê thì phải nói rõ `checked`,
+  không có giá trị mặc định.
+- Endpoint chỉ ghi trạng thái. **Chú thích không bị đụng tới** — không cần gửi lại chú thích đang có.
+- Ghi lại đúng trạng thái sẵn có là hợp lệ, không có tác dụng gì (idempotent).
+- **Được phép tắt hết mọi bảng.** Khi đó nguồn dữ liệu không còn bảng nào để trả lời câu hỏi; hệ
+  thống không chặn, hãy tự kiểm `enabled_count` trong response.
+
+**Response 200**
+
+```json
+{"code": 0, "data": {"tables_updated": 2, "enabled_count": 5}, "msg": null}
+```
+
+| Field | Ý nghĩa |
+|---|---|
+| `tables_updated` | Số bảng đã ghi, dùng để đối soát với số phần tử đã gửi |
+| `enabled_count` | Tổng số bảng **đang bật** của nguồn sau lời gọi này — kể cả bảng không nằm trong request |
+
+**Response 404** — có ít nhất một tên bảng không khớp. Body liệt kê đủ các tên hỏng, và **không
+bảng nào được ghi**, kể cả những bảng có tên đúng trong cùng request:
+
+```json
+{
+  "message": "Some tables not found in datasource",
+  "tables_not_found": ["bang_khong_ton_tai"]
+}
+```
+
+**Response 422** — như [§3](#3-post-datasourceedittablecommentsbyname).
+
+**Khác biệt so với việc chọn bảng đồng bộ:** endpoint này không thêm hay xóa bảng khỏi SQLBot. Bảng
+phải đã được đồng bộ trước; đổi hẳn tập bảng được đồng bộ là chức năng khác, không nằm trong tài
+liệu này.
+
+---
+
+## 6. Ví dụ luồng hoàn chỉnh
 
 Nạp chú thích cho một nguồn dữ liệu có 2 bảng — tổng cộng **3 lời gọi**:
 
@@ -256,9 +331,12 @@ ngữ cảnh chọn bảng ở luồng nền); không có endpoint báo trạng 
 
 Khi chỉ cần sửa lẻ một chú thích, vẫn dùng đúng hai endpoint này với mảng 1 phần tử.
 
+Bật/tắt bảng ([§5](#5-post-datasourceedittablestatusbyname)) là luồng độc lập, gọi lúc nào cũng
+được và không cần nhắc lại chú thích.
+
 ---
 
-## 6. Gợi ý viết chú thích
+## 7. Gợi ý viết chú thích
 
 Chú thích là văn bản tự do gửi thẳng cho mô hình ngôn ngữ, nên chất lượng câu chữ ảnh hưởng trực
 tiếp tới chất lượng câu SQL sinh ra.

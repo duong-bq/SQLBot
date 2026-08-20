@@ -818,6 +818,46 @@ def update_field_comments_by_name(session: SessionDep, payload) -> dict:
     return {"fields_updated": len(records)}
 
 
+def update_table_status_by_name(session: SessionDep, payload) -> dict:
+    """Bật/tắt nhiều bảng của một nguồn dữ liệu, định danh bảng bằng TÊN.
+
+    ``checked`` quyết định bảng có được đưa vào M-Schema gửi cho LLM hay không (bộ lọc ở
+    ``get_table_obj_by_ds``), nên đây là thao tác đổi phạm vi hỏi đáp chứ không phải đổi metadata
+    hiển thị. All-or-nothing như nhóm ``...ByName`` còn lại: một tên không khớp là 404 kèm danh sách
+    và KHÔNG ghi gì.
+
+    Cố ý KHÔNG kích tính lại embedding: chuỗi đem đi embed chỉ ghép từ tên bảng, chú thích bảng và
+    các cột (xem ``save_table_embedding``), hoàn toàn không chứa ``checked`` — chạy lại chỉ tốn một
+    lượt gọi model mà cho ra đúng vector cũ.
+
+    Cũng không đụng ``num`` của nguồn: con số đó đếm số bảng ĐÃ ĐỒNG BỘ trên tổng số bảng trong
+    database, do luồng sync/``chooseTables`` ghi, không liên quan tới bật/tắt.
+
+    Cho phép tắt hết mọi bảng (M-Schema rỗng, nguồn coi như không trả lời được câu hỏi nào) — trả
+    ``enabled_count`` để client tự thấy tình trạng thay vì chặn hộ.
+    """
+    names = [t.table_name for t in payload.tables]
+    records = session.query(CoreTable).filter(
+        and_(CoreTable.ds_id == payload.ds_id, CoreTable.table_name.in_(names))).all()
+    by_name = {r.table_name: r for r in records}
+    missing = [n for n in names if n not in by_name]
+    if missing:
+        raise HTTPException(status_code=404, detail={
+            "message": "Some tables not found in datasource",
+            "tables_not_found": missing,
+        })
+
+    for item in payload.tables:
+        record = by_name[item.table_name]
+        record.checked = item.checked
+        session.add(record)
+    session.commit()
+
+    enabled_count = session.query(CoreTable).filter(
+        and_(CoreTable.ds_id == payload.ds_id, CoreTable.checked == True)).count()
+    return {"tables_updated": len(records), "enabled_count": enabled_count}
+
+
 def preview(session: SessionDep, current_user: CurrentUser, id: int, table_id: int):
     """Lấy 100 dòng dữ liệu đầu của một bảng để xem trước.
 

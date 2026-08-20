@@ -26,6 +26,7 @@
   "ds_edit_field": "Edit Field Info",
   "ds_edit_table_comments_by_name": "Batch Edit Table Comments by Name",
   "ds_edit_field_comments_by_name": "Batch Edit Field Comments by Name",
+  "ds_edit_table_status_by_name": "Batch Enable/Disable Tables by Name",
   "ds_preview_data": "Preview Data",
   "ds_upload_excel": "Upload Excel",
   "ds_excel": "File",
