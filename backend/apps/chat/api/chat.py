@@ -10,7 +10,7 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy import and_, select
 from starlette.responses import JSONResponse
 
-from apps.chat.curd.attachment import save_chat_attachment
+from apps.chat.curd.attachment import save_chat_attachments
 from apps.chat.curd.chat import delete_chat_with_user, get_chart_data_with_user, get_chat_predict_data_with_user, \
     list_chats, get_chat_with_records, create_chat, get_chat_chart_data, get_chat_predict_data, \
     get_chat_with_records_with_data, get_chat_record_by_id, \
@@ -19,7 +19,10 @@ from apps.chat.curd.chat import delete_chat_with_user, get_chart_data_with_user,
 from apps.chat.models.chat_model import CreateChat, ChatRecord, RenameChat, ChatQuestion, AxisObj, QuickCommand, \
     ChatInfo, Chat, ChatFinishStep, ChatQuestionBase, SimpleChat, ChatItem
 from apps.chat.task.llm import LLMService
-from apps.chat.utils.attachment import fetch_docx_attachment, render_attachment_block
+from apps.chat.utils.attachment import (
+    ERR_TOO_MANY_FILES, dedupe_file_urls,
+    docx_download_executor, fetch_docx_attachment,
+    render_attachment_blocks)
 from apps.datasource.utils.excel_import import ExcelImportError
 from apps.swagger.i18n import PLACEHOLDER_PREFIX
 from apps.system.schemas.permission import SqlbotPermission, require_permissions
@@ -510,13 +513,18 @@ async def question_answer(
     user → event SSE ``error`` kèm danh sách lĩnh vực hợp lệ. Giá trị được lưu vào record để
     ``/regenerate`` giữ nguyên ràng buộc.
 
-    Kèm ``fileUrl`` (presigned URL của file .docx) thì tài liệu được tải và trích text NGAY TẠI
-    ĐÂY, trước khi pipeline chạy — client chờ thêm vài giây trước khi stream mở. Nội dung trích
-    trở thành ngữ cảnh của câu hỏi (xem ``question_for_prompt``) và được lưu vào bảng
-    ``chat_attachment`` (trong ``stream_sql``, sau khi record của lượt được tạo). Lỗi ở bước này
-    (URL sai host, hết hạn, file quá to, không phải docx...) trả về ``HTTP 400`` mang ``code`` là mã
-    lỗi máy-đọc-được, KHÔNG phải event SSE ``error``: hỏng hóc được phát hiện trước khi stream mở
-    nên status code vẫn nói được sự thật, và không có record nào được tạo.
+    Kèm ``fileUrls`` (danh sách presigned URL của các file .docx) thì tài liệu được tải và trích
+    text NGAY TẠI ĐÂY, trước khi pipeline chạy — client chờ thêm vài giây trước khi stream mở. Các
+    file được tải SONG SONG nên thời gian chờ là của file chậm nhất, không phải tổng. Nội dung
+    trích trở thành ngữ cảnh của câu hỏi (xem ``question_for_prompt``), xếp theo đúng thứ tự trong
+    ``fileUrls`` và chia nhau một ngân sách ký tự chung; cả bộ được lưu vào bảng
+    ``chat_attachment`` (trong ``stream_sql``, sau khi record của lượt được tạo).
+
+    Hỏng một file là hỏng cả lượt: trả ``HTTP 400`` mang ``code`` là mã lỗi máy-đọc-được và
+    ``fileIndex`` là vị trí file hỏng trong ``fileUrls``, KHÔNG phải event SSE ``error``. Hỏng hóc
+    được phát hiện trước khi stream mở nên status code vẫn nói được sự thật, và không có record nào
+    được tạo. Chạy tiếp với bộ tài liệu thiếu là lựa chọn tệ hơn hẳn: người dùng vẫn nhận được một
+    câu trả lời trôi chảy, chỉ là nó dựa trên tài liệu khuyết mà không ai biết.
     """
     # Phân biệt "không gửi domainCode" với "gửi null/rỗng": không gửi = hỏi trên toàn bộ lĩnh vực
     # được cấp (hợp lệ); đã gửi thì phải mang giá trị thật — null/rỗng gần như chắc chắn là bug
@@ -538,29 +546,57 @@ async def question_answer(
         question=request_question.question,
         domain_code=domain_code,
     )
-    if request_question.fileUrl:
-        try:
-            # fetch_docx_attachment là hàm đồng bộ (mạng + parse CPU) — phải đẩy ra thread để
-            # không chặn event loop.
-            attachment = await asyncio.to_thread(
-                fetch_docx_attachment, request_question.fileUrl
-            )
-        except ExcelImportError as e:
-            # Trả HTTP 400 chứ không phải event SSE: chưa gửi byte nào của stream nên status code
-            # còn nói được sự thật. Dùng lại đúng khuôn của luồng excel (``_bad_request`` trong
-            # apps/datasource/api/datasource.py) — cùng bộ mã lỗi thì phải cùng cách trả, kẻo phía
-            # đối tác phải viết hai nhánh cho một hỏng hóc.
+    file_urls = request_question.fileUrls or []
+    if file_urls:
+        # Trần số file kiểm TRƯỚC và kiểm trên đúng mảng client gửi (chưa bỏ trùng): đây là lớp
+        # chống khuếch đại SSRF — server tự đi tải các URL do client đưa — nên nó phải chặn trước
+        # khi có URL nào được chạm tới. Đếm trên mảng thô cũng để hợp đồng nói được thành một câu
+        # mà client tự kiểm được, không phụ thuộc luật bỏ trùng của server.
+        if len(file_urls) > settings.CHAT_DOC_MAX_FILES:
             raise HTTPException(
-                status_code=400, detail={"code": e.error_code, "message": e.message}
+                status_code=400,
+                detail={"code": ERR_TOO_MANY_FILES,
+                        "message": f"Tối đa {settings.CHAT_DOC_MAX_FILES} file mỗi lượt hỏi, "
+                                   f"request này gửi {len(file_urls)}."},
             )
-        question.attachment_filename = attachment.filename
-        question.attachment_content = attachment.content
-        question.attachment_truncated = attachment.truncated
-        question.attached_doc = render_attachment_block(
-            attachment.filename,
-            attachment.content,
-            attachment.truncated,
-            max_chars=settings.CHAT_DOC_PROMPT_MAX_CHARS,
+        indexed_urls = dedupe_file_urls(file_urls)
+        # Tải SONG SONG: các file được tải ngay trong request, client đang chờ stream mở, nên tải
+        # tuần tự là cộng dồn thời gian chờ của từng file. fetch_docx_attachment là hàm đồng bộ
+        # (mạng + parse CPU) nên mỗi lời gọi phải nằm trong thread riêng, không thì chặn event loop.
+        # Pool riêng chứ không phải `to_thread`: xem docx_download_executor.
+        #
+        # ``return_exceptions=True`` để lỗi được quy về file nào một cách XÁC ĐỊNH: không có nó thì
+        # gather ném luôn exception về đích trước, tức cùng một request hỏng có thể tố hai file
+        # khác nhau tùy tốc độ mạng. Duyệt lại theo thứ tự client gửi thì file hỏng được báo luôn
+        # là file hỏng đầu tiên.
+        loop = asyncio.get_running_loop()
+        results = await asyncio.gather(
+            *(loop.run_in_executor(docx_download_executor, fetch_docx_attachment, url)
+              for _, url in indexed_urls),
+            return_exceptions=True,
+        )
+        for (original_index, _), result in zip(indexed_urls, results):
+            if isinstance(result, ExcelImportError):
+                # Trả HTTP 400 chứ không phải event SSE: chưa gửi byte nào của stream nên status
+                # code còn nói được sự thật. Dùng lại đúng khuôn của luồng excel (``_bad_request``
+                # trong apps/datasource/api/datasource.py) — cùng bộ mã lỗi thì phải cùng cách trả,
+                # kẻo phía đối tác phải viết hai nhánh cho một hỏng hóc. Thêm ``fileIndex`` vì với
+                # nhiều file thì "URL đã hết hạn" mà không nói file nào là câu vô dụng; nó trỏ vào
+                # mảng GỐC của client, không phải mảng đã bỏ trùng.
+                raise HTTPException(
+                    status_code=400,
+                    detail={"code": result.error_code,
+                            "message": f"fileUrls[{original_index}]: {result.message}",
+                            "fileIndex": original_index},
+                )
+            if isinstance(result, BaseException):
+                # Hỏng ngoài dự kiến thì để nguyên cho nhánh 500 chung, đừng khoác cho nó cái áo
+                # "lỗi của client".
+                raise result
+        question.attachments = list(results)
+        question.attached_doc = render_attachment_blocks(
+            question.attachments,
+            total_max_chars=settings.CHAT_DOC_PROMPT_MAX_CHARS,
         )
 
     return await question_answer_inner(
@@ -822,17 +858,15 @@ async def stream_sql(
             embedding=embedding,
         )
         llm_service.init_record(session=session)
-        if getattr(request_question, "attachment_content", None):
-            # Ghi bản gốc của tài liệu đính kèm, gắn với record VỪA tạo — phải nằm sau init_record
-            # vì cần record_id, và trước run_task_async vì pha answer của chính lượt này có thể
-            # đọc lại bảng chat_attachment khi dựng lịch sử.
-            save_chat_attachment(
+        if getattr(request_question, "attachments", None):
+            # Ghi bản gốc của các tài liệu đính kèm, gắn với record VỪA tạo — phải nằm sau
+            # init_record vì cần record_id, và trước run_task_async vì pha answer của chính lượt
+            # này có thể đọc lại bảng chat_attachment khi dựng lịch sử.
+            save_chat_attachments(
                 session=session,
                 chat_id=request_question.chat_id,
                 record_id=llm_service.record.id,
-                filename=request_question.attachment_filename,
-                content=request_question.attachment_content,
-                truncated=request_question.attachment_truncated,
+                attachments=request_question.attachments,
             )
         llm_service.run_task_async(
             in_chat=in_chat,

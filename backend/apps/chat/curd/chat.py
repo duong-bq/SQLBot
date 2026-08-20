@@ -12,7 +12,7 @@ from sqlalchemy.orm import aliased
 from apps.chat.curd.attachment import get_attachments_by_record_ids
 from apps.chat.models.chat_model import Chat, ChatRecord, CreateChat, ChatInfo, RenameChat, ChatQuestion, ChatLog, \
     TypeEnum, OperationEnum, ChatRecordResult, ChatLogHistory, ChatLogHistoryItem, ChatItem
-from apps.chat.utils.attachment import render_attachment_block
+from apps.chat.utils.attachment import render_attachment_blocks
 from common.core.config import settings
 from apps.datasource.crud.datasource import get_ds, is_ds_usable
 from apps.datasource.crud.recommended_problem import get_datasource_recommended_chart
@@ -92,13 +92,36 @@ def list_recent_questions(session: SessionDep, current_user: CurrentUser, dataso
     return [record[0] for record in chat_records] if chat_records else []
 
 
+CHAT_BRIEF_MAX_CHARS = 64
+
+
+def trim_chat_brief(text: Optional[str]) -> str:
+    """Cắt tiêu đề hội thoại cho vừa cột ``chat.brief``, ưu tiên không đứt giữa một từ.
+
+    Trần lấy đúng bằng ``max_length`` của cột (64). Trước đây mọi chỗ đặt tiêu đề đều cắt cứng ở 20
+    ký tự dù cột chứa được 64, nên tiêu đề do LLM đặt thường xuyên mất chữ cuối — "Số lượng đại biểu
+    họ X" về tới client thành "Số lượng đại biểu họ".
+
+    Chỉ cắt khi thật sự vượt trần. Khi phải cắt thì lùi về khoảng trắng gần cuối nhất; khoảng trắng
+    đó nằm quá sớm (chưa tới nửa trần) thì cắt cứng, vì lùi thêm chỉ làm mất nhiều chữ hơn là được.
+    """
+    brief = (text or '').strip()
+    if len(brief) <= CHAT_BRIEF_MAX_CHARS:
+        return brief
+    cut = brief[:CHAT_BRIEF_MAX_CHARS]
+    last_space = cut.rfind(' ')
+    if last_space >= CHAT_BRIEF_MAX_CHARS // 2:
+        cut = cut[:last_space]
+    return cut.rstrip()
+
+
 def rename_chat_with_user(session: SessionDep, current_user: CurrentUser, rename_object: RenameChat) -> str:
     chat = session.get(Chat, rename_object.id)
     if not chat:
         raise Exception(f"Chat with id {rename_object.id} not found")
     if chat.create_by != current_user.id:
         raise Exception(f"Chat with id {rename_object.id} not Owned by the current user")
-    chat.brief = rename_object.brief.strip()[:20]
+    chat.brief = trim_chat_brief(rename_object.brief)
     chat.brief_generate = rename_object.brief_generate
     session.add(chat)
     session.flush()
@@ -114,7 +137,7 @@ def rename_chat(session: SessionDep, rename_object: RenameChat) -> str:
     if not chat:
         raise Exception(f"Chat with id {rename_object.id} not found")
 
-    chat.brief = rename_object.brief.strip()[:20]
+    chat.brief = trim_chat_brief(rename_object.brief)
     chat.brief_generate = rename_object.brief_generate
     session.add(chat)
     session.flush()
@@ -222,11 +245,13 @@ def get_recent_qa_history(session: SessionDep, chat_id: int, exclude_record_id: 
     Bỏ qua lượt hiện tại (`exclude_record_id`) và các lượt không có dữ liệu lẫn câu trả lời: chúng
     chỉ làm loãng ngữ cảnh. Trả về chuỗi rỗng khi không có gì đáng đưa vào, để caller tự quyết định.
 
-    Lượt nào có tài liệu docx đính kèm (bảng chat_attachment) thì khối <attached-document> được
-    chèn lại vào round của lượt đó, với trần ký tự riêng CHAT_DOC_HISTORY_MAX_CHARS. Đây là điểm
-    móc chính sách duy nhất cho tài liệu ở pha answer các lượt sau — các chính sách tương lai
-    (tóm tắt, bỏ qua theo độ liên quan, graph-memory) sửa đúng chỗ này. Tài liệu là message: lượt
-    đính file trôi khỏi cửa sổ `rounds` thì tài liệu biến mất theo, cố ý không có ngoại lệ.
+    Lượt nào có tài liệu docx đính kèm (bảng chat_attachment) thì các khối <attached-document>
+    được chèn lại vào round của lượt đó. CHAT_DOC_HISTORY_MAX_CHARS là trần cho CẢ LƯỢT, các file
+    của lượt chia nhau — nếu không thì một lượt đính năm file sẽ tự nhân năm phần lịch sử của nó
+    lên và đẩy các lượt khác ra khỏi context. Đây là điểm móc chính sách duy nhất cho tài liệu ở
+    pha answer các lượt sau — các chính sách tương lai (tóm tắt, bỏ qua theo độ liên quan,
+    graph-memory) sửa đúng chỗ này. Tài liệu là message: lượt đính file trôi khỏi cửa sổ `rounds`
+    thì tài liệu biến mất theo, cố ý không có ngoại lệ.
     """
     stmt = select(ChatRecord.id, ChatRecord.question, ChatRecord.sql, ChatRecord.data,
                   ChatRecord.answer).where(and_(ChatRecord.chat_id == chat_id))
@@ -259,12 +284,10 @@ def get_recent_qa_history(session: SessionDep, chat_id: int, exclude_record_id: 
         if not rows_text and not _answer:
             continue
         parts = [f'  <user-question>\n{_question or ""}\n  </user-question>']
-        _attachment = attachments.get(row.id)
-        if _attachment:
-            parts.append(render_attachment_block(_attachment.filename, _attachment.content,
-                                                 _attachment.truncated,
-                                                 max_chars=settings.CHAT_DOC_HISTORY_MAX_CHARS,
-                                                 indent='  '))
+        _attachments = attachments.get(row.id)
+        if _attachments:
+            parts.append(render_attachment_blocks(
+                _attachments, total_max_chars=settings.CHAT_DOC_HISTORY_MAX_CHARS, indent='  '))
         if _sql:
             parts.append(f'  <executed-sql>\n{_sql}\n  </executed-sql>')
         if fields_text:
@@ -849,7 +872,7 @@ def create_chat(session: SessionDep, current_user: CurrentUser, create_chat_obj:
     chat = Chat(create_time=datetime.datetime.now(),
                 create_by=current_user.id,
                 oid=current_user.oid if current_user.oid is not None else 1,
-                brief=create_chat_obj.question.strip()[:20],
+                brief=trim_chat_brief(create_chat_obj.question),
                 origin=create_chat_obj.origin if create_chat_obj.origin is not None else 0)
     ds: CoreDatasource | AssistantOutDsSchema | None = None
     if create_chat_obj.datasource:

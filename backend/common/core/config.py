@@ -256,7 +256,7 @@ class Settings(BaseSettings):
     # --- Tải file nguồn từ presigned URL: phần DÙNG CHUNG cho mọi luồng tải ---
     # Ba biến FILE_DOWNLOAD_* dưới đây chi phối CẢ HAI tính năng đang tải file từ presigned URL:
     # import excel bất đồng bộ (POST /datasource/createFromExcelAsync) và tài liệu .docx đính kèm
-    # câu hỏi (`fileUrl` của POST /chat/question). Sửa ở đây là sửa cho cả hai — đó là lý do chúng
+    # câu hỏi (`fileUrls` của POST /chat/question). Sửa ở đây là sửa cho cả hai — đó là lý do chúng
     # không còn mang tiền tố EXCEL_.
     #
     # Mỗi biến vẫn nhận TÊN CŨ làm alias để .env của các bản đã deploy không chết lặng: tên không
@@ -302,22 +302,39 @@ class Settings(BaseSettings):
     EXCEL_DOWNLOAD_PROBE_ENABLED: bool = True
     EXCEL_DOWNLOAD_PROBE_TIMEOUT: int = 3
 
-    # --- Tài liệu .docx đính kèm lượt hỏi chat (`fileUrl` của POST /chat/question) ---
+    # --- Tài liệu .docx đính kèm lượt hỏi chat (`fileUrls` của POST /chat/question) ---
     # Allowlist host và hai timeout kết nối/đọc lấy từ nhóm FILE_DOWNLOAD_* phía trên (cùng một
     # MinIO, cùng một lớp chống SSRF); rỗng vẫn là cấm tất. Dưới đây chỉ là phần riêng của docx.
-    # Trần dung lượng file tải về. Nhỏ hơn hẳn trần excel có chủ ý: docx là zip, trần byte này đồng
-    # thời là chốt đầu tiên chống zip bomb (chốt thứ hai là trần ký tự lúc trích).
+    # Số file tối đa MỘT lượt hỏi được đính kèm. Đây là trần an ninh chứ không phải tiện nghi: URL
+    # do client đưa mà server tự đi tải, nên không có trần thì một request là một lượt khuếch đại
+    # SSRF tùy ý. Đếm trên đúng mảng client gửi (trước khi bỏ trùng) để hợp đồng nói được thành một
+    # câu client tự kiểm được. Quá trần thì HTTP 400 mã TOO_MANY_FILES, chưa URL nào bị chạm tới.
+    CHAT_DOC_MAX_FILES: int = 5
+    # Số thread tối đa dành cho việc tải tài liệu đính kèm, dùng chung cho toàn tiến trình. Phải là
+    # pool RIÊNG chứ không phải pool mặc định của `asyncio.to_thread`: pool mặc định (~32 thread)
+    # đang gánh gần như mọi lời gọi DB đồng bộ của app, mà một lượt tải docx giữ thread tới
+    # CHAT_DOC_DOWNLOAD_TIMEOUT giây. Vài request đính file gặp MinIO chậm là đủ làm mọi endpoint
+    # khác đứng hình — triệu chứng sẽ là "backend chết", không phải "đính kèm chậm". Pool riêng đổi
+    # kiểu hỏng đó thành "các request đính kèm xếp hàng chờ nhau", thứ khoanh vùng được.
+    CHAT_DOC_DOWNLOAD_WORKERS: int = 16
+    # Trần dung lượng file tải về, cho MỖI file. Nhỏ hơn hẳn trần excel có chủ ý: docx là zip, trần
+    # byte này đồng thời là chốt đầu tiên chống zip bomb (chốt thứ hai là trần ký tự lúc trích).
     CHAT_DOC_MAX_MB: int = 15
-    # Trần tổng thời gian tải. Tải chạy NGAY TRONG request /chat/question (client đang chờ SSE mở),
-    # nên tính bằng chục giây chứ không phải chục phút như luồng excel, và không tự tải lại.
+    # Trần tổng thời gian tải, cho MỖI file. Tải chạy NGAY TRONG request /chat/question (client
+    # đang chờ SSE mở) nên tính bằng chục giây chứ không phải chục phút như luồng excel, và không
+    # tự tải lại. Các file trong cùng một lượt được tải SONG SONG nên trần này không cộng dồn.
     CHAT_DOC_DOWNLOAD_TIMEOUT: int = 30
-    # Trần ký tự LÚC TRÍCH — cũng là trần của bản lưu trong bảng chat_attachment.
+    # Trần ký tự LÚC TRÍCH, cho MỖI file — cũng là trần của bản lưu trong bảng chat_attachment.
     CHAT_DOC_EXTRACT_MAX_CHARS: int = 200_000
     # Trần ký tự của khối tài liệu trong prompt của LƯỢT ĐÍNH FILE (cả pha SQL lẫn pha answer).
+    # Là trần TỔNG cho tất cả file của lượt, không phải trần mỗi file: ngân sách context là của cả
+    # prompt, nên nó không được phép nở ra theo số file client gửi. Chia đều cho các file, phần một
+    # file ngắn không dùng hết thì trả lại cho file dài (xem `split_char_budget`).
     # Chưa đo bằng eval harness — đặt theo ngân sách context, đổi thì nên chạy lại harness.
     CHAT_DOC_PROMPT_MAX_CHARS: int = 30_000
     # Trần ký tự của khối tài liệu khi nó xuất hiện lại trong <history> của pha answer các lượt
-    # sau. Chặt hơn trần trên vì lịch sử nhiều lượt còn phải nhường chỗ cho <data> lượt hiện tại.
+    # sau. Cũng là trần TỔNG, tính cho MỖI LƯỢT trong cửa sổ lịch sử. Chặt hơn trần trên vì lịch sử
+    # nhiều lượt còn phải nhường chỗ cho <data> của lượt hiện tại.
     CHAT_DOC_HISTORY_MAX_CHARS: int = 10_000
 
     @field_validator('SQL_DEBUG',

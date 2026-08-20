@@ -10,6 +10,7 @@ from sqlalchemy import Enum as SQLAlchemyEnum
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlmodel import SQLModel, Field
 
+from apps.chat.utils.attachment import AttachmentContent
 from apps.db.constant import DB
 from apps.template.filter.generator import get_permissions_template
 from apps.template.generate_analysis.generator import get_analysis_template
@@ -154,7 +155,7 @@ class ChatRecord(SQLModel, table=True):
 
 
 class ChatAttachment(SQLModel, table=True):
-    """Text đã trích từ file .docx đính kèm một lượt hỏi (`fileUrl` của `POST /chat/question`).
+    """Text đã trích từ các file .docx đính kèm một lượt hỏi (`fileUrls` của `POST /chat/question`).
 
     Lưu bản trích chứ không lưu URL: presigned URL hết hạn sau ít phút nên bản text này là bản gốc
     duy nhất cho các lượt hỏi sau. Tách khỏi `chat_record.question` để cột đó giữ sạch câu người
@@ -166,7 +167,9 @@ class ChatAttachment(SQLModel, table=True):
     __tablename__ = "chat_attachment"
     id: Optional[int] = Field(sa_column=Column(BigInteger, Identity(always=True), primary_key=True))
     chat_id: int = Field(sa_column=Column(BigInteger, nullable=False, index=True))
-    # Lượt hỏi ĐÍNH file. Không unique: hợp đồng hiện tại một lượt một file, nhưng chừa đường mở rộng.
+    # Lượt hỏi ĐÍNH file. Không unique: một lượt đính được nhiều file, mỗi file một dòng. Thứ tự
+    # client gửi được suy ra từ `id` tăng dần — cả lô ghi trong một transaction nên không có chỗ
+    # cho dòng chen ngang.
     record_id: int = Field(sa_column=Column(BigInteger, nullable=False, index=True))
     filename: Optional[str] = Field(sa_column=Column(Text, nullable=True))
     content: str = Field(sa_column=Column(Text, nullable=False))
@@ -500,12 +503,11 @@ class AiModelQuestion(BaseModel):
 class ChatQuestion(AiModelQuestion):
     chat_id: int
     datasource_id: Optional[int] = None
-    # Bản GỐC của tài liệu docx đính kèm lượt này (đã trích thành markdown, chưa cắt theo ngân
-    # sách prompt) — dùng để ghi bảng chat_attachment sau khi record của lượt được tạo. Bản đưa
-    # vào prompt là `attached_doc` (kế thừa từ AiModelQuestion), đã render và áp trần riêng.
-    attachment_filename: Optional[str] = None
-    attachment_content: Optional[str] = None
-    attachment_truncated: bool = False
+    # Bản GỐC của các tài liệu docx đính kèm lượt này (đã trích thành markdown, chưa cắt theo ngân
+    # sách prompt), theo đúng thứ tự client gửi — dùng để ghi bảng chat_attachment sau khi record
+    # của lượt được tạo. Bản đưa vào prompt là `attached_doc` (kế thừa từ AiModelQuestion), đã
+    # render và đã chia ngân sách chung của cả lượt.
+    attachments: list[AttachmentContent] = []
     # Mã lĩnh vực của lượt hỏi (từ `domainCode` của request, hoặc kế thừa từ record gốc khi
     # /regenerate). Được lưu vào chat_record.domain_code và đưa vào chuỗi sàng quyền SW.
     domain_code: Optional[str] = None
@@ -543,11 +545,14 @@ class ChatQuestionBase(BaseModel):
     # datasource gắn cứng lúc tạo, đổi giữa chừng sẽ làm hỏng ngữ cảnh multi-turn.
     datasource: Optional[int] = Body(description='数据源ID，仅当 chat_id 尚不存在、需要自动创建会话时必填',
                                      default=None)
-    # Presigned URL trỏ tới file .docx đính kèm lượt hỏi này. Nội dung file được trích text và
-    # trở thành một phần ngữ cảnh của câu hỏi (cả pha sinh SQL lẫn pha answer). Host phải nằm
-    # trong FILE_DOWNLOAD_ALLOWED_HOSTS; URL chỉ cần sống qua một lần tải ngay trong request.
-    fileUrl: Optional[str] = Body(description='Presigned URL của file .docx đính kèm câu hỏi',
-                                  default=None)
+    # Danh sách presigned URL trỏ tới các file .docx đính kèm lượt hỏi này. Nội dung từng file
+    # được trích text và trở thành một phần ngữ cảnh của câu hỏi (cả pha sinh SQL lẫn pha answer),
+    # xếp theo đúng thứ tự trong mảng này. Host phải nằm trong FILE_DOWNLOAD_ALLOWED_HOSTS; URL
+    # chỉ cần sống qua một lần tải ngay trong request. Tối đa CHAT_DOC_MAX_FILES phần tử; URL
+    # trùng nhau chỉ được tải và đưa vào prompt một lần.
+    fileUrls: Optional[list[str]] = Body(
+        description='Danh sách presigned URL của các file .docx đính kèm câu hỏi',
+        default=None)
     # Mã lĩnh vực (linhVucMa phía SW) giới hạn phạm vi câu hỏi của lượt này. Chỉ có tác dụng với
     # user được SW cấp quyền (có dòng trong ai_user_permissions): bảng ngoài lĩnh vực sẽ vô hình
     # với cả LLM lẫn tầng thực thi. Ngữ nghĩa ba trạng thái: KHÔNG gửi trường này = không lọc lĩnh
