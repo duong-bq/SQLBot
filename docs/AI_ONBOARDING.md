@@ -64,16 +64,18 @@ Hệ quả cụ thể: `ChatFinishStep` đã bị **đánh số lại** để ch
   `AI_CALLBACK_URL` (rỗng là tắt gửi) và `FILE_DOWNLOAD_ALLOWED_HOSTS` (rỗng là **chặn hết**).
   Kiến trúc ở [BACKEND_ARCHITECTURE.md](BACKEND_ARCHITECTURE.md) §5, hợp đồng ở
   `DATASOURCE_API_SPEC.md` §9.
-- `POST /chat/question` nhận thêm `fileUrl` — presigned URL của một file `.docx` đính kèm câu hỏi.
-  File được tải và trích text ngay trong request, ghép vào **trước** câu hỏi thành khối
-  `<attached-document>`, lưu ở bảng `chat_attachment`. Dùng chung
-  `FILE_DOWNLOAD_ALLOWED_HOSTS` với luồng Excel. Thiết kế cốt lõi: tài liệu là **message**, không
-  phải hạ tầng — nó trôi theo cửa sổ lịch sử chứ không sống mãi trong hội thoại. Chi tiết ở
+- `POST /chat/question` nhận thêm `fileUrls` — **danh sách** presigned URL của các file `.docx`
+  đính kèm câu hỏi (tối đa `CHAT_DOC_MAX_FILES`). Các file được tải song song và trích text ngay
+  trong request, ghép vào **trước** câu hỏi thành các khối `<attached-document>`, mỗi file một dòng
+  trong bảng `chat_attachment`. Dùng chung `FILE_DOWNLOAD_ALLOWED_HOSTS` với luồng Excel. Hai thiết
+  kế cốt lõi: tài liệu là **message**, không phải hạ tầng — nó trôi theo cửa sổ lịch sử chứ không
+  sống mãi trong hội thoại; và ngân sách ký tự trong prompt là trần **của cả lượt**, các file chia
+  nhau, nên số file client gửi không làm prompt nở ra. Chi tiết ở
   [TEXT2SQL_PIPELINE.md](TEXT2SQL_PIPELINE.md) §10.
-- Có thư mục test: `backend/tests/` (`uv run pytest tests/`, 31 ca), phủ phần trích `.docx` và toàn
-  bộ logic phân quyền theo user (chuỗi sàng + phép viết lại SQL). Phần còn lại của backend vẫn
-  **không có test tự động** — đo chất lượng pipeline bằng harness ở `scripts/eval_text2sql/`, không
-  phải bằng unit test.
+- Có thư mục test: `backend/tests/` (`uv run pytest tests/`, 121 ca), phủ phần trích `.docx`, toàn bộ
+  logic phân quyền theo user (chuỗi sàng + phép viết lại SQL), và phần bóc khối `<think>` khỏi stream
+  LLM (`process_stream`). Phần còn lại của backend vẫn **không có test tự động** — đo chất lượng
+  pipeline bằng harness ở `scripts/eval_text2sql/`, không phải bằng unit test.
 
 ## 4. Bản đồ tài liệu — hỏi gì thì đọc file nào
 
@@ -121,17 +123,17 @@ lại harness và kèm số liệu. Chi tiết trong [OPERATIONS.md](OPERATIONS.
 **2. Chú thích trong code là nguồn sự thật về "tại sao".**
 [llm.py](../backend/apps/chat/task/llm.py) và [config.py](../backend/common/core/config.py) có
 chú thích rất dày, nhiều chỗ ghi cả kết quả đo được và cảnh báo *"cố ý giữ nhánh này khi merge từ
-upstream"* (ví dụ [llm.py:103](../backend/apps/chat/task/llm.py#L103)). Trước khi "dọn dẹp" một
+upstream"* (ví dụ [llm.py:105](../backend/apps/chat/task/llm.py#L105)). Trước khi "dọn dẹp" một
 đoạn trông thừa, đọc chú thích của nó — phần lớn là vá lỗi đã đo được.
 
 **3. Mọi chỗ cắt bớt dữ liệu đưa vào prompt đều phải nói cho LLM biết đã cắt.**
 Cắt im lặng thì LLM đếm số dòng nó nhận được rồi báo đó là tổng. Ca đo thật: SQL trả 136 dòng,
 câu trả lời khẳng định "tổng cộng 72 nghị quyết". Cặp `ANSWER_MAX_ROWS` +
-`build_data_scope_note` ([llm.py:75-78](../backend/apps/chat/task/llm.py#L75)) tồn tại vì lý do
+`build_data_scope_note` ([llm.py:77-80](../backend/apps/chat/task/llm.py#L77)) tồn tại vì lý do
 đó và **phải luôn đi cùng nhau**.
 
 ## 6. Đi tiếp
 
 Muốn sửa pha answer → [TEXT2SQL_PIPELINE.md](TEXT2SQL_PIPELINE.md) §5, rồi mở
-[llm.py:662](../backend/apps/chat/task/llm.py#L662) và khối `answer` trong
+[llm.py:664](../backend/apps/chat/task/llm.py#L664) và khối `answer` trong
 [templates/template.yaml:630](../backend/templates/template.yaml#L630).

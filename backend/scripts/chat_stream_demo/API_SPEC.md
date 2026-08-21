@@ -113,7 +113,7 @@ câu trả lời bằng lời, cấu hình biểu đồ — đều về trên c�
 ```
 https://<host>/api/v1
 ```
-Môi trường test: http://192.168.9.89:8001/api/v1
+Môi trường test: http://192.168.51.164:8002/api/v1
 
 ### 3.2. Xác thực
 
@@ -159,24 +159,29 @@ Luôn kiểm tra `status_code` trước khi bóc `.data`. Ngoại lệ: lỗi va
 
 > Truy cập trái phép trả về **500**, không phải 403 — hành vi hiện tại của hệ thống.
 
-**Lỗi của file đính kèm** (`fileUrl` trong `POST /chat/question`, xem
-[§6.10](#610-gửi-kèm-tài-liệu-docx--fileurl)) đều trả **`400`** với body có cấu trúc:
+**Lỗi của file đính kèm** (`fileUrls` trong `POST /chat/question`, xem
+[§6.10](#610-gửi-kèm-tài-liệu-docx--fileurls)) đều trả **`400`** với body có cấu trúc:
 
 ```json
-{"code": "URL_EXPIRED", "message": "fileUrl has already expired"}
+{"code": "URL_EXPIRED", "message": "fileUrls[2]: fileUrl has already expired", "fileIndex": 2}
 ```
 
-| `code` | Nguyên nhân |
-|---|---|
-| `URL_INVALID` | `fileUrl` không phải URL `http(s)` |
-| `URL_HOST_NOT_ALLOWED` | Host không nằm trong danh sách cho phép của SQLBot |
-| `URL_BAD_EXTENSION` | Đuôi file không phải `.docx` |
-| `URL_EXPIRED` | Chữ ký đã hết hạn, hoặc hạn còn lại quá ngắn |
-| `DOWNLOAD_FORBIDDEN` | Kho đối tượng từ chối (`403`) — chữ ký sai hoặc hết hạn |
-| `DOWNLOAD_NOT_FOUND` | Kho đối tượng báo không có object (`404`) |
-| `DOWNLOAD_FAILED` | Không tải được vì lý do khác (mạng, kho đối tượng lỗi, file rỗng) |
-| `FILE_TOO_LARGE` | File vượt trần **15 MB** |
-| `DOC_PARSE_FAILED` | Tải về được nhưng không đọc được như một file `.docx` |
+`fileIndex` là **vị trí file hỏng trong mảng `fileUrls` bạn đã gửi**, đếm từ 0. Nó có mặt ở mọi mã
+lỗi của bảng dưới, trừ `TOO_MANY_FILES` — lỗi đó thuộc về cả request chứ không về file nào. Dùng
+`fileIndex` để chỉ đúng file cho người dùng; `message` là câu cho người đọc, đừng parse.
+
+| `code` | `fileIndex` | Nguyên nhân |
+|---|---|---|
+| `TOO_MANY_FILES` | không có | Gửi quá số file cho phép trong một lượt (hiện là **5**) |
+| `URL_INVALID` | có | Phần tử không phải URL `http(s)` |
+| `URL_HOST_NOT_ALLOWED` | có | Host không nằm trong danh sách cho phép của SQLBot |
+| `URL_BAD_EXTENSION` | có | Đuôi file không phải `.docx` |
+| `URL_EXPIRED` | có | Chữ ký đã hết hạn, hoặc hạn còn lại quá ngắn |
+| `DOWNLOAD_FORBIDDEN` | có | Kho đối tượng từ chối (`403`) — chữ ký sai hoặc hết hạn |
+| `DOWNLOAD_NOT_FOUND` | có | Kho đối tượng báo không có object (`404`) |
+| `DOWNLOAD_FAILED` | có | Không tải được vì lý do khác (mạng, kho đối tượng lỗi, file rỗng) |
+| `FILE_TOO_LARGE` | có | File vượt trần **15 MB** |
+| `DOC_PARSE_FAILED` | có | Tải về được nhưng không đọc được như một file `.docx` |
 
 Bộ mã này dùng chung với luồng nạp Excel (`DATASOURCE_API_SPEC.md`) — cùng một hỏng hóc thì cùng
 một tên, dù lộ ra ở endpoint nào.
@@ -304,7 +309,7 @@ Accept: text/event-stream
 | `chat_id` | string (UUID) | ✔ | Do client tự sinh, xem [§1.2](#12-chat-hội-thoại--chat_id) |
 | `question` | string | ✔ | Câu hỏi bằng tiếng Việt |
 | `datasource` | int | chỉ lần đầu | Bắt buộc khi `chat_id` chưa tồn tại; các lần sau có thể không cần gửi |
-| `fileUrl` | string | ✗ | Presigned URL của một file `.docx` gửi kèm câu hỏi — xem [§6.10](#610-gửi-kèm-tài-liệu-docx--fileurl) |
+| `fileUrls` | string[] | ✗ | Danh sách presigned URL của các file `.docx` gửi kèm câu hỏi, tối đa **5** — xem [§6.10](#610-gửi-kèm-tài-liệu-docx--fileurls) |
 | `domainCode` | string | ✗ | Giới hạn câu hỏi trong một lĩnh vực nghiệp vụ — xem [§6.11](#611-giới-hạn-theo-lĩnh-vực--domaincode). **Không gửi trường này** nếu muốn hỏi trên toàn bộ phạm vi được cấp; gửi `null` là lỗi |
 
 Câu hỏi **tiếp theo** trên cùng hội thoại dùng `chat_id` cũ:
@@ -315,7 +320,7 @@ Câu hỏi **tiếp theo** trên cùng hội thoại dùng `chat_id` cũ:
 
 **Response**: `HTTP 200`, `Content-Type: text/event-stream; charset=utf-8`
 
-### 6.1. Định dạng dây
+### 6.1. Định dạng SSE
 
 Mỗi event chiếm **đúng 2 dòng**:
 
@@ -336,8 +341,28 @@ Khác SSE thông thường ở hai điểm: **không có `event:`** (chỉ có `
 | Số lượng | hàng trăm | đúng 1 |
 | Cách xử lý | **cộng dồn `content`** để hiện chữ chạy | **thay thế** state |
 
-> Ở cả `sql-result` lẫn `answer-result`, chỉ lấy trường **`content`**. Trường `reasoning_content`
-> luôn rỗng — hệ thống đã tắt chế độ thinking của LLM — nên bỏ qua nó.
+> Ở cả `sql-result` lẫn `answer-result`, thứ cần cộng dồn để render là trường **`content`**.
+
+**`reasoning_content` mang phần suy luận của mô hình, không phải câu trả lời.**
+
+| Event | `reasoning_content` |
+|---|---|
+| `answer-result` | luôn rỗng |
+| `sql-result` | **có nội dung** — mô hình suy luận trước khi viết SQL |
+
+Vì thế các event `sql-result` về thành **hai đợt nối nhau**: đợt đầu chỉ có `reasoning_content`
+(`content` rỗng), đợt sau ngược lại — chỉ có `content` (`reasoning_content` rỗng). Không có event
+hay cờ nào đánh dấu ranh giới giữa hai đợt, và không cần: chỉ việc cộng dồn từng trường riêng ra
+hai chuỗi.
+
+Bỏ qua hoàn toàn `reasoning_content` là an toàn — nó không chứa thông tin nào mà các event mốc
+phía sau không có. Muốn hiện "bot đang suy nghĩ" thì cộng dồn riêng nó vào một khu vực riêng,
+**đừng trộn vào `content`**.
+
+⚠ `content` của `sql-result` là **bản thô** mô hình sinh ra: một khối JSON chứa câu SQL kèm vài
+metadata (trong đó có tiêu đề hội thoại). Đừng parse chuỗi này — bản đã bóc sẵn và kiểm duyệt về ở
+event `sql` và `brief` ngay sau đó. Chỉ dùng `content` của `sql-result` khi muốn hiện quá trình
+sinh SQL cho người dùng xem.
 
 #### `answer-result` là câu trả lời của Bot
 
@@ -358,7 +383,7 @@ event `answer`. SQL vẫn dùng được bình thường.
 | `question` | `{type, question}` | Câu hỏi đã chuẩn hóa |
 | `sql-result` | `{type, content, reasoning_content}` | Đang sinh SQL, từng token |
 | `info` | `{type, msg: "sql generated"}` | Kết thúc **một lượt** sinh SQL — có thể xuất hiện nhiều lần, xem [§6.8](#68-sql-hỏng-không-phải-lúc-nào-cũng-thành-error) |
-| `brief` | `{type, brief}` | Tiêu đề hội thoại LLM tự đặt. *Chỉ có ở câu hỏi đầu tiên* |
+| `brief` | `{type, brief}` | Tiêu đề hội thoại bot tự đặt, tối đa 64 ký tự. Về cùng lúc với `sql` vì được sinh trong cùng một lượt. *Chỉ có ở câu hỏi đầu tiên của hội thoại* |
 | `sql` | `{type, content}` | **SQL chính thức**, đã qua kiểm duyệt và format. *Có thể không có* — xem [§6.8](#68-sql-hỏng-không-phải-lúc-nào-cũng-thành-error) |
 | `sql-data` | `{type, content: "execute-success", data}` | ★ **Số liệu** — kết quả chạy SQL, xem [§6.6](#66-số-liệu--event-sql-data). *Có thể không có* |
 | `answer-result` | `{type, content, reasoning_content}` | ★ **Câu trả lời**, từng token — cộng dồn `content` |
@@ -670,29 +695,40 @@ lượt hỏi bình thường. Không cần báo lỗi cho người dùng — v�
 Quy ước này giống hệt `info: answer failed` ở pha answer: **một pha phụ hỏng không được giết cả lượt
 hỏi.** Chỉ có `type: "error"` mới nghĩa là cả lượt hỏi thất bại.
 
-### 6.10. Gửi kèm tài liệu `.docx` — `fileUrl`
+### 6.10. Gửi kèm tài liệu `.docx` — `fileUrls`
 
-Người dùng có thể đính một văn bản Word vào câu hỏi: client đẩy file lên kho đối tượng, ký một
-presigned URL rồi gửi URL đó trong trường `fileUrl`. SQLBot **tải và đọc file ngay trong request**,
-trước khi stream mở, rồi đưa nội dung vào ngữ cảnh của lượt hỏi.
+Người dùng có thể đính **một hoặc nhiều** văn bản Word vào câu hỏi: client đẩy file lên kho đối
+tượng, ký presigned URL cho từng file rồi gửi cả danh sách trong trường `fileUrls`. SQLBot **tải và
+đọc các file ngay trong request**, trước khi stream mở, rồi đưa nội dung vào ngữ cảnh của lượt hỏi.
 
 ```json
 {
   "chat_id": "7fa1a92e-a07b-442b-bade-1210897903e2",
-  "question": "Đối chiếu số liệu trong văn bản này với dữ liệu thu ngân sách năm 2024",
-  "fileUrl": "https://minio.example.com/bucket/bao-cao.docx?X-Amz-Algorithm=..."
+  "question": "Đối chiếu số liệu trong hai văn bản này với dữ liệu thu ngân sách năm 2024",
+  "fileUrls": [
+    "https://minio.example.com/bucket/bao-cao-quy-3.docx?X-Amz-Algorithm=...",
+    "https://minio.example.com/bucket/phu-luc-bang-bieu.docx?X-Amz-Algorithm=..."
+  ]
 }
 ```
 
 **Hợp đồng stream không đổi.** Không có event mới nào. Gửi kèm file thành công thì stream chạy y hệt
 mọi lượt hỏi khác — chỉ khác ở chỗ câu trả lời có thêm ngữ cảnh từ tài liệu.
 
-**Yêu cầu với URL**
+**Yêu cầu với danh sách**
 
-| | |
+| Khía cạnh | Yêu cầu |
+|---|---|
+| Số file | tối đa **5** mỗi lượt hỏi, đếm trên đúng mảng bạn gửi. Quá thì `400 TOO_MANY_FILES` |
+| Thứ tự | mô hình đọc theo đúng thứ tự trong mảng. Câu hỏi tham chiếu "văn bản thứ hai" thì thứ tự này là thứ tự đó |
+| URL trùng nhau | chỉ được tải và đưa vào ngữ cảnh **một lần**. So sánh theo chuỗi URL, nên hai chữ ký khác nhau của cùng một file vẫn tính là hai file |
+
+**Yêu cầu với từng URL**
+
+| Khía cạnh | Yêu cầu |
 |---|---|
 | Đuôi file | chỉ `.docx` (không nhận `.doc`, `.pdf`) |
-| Dung lượng | tối đa **15 MB** |
+| Dung lượng | tối đa **15 MB** mỗi file |
 | Host | phải nằm trong danh sách cho phép của SQLBot — liên hệ bên vận hành để khai báo |
 | Hạn chữ ký | còn ít nhất **10 giây** khi gọi API |
 
@@ -700,11 +736,20 @@ mọi lượt hỏi khác — chỉ khác ở chỗ câu trả lời có thêm n
 Markdown. **Bỏ qua**: ảnh, header/footer, chú thích, hình vẽ. Tài liệu quá dài bị cắt bớt, và phần
 bị cắt được nói rõ cho mô hình biết chứ không lặng lẽ mất.
 
-**Thời gian chờ**: client sẽ thấy stream mở chậm hơn bình thường vài giây — đó là lúc server tải và
-đọc file. Timeout phía client nên tính cả khoảng này.
+⚠ **Ngân sách ngữ cảnh là của cả lượt hỏi, không phải của mỗi file.** Gửi năm file không cho mô hình
+gấp năm lần lượng chữ — các file chia nhau đúng ngần ấy ngân sách, nên càng nhiều file thì mỗi file
+càng bị cắt sâu. Gửi hai văn bản dài để hỏi một câu đối chiếu thường ra kết quả tốt hơn gửi năm văn
+bản, trong đó có ba cái không liên quan.
 
-**Lỗi**: trả `HTTP 400` với `{"code", "message"}` ([§3.4](#34-bảng-mã-lỗi)), **không** có event SSE.
-Lúc đó chưa có lượt hỏi nào được tạo — người dùng sửa file rồi gửi lại là được, không mất gì.
+**Thời gian chờ**: client sẽ thấy stream mở chậm hơn bình thường vài giây — đó là lúc server tải và
+đọc file. Các file được tải song song nên thời gian chờ xấp xỉ của file chậm nhất chứ không phải
+tổng, nhưng timeout phía client vẫn nên tính cả khoảng này.
+
+**Lỗi**: hỏng **một** file là hỏng cả lượt hỏi. Trả `HTTP 400` với `{"code", "message", "fileIndex"}`
+([§3.4](#34-bảng-mã-lỗi)), **không** có event SSE; `fileIndex` chỉ đúng phần tử hỏng trong mảng bạn
+đã gửi. Lúc đó chưa có lượt hỏi nào được tạo — người dùng sửa file rồi gửi lại là được, không mất
+gì. Server cố ý không âm thầm bỏ file hỏng và chạy tiếp: người dùng sẽ nhận được một câu trả lời
+trôi chảy dựa trên bộ tài liệu khuyết mà không ai biết.
 
 **Tài liệu không sống mãi trong hội thoại** — xem [§7.6](#76-tài-liệu-đính-kèm-trôi-theo-cửa-sổ-hội-thoại).
 
@@ -814,7 +859,7 @@ hợp, không phải công cụ trích xuất dữ liệu.
 
 ### 7.6. Tài liệu đính kèm trôi theo cửa sổ hội thoại
 
-File `.docx` gửi kèm ([§6.10](#610-gửi-kèm-tài-liệu-docx--fileurl)) là **một phần của lượt hỏi đó**,
+File `.docx` gửi kèm ([§6.10](#610-gửi-kèm-tài-liệu-docx--fileurls)) là **một phần của lượt hỏi đó**,
 không phải kiến thức gắn vào hội thoại. Nó theo lịch sử sang các lượt sau đúng như câu hỏi và câu
 trả lời — nghĩa là cũng bị cắt bớt khi lịch sử dài, và **biến mất khỏi ngữ cảnh** khi lượt đính kèm
 đã lùi ra ngoài cửa sổ vài lượt gần nhất.

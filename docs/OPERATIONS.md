@@ -129,7 +129,7 @@ vector cũ và mới không cùng không gian.
 | Nơi | Giá trị | Ghi chú |
 |---|---|---|
 | `GENERATE_SQL_QUERY_LIMIT_ENABLED` | `True` | Ép LLM thêm `LIMIT` vào SQL |
-| `ANSWER_MAX_ROWS` (**hằng số trong code**, [llm.py:75](../backend/apps/chat/task/llm.py#L75)) | `100` | Trần số dòng nhồi vào prompt answer. Sửa thì **bắt buộc** giữ nguyên cặp với `build_data_scope_note` |
+| `ANSWER_MAX_ROWS` (**hằng số trong code**, [llm.py:77](../backend/apps/chat/task/llm.py#L77)) | `100` | Trần số dòng nhồi vào prompt answer. Sửa thì **bắt buộc** giữ nguyên cặp với `build_data_scope_note` |
 
 ### 2.7. Bảo mật và mạng
 
@@ -199,20 +199,22 @@ dùng được ngay.
 
 ### 2.9. Tài liệu `.docx` đính kèm câu hỏi
 
-Chi phối trường `fileUrl` của `POST /chat/question` — xem
+Chi phối trường `fileUrls` của `POST /chat/question` — xem
 [TEXT2SQL_PIPELINE.md §10](TEXT2SQL_PIPELINE.md).
 
-| Biến | Mặc định | Tác dụng |
-|---|---|---|
-| `CHAT_DOC_MAX_MB` | `15` | Trần dung lượng file. Ép trên **số byte thật** đếm trong lúc tải, không tin `Content-Length`. Thấp hơn hẳn trần Excel vì file tải thẳng vào **RAM** (client đang chờ trên connection, không có worker nền để ghi đĩa) — trần này nhân với số request đồng thời chính là chi phí RAM |
-| `CHAT_DOC_DOWNLOAD_TIMEOUT` | `30` | Trần cho cả lượt tải. Người dùng đang ngồi đợi, không có chỗ nào để lùi lại làm sau |
-| `CHAT_DOC_EXTRACT_MAX_CHARS` | `200000` | Trần ký tự lúc trích, ép **trong lúc duyệt** chứ không cắt sau — docx là file zip, không chặn sớm thì một file 1 MB bung ra hàng trăm MB text. Đây cũng là bản được lưu xuống `chat_attachment` |
-| `CHAT_DOC_PROMPT_MAX_CHARS` | `30000` | Phần tài liệu đưa vào prompt của **chính lượt đính kèm** |
-| `CHAT_DOC_HISTORY_MAX_CHARS` | `10000` | Phần tài liệu đưa vào prompt của các **lượt sau**, qua lịch sử answer |
+| Biến | Mặc định | Phạm vi | Tác dụng |
+|---|---|---|---|
+| `CHAT_DOC_MAX_FILES` | `5` | mỗi lượt | Số file tối đa một lượt hỏi được đính. Đếm trên đúng mảng client gửi, kiểm **trước** khi chạm tới URL nào. Đây là lớp chống khuếch đại SSRF: server tự đi tải URL do client đưa, không có trần thì một request là một lượt quét mạng nội bộ tùy ý. Quá trần trả `400 TOO_MANY_FILES` |
+| `CHAT_DOC_DOWNLOAD_WORKERS` | `16` | toàn tiến trình | Số thread của pool **riêng** dành cho việc tải tài liệu. Xem bẫy "pool thread mặc định là của chung" ở §7.6 để biết vì sao không được dùng pool mặc định |
+| `CHAT_DOC_MAX_MB` | `15` | mỗi file | Trần dung lượng file. Ép trên **số byte thật** đếm trong lúc tải, không tin `Content-Length`. Thấp hơn hẳn trần Excel vì file tải thẳng vào **RAM** (client đang chờ trên connection, không có worker nền để ghi đĩa) — nhân với `CHAT_DOC_MAX_FILES` rồi nhân với số request đồng thời mới ra chi phí RAM tệ nhất |
+| `CHAT_DOC_DOWNLOAD_TIMEOUT` | `30` | mỗi file | Trần cho một lượt tải. Người dùng đang ngồi đợi, không có chỗ nào để lùi lại làm sau. Các file của cùng một lượt tải **song song** nên trần này không cộng dồn theo số file |
+| `CHAT_DOC_EXTRACT_MAX_CHARS` | `200000` | mỗi file | Trần ký tự lúc trích, ép **trong lúc duyệt** chứ không cắt sau — docx là file zip, không chặn sớm thì một file 1 MB bung ra hàng trăm MB text. Đây cũng là bản được lưu xuống `chat_attachment` |
+| `CHAT_DOC_PROMPT_MAX_CHARS` | `30000` | **cả lượt** | Phần tài liệu đưa vào prompt của **chính lượt đính kèm**. Trần tổng, các file chia nhau — số file client gửi không làm prompt nở ra |
+| `CHAT_DOC_HISTORY_MAX_CHARS` | `10000` | **mỗi lượt trong cửa sổ** | Phần tài liệu đưa vào prompt của các **lượt sau**, qua lịch sử answer. Cũng là trần tổng, tính cho từng lượt |
 
 **Không có biến allowlist riêng**: dùng chung `FILE_DOWNLOAD_ALLOWED_HOSTS` ở §2.8 vì cùng trỏ về
 một MinIO — tên biến không mang tiền tố của luồng nào chính là để nhắc điều đó. Rỗng vẫn là **chặn
-tất cả**: chưa khai host thì tính năng đính kèm coi như chưa mở, mọi `fileUrl` trả
+tất cả**: chưa khai host thì tính năng đính kèm coi như chưa mở, mọi `fileUrls` trả
 `400 URL_HOST_NOT_ALLOWED`. Timeout bắt tay và timeout đọc cũng lấy từ cặp `FILE_DOWNLOAD_*`; riêng
 `EXCEL_DOWNLOAD_RETRIES` **không** áp dụng — luồng này không thử lại, việc người dùng bấm gửi lại
 chính là vòng retry.
@@ -425,7 +427,7 @@ Một dòng cho mỗi thao tác, phân biệt bằng cột `operate` (`Operation
 | Cột | Nội dung |
 |---|---|
 | `messages` (JSONB) | **Đây là chỗ có giá trị nhất.** Xem §"hai bản messages" bên dưới |
-| `reasoning_content` | Phần thinking (thường rỗng vì đã tắt) |
+| `reasoning_content` | Phần suy luận. Rỗng ở hầu hết bước, **trừ `GENERATE_SQL`**: prompt pha đó yêu cầu model suy luận trong khối `<think>`. `LLM_DISABLE_THINKING` chỉ tắt thinking native của provider, không tắt khối này |
 | `token_usage` | Số token vào/ra |
 | `local_operation` | `True` = bước không gọi LLM (chọn bảng, lọc thuật ngữ, chạy SQL) |
 | `error` | Bước này có hỏng không |
@@ -581,6 +583,7 @@ kỳ tài liệu, log hay issue nào; nếu cần xoay vòng mật khẩu thì p
 | **`submit` phải đứng sau `commit`** | Worker mở session riêng; ở mức cô lập READ COMMITTED nó không thấy dòng job của transaction chưa chốt. Submit trước commit thì worker báo "job not found" một cách ngẫu nhiên theo thời điểm |
 | **Exception trong `Future` biến mất không dấu vết** | `executor.submit` trả về `Future`; không ai gọi `.result()` thì lỗi bị nuốt hoàn toàn, job đứng im ở `running` cho tới khi vòng phục hồi chôn nó. Mọi điểm vào của worker phải có try/except bọc ngoài cùng |
 | **Đừng chờ trong `async def` bằng lời gọi đồng bộ** | Route là coroutine chạy trên event loop dùng chung; một câu lệnh DB đứng chờ vài giây (khóa, truy vấn nặng) chặn **toàn bộ** tiến trình. Đã đo được: bản đầu dùng `pg_advisory_xact_lock` (chờ tới 5s) làm client redis async trong cùng tiến trình văng `TimeoutError` và request trả 500 khi có vài lời gọi cùng tên bắn ra một lúc. Cách chữa: `pg_try_advisory_xact_lock` không chờ, lặp lại với `await asyncio.sleep` — lúc ngủ thì event loop được trả về |
+| **Pool thread mặc định là của chung, đừng cho việc mạng vào đó** | `asyncio.to_thread` dùng **một** `ThreadPoolExecutor` mặc định (~32 thread) cho toàn tiến trình, mà hơn ba mươi chỗ trong repo đang đẩy lời gọi DB đồng bộ qua đó — mỗi lời gọi chỉ giữ thread vài chục mili-giây. Nhét một tác vụ mạng vào cùng pool là nhét thứ giữ thread hàng chục giây: vài request tải file gặp nguồn chậm là bão hòa pool, và triệu chứng quan sát được sẽ là **"backend chết"** — mọi endpoint chậm theo — chứ không phải "tải file chậm", nên nhìn log rất khó lần ra thủ phạm. Vì vậy luồng tải docx có pool RIÊNG (`docx_download_executor`, `CHAT_DOC_DOWNLOAD_WORKERS`): pool riêng đổi kiểu hỏng đó thành "các request đính kèm xếp hàng chờ nhau", thứ khoanh vùng được. Đánh đổi: `run_in_executor` **không** mang contextvar sang thread mới, nên hàm chạy trong pool đó phải là hàm thuần |
 | **`NULL < x` cho UNKNOWN, không phải TRUE** | Mọi điều kiện lọc theo ngưỡng trên cột nullable (`heartbeat_at`, `callback_claimed_at`, `next_attempt_at`, `status`) phải có nhánh `is_(None)` đi kèm. Thiếu nhánh đó thì đúng những dòng cần cứu nhất — dòng chưa kịp ghi mốc thời gian — lại vĩnh viễn không được nhặt. Đã dính hai lần: `usable_ds_condition` và `requeue_stale_callbacks` |
 | **`AI_CALLBACK_URL` rỗng thì im lặng không gửi** | Không có log lỗi, không có lần thử nào bị đốt. Job vẫn `success`, thư vẫn nằm chờ trong `excel_import_jobs`, và hệ ngoài chờ mãi. Triệu chứng: `SELECT count(*) FROM excel_import_jobs WHERE callback_status='pending'` tăng dần |
 | **Callback là "ít nhất một lần"** | Bên nhận trả 2xx chậm hơn timeout thì lá thư đó vẫn được gửi lại. Không có cách nào biến thành "đúng một lần" — bên nhận phải idempotent theo `Id` |
