@@ -44,7 +44,7 @@ chọn nhanh `userId` cần xem chi tiết mà không cần biết trước.
     "userId": "usr-2",
     "fullName": null,
     "isAdmin": true,
-    "tableCount": 0,
+    "tableCount": 5,
     "syncVersion": 1786356100000,
     "syncedAt": "2026-08-11T10:05:00Z"
   }
@@ -53,6 +53,11 @@ chọn nhanh `userId` cần xem chi tiết mà không cần biết trước.
 
 Mảng rỗng nếu chưa có user nào từng được đồng bộ. Không phân trang, không sắp xếp theo tham số —
 luôn sắp theo `userId`.
+
+⚠ **`tableCount` luôn ≥ 1.** Endpoint chỉ liệt kê user đang có ít nhất một dòng quyền, nên giá trị
+`0` không bao giờ xuất hiện — đừng viết nhánh xử lý cho nó. User bị thu hồi hết quyền
+(`formQueries: []`) **biến mất khỏi danh sách này**, chứ không hiện ra với `tableCount: 0`; muốn
+xác nhận trạng thái của họ thì gọi endpoint chi tiết ở §3.
 
 | Trường | Ý nghĩa |
 |---|---|
@@ -144,7 +149,7 @@ Muốn phân biệt hai ca này phải tự query `ai_sync_hook_logs` theo `user
 ```bash
 TOKEN=$(curl -s -X POST "https://<host>/api/v1/login/access-token" \
   -H "Content-Type: application/x-www-form-urlencoded" \
-  -d "username=<tai-khoan>&password=<mat-khau>" | jq -r .access_token)
+  -d "username=<tai-khoan>&password=<mat-khau>" | jq -r .data.access_token)
 
 # Tóm tắt tất cả user
 curl -s "https://<host>/api/v1/hooks/ai-sync/permissions" \

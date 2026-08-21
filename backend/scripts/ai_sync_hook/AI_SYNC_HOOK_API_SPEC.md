@@ -64,6 +64,17 @@ HTTP status phản ánh đúng kết quả (2xx thành công, 4xx lỗi phía SW
 Cấu trúc `results[]` thay đổi theo `actionType`: phần tử có khoá `userId` với actionType 1, khoá
 `datasourceId` với actionType 4 (§6). Các trường còn lại giữ nguyên hình dạng.
 
+⚠ **`actionType` trong response có thể mang giá trị `0`, và `logId` có thể là `null`** — ở đúng hai
+nhánh lỗi sớm nhất: thiếu `X-Idempotency-Key`, và body không phải JSON object. Hai ca đó bị chặn
+trước khi hook đọc được tới `actionType` và trước khi dòng audit được ghi, nên không có giá trị
+thật để vọng lại. Client parse `actionType` theo enum 1–6 (§2) **phải chấp nhận thêm giá trị `0`**,
+nếu không sẽ vỡ đúng lúc cần đọc thông báo lỗi nhất.
+
+Ngoài hai nhánh đó, `actionType` là giá trị SW đã gửi: vọng lại nguyên văn khi nó là integer — kể
+cả integer ngoài dải 1–6, gửi `99` thì nhận lại `99` — và bằng `0` khi nó sai kiểu, ví dụ gửi chuỗi
+`"1"`. Riêng response `DUPLICATE` (§7) vọng lại `actionType` của **bản tin đầu tiên** đã dùng key
+đó, không phải của request hiện tại.
+
 ---
 
 ## 2. Action Type
@@ -103,6 +114,12 @@ Một actionType đã release thì không được đổi ý nghĩa.
 Vỏ envelope giống nhau cho mọi actionType. SW gửi kèm trường lạ nào (kể cả `version`/`timestamp`
 của hợp đồng cũ) đều bị bỏ qua âm thầm, không lỗi.
 
+⚠ **Payload phải nằm dưới khoá `payload`; khoá `data` của hợp đồng gốc KHÔNG còn được nhận**
+(breaking change, không tương thích ngược). Trước đây hook nhận cả hai tên để không bên nào phải
+sửa client; nay gửi `data` bị hiểu là **thiếu `payload`** và nhận **400 `INVALID_ENVELOPE`**. Khác
+với `version`/`timestamp`: hai trường đó chỉ là trường thừa nên bỏ qua được, còn `data` thì không —
+bỏ qua nó là bản tin mất hẳn phần nội dung.
+
 ---
 
 ## 4. Payload AUTHORIZATION_SYNC (`actionType = 1`) — batch nhiều user
@@ -129,11 +146,6 @@ của hợp đồng cũ) đều bị bỏ qua âm thầm, không lỗi.
                 "datasourceId": "7",
                 "datasourceType": "postgresql",
                 "query": "SELECT ho_ten, nam_sinh, province_id FROM kdl_nhan_khau_row_values WHERE province_id = '01'"
-              },
-              {
-                "datasourceId": "12",
-                "datasourceType": "clickhouse",
-                "query": "SELECT * FROM kdl_nhan_khau_row_values WHERE province_id = '01'"
               }
             ]
           }
@@ -270,9 +282,10 @@ Các lý do một nguồn `FAILED`:
 ### 6.3. Hai điểm cần lưu ý khi tích hợp
 
 ⚠ **Xử lý đồng bộ ngay trong request.** Không có hàng đợi nền: request chỉ trả về khi đã đọc xong
-catalog của tất cả các nguồn trong batch. Đo thực tế: một nguồn PostgreSQL hơn 100 bảng mất khoảng
-**15 giây**. Batch càng nhiều nguồn thì request treo càng lâu → chia nhỏ batch và đặt timeout phía
-SW rộng rãi (tối thiểu vài phút).
+catalog của tất cả các nguồn trong batch. Đo thực tế: một nguồn PostgreSQL khoảng 100 bảng mất
+**4–8 giây**, nguồn 537 bảng mất **20–25 giây**. Con số dao động theo độ trễ mạng tới DB nguồn nên
+đừng lấy làm ngưỡng cứng. Batch càng nhiều nguồn thì request treo càng lâu → chia nhỏ batch và đặt
+timeout phía SW rộng rãi (tối thiểu vài phút).
 
 ⚠ **Gọi lại bản tin cũ luôn an toàn.** Bản tin không mang trạng thái riêng, nên gọi lại một bản tin
 cũ chỉ là đọc lại DB nguồn thêm một lần nữa — vô hại. Chống xử lý trùng khi retry vẫn theo
@@ -302,8 +315,26 @@ cũ chỉ là đọc lại DB nguồn thêm một lần nữa — vô hại. Ch�
 ## 7. Idempotency
 
 **`X-Idempotency-Key` là bắt buộc.** Gửi lại đúng key đã dùng trước đó (ví dụ do timeout mạng và
-SW tự động retry) sẽ **không xử lý lại** — trả 200 với `status: "DUPLICATE"` kèm kết quả của lần
-xử lý đầu tiên (kể cả khi lần đầu đó FAILED). Client an toàn khi retry vô hạn với cùng key.
+SW tự động retry) sẽ **không xử lý lại** — trả 200 với `status: "DUPLICATE"`, cho biết lần xử lý
+đầu tiên đã kết thúc ra sao (kể cả khi lần đầu đó FAILED).
+
+⚠ **Response `DUPLICATE` không dựng lại được chi tiết của lần đầu.** `results` **luôn** là mảng
+rỗng và `applied` **luôn** là `{"upserted": 0, "deleted": 0}` — bảng audit không lưu phần chi tiết
+theo từng user/nguồn nên không có gì để trả lại. Đừng đọc hai trường này ở nhánh DUPLICATE:
+`applied.upserted = 0` ở đây **không** có nghĩa là chưa ghi được gì. Căn cứ duy nhất để biết lần
+đầu ra sao là `errorCode` — `null` nghĩa là lần đầu SUCCESS, khác `null` nghĩa là lần đầu FAILED
+(kèm `errorMessage` và `logId` của chính lần đó). Cần chi tiết từng phần tử thì tra theo `logId`.
+
+⚠ **Một key chỉ dùng được cho đúng một nội dung bản tin.** Kiểm trùng chạy **trước** khi validate
+`payload`, và mọi response có `logId` (400, 422, 500) đều đã ghi dấu key đó lại. Nên kịch bản "gửi
+payload sai → nhận 400 → sửa payload → gửi lại **cùng key**" khiến bản tin đã sửa **không bao giờ
+được xử lý**: SW chỉ nhận lại đúng lỗi cũ dưới dạng `DUPLICATE`. Ca 500 `INTERNAL_ERROR` cũng vậy —
+retry cùng key sau lỗi 500 chỉ nhận lại chính lỗi đó, không phải một lần thử mới.
+
+Quy tắc rút gọn: **retry cùng key chỉ dành cho ca không nhận được response** (timeout, đứt mạng,
+502/504 của proxy). Đã nhận về một response có body — kể cả body lỗi — thì lần gửi sau phải dùng
+key mới. Ngoại lệ duy nhất là `MALFORMED_JSON`: nhánh đó bị chặn trước khi ghi audit nên key chưa
+bị tiêu, dùng lại được.
 
 ⚠ Không có cơ chế chống bản tin đến sai thứ tự. Với `X-Idempotency-Key` **mới**, mỗi bản tin
 `AUTHORIZATION_SYNC` (actionType 1) hợp lệ về cấu trúc đều **ghi đè** full snapshot của lần trước
@@ -318,7 +349,7 @@ tự áp dụng có ý nghĩa với nghiệp vụ.
 | HTTP | `status` | `errorCode` | Ý nghĩa |
 |---|---|---|---|
 | 200 | `SUCCESS` | — | Áp dụng thành công |
-| 200 | `DUPLICATE` | (của lần đầu) | Trùng `X-Idempotency-Key`, trả lại kết quả cũ |
+| 200 | `DUPLICATE` | (của lần đầu) | Trùng `X-Idempotency-Key`. Chỉ `errorCode`/`errorMessage`/`logId` là của lần đầu; `results` rỗng và `applied` bằng 0 — xem §7 |
 | 400 | `FAILED` | `MALFORMED_JSON` | Body không phải JSON hợp lệ hoặc không phải object |
 | 400 | `FAILED` | `MISSING_IDEMPOTENCY_KEY` | Thiếu header `X-Idempotency-Key` |
 | 400 | `FAILED` | `INVALID_ENVELOPE` | Envelope thiếu trường hoặc sai kiểu |
@@ -354,7 +385,7 @@ khoản không có quyền `ws_admin`.
 # Bước 1: đăng nhập lấy access_token (tài khoản phải có quyền ws_admin)
 TOKEN=$(curl -s -X POST "https://<host>/api/v1/login/access-token" \
   -H "Content-Type: application/x-www-form-urlencoded" \
-  -d "username=<tai-khoan>&password=<mat-khau>" | jq -r .access_token)
+  -d "username=<tai-khoan>&password=<mat-khau>" | jq -r .data.access_token)
 
 # Bước 2: gọi hook kèm token vừa lấy
 curl -X POST "https://<host>/api/v1/hooks/ai-sync" \
