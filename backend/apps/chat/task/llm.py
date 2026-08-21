@@ -34,6 +34,7 @@ from apps.chat.curd.chat import save_question, save_sql_answer, save_sql, \
     get_old_questions, save_analysis_predict_record, rename_chat, get_chart_config, \
     get_chat_chart_data, list_generate_sql_logs, list_generate_chart_logs, start_log, end_log, \
     get_last_execute_sql_error, format_json_data, format_chart_fields, get_chat_brief_generate, get_chat_predict_data, \
+    trim_chat_brief, \
     get_chat_chart_config, trigger_log_error, save_answer, get_recent_qa_history, \
     get_user_old_questions, save_record_recommend_questions
 from apps.chat.models.chat_model import ChatQuestion, ChatRecord, Chat, RenameChat, ChatLog, OperationEnum, \
@@ -1828,7 +1829,7 @@ class LLMService:
                         if llm_brief_generated or (
                                 self.chat_question.question and self.chat_question.question.strip() != ''):
                             save_brief = llm_brief if (llm_brief and llm_brief != '') else \
-                                self.chat_question.question.strip()[:20]
+                                trim_chat_brief(self.chat_question.question)
                             brief = rename_chat(session=_session,
                                                 rename_object=RenameChat(id=self.get_record().chat_id,
                                                                          brief=save_brief,
