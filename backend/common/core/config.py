@@ -109,7 +109,7 @@ class Settings(BaseSettings):
 
     LOCAL_MODEL_PATH: str = '/opt/sqlbot/models'
     DEFAULT_EMBEDDING_MODEL: str = 'shibing624/text2vec-base-chinese'
-    EMBEDDING_PROVIDER: str = 'local'  # 'local' or 'api'
+    EMBEDDING_PROVIDER: str = 'api'  # 'local' or 'api'
     EMBEDDING_API_BASE_URL: str = ''   # e.g. http://192.168.51.250:1999/v1
     EMBEDDING_API_KEY: str = 'not-needed'
     EMBEDDING_API_MODEL: str = ''      # e.g. BAAI/bge-m3
