@@ -12,8 +12,12 @@ from docx import Document
 
 from apps.chat.utils.attachment import (
     ERR_DOC_PARSE_FAILED,
+    AttachmentContent,
+    dedupe_file_urls,
     extract_docx_text,
     render_attachment_block,
+    render_attachment_blocks,
+    split_char_budget,
 )
 from apps.datasource.utils.excel_import import ExcelImportError
 from apps.datasource.utils.remote_file import validate_source_url
@@ -103,6 +107,74 @@ class TestRenderAttachmentBlock:
         block = render_attachment_block('a.docx', 'dòng', False, max_chars=100, indent='  ')
         for line in block.split('\n'):
             assert line.startswith('  ')
+
+
+class TestSplitCharBudget:
+    """Ngân sách ký tự của một lượt là trần TỔNG — chia thế nào cũng không được vượt."""
+
+    def test_chia_deu_khi_moi_file_deu_dai(self):
+        assert split_char_budget([1000, 1000], 100) == [50, 50]
+
+    def test_file_ngan_khong_om_suat_thua(self):
+        # File 10 ký tự chỉ lấy 10, 90 còn lại chia cho hai file đói thay vì bốc hơi
+        quotas = split_char_budget([10, 1000, 1000], 100)
+        assert quotas == [10, 45, 45]
+        assert sum(quotas) <= 100
+
+    def test_tat_ca_deu_vua_thi_khong_ai_bi_cat(self):
+        assert split_char_budget([10, 20, 30], 100) == [10, 20, 30]
+
+    def test_khong_bao_gio_vuot_tran_tong(self):
+        for total in (0, 1, 7, 99, 100_000):
+            for lengths in ([5], [5, 5], [1, 2, 3, 4, 5], [10_000] * 5):
+                assert sum(split_char_budget(lengths, total)) <= total
+
+    def test_danh_sach_rong(self):
+        assert split_char_budget([], 100) == []
+
+
+class TestRenderAttachmentBlocks:
+    def _att(self, name, content, truncated=False):
+        return AttachmentContent(filename=name, content=content, truncated=truncated)
+
+    def test_giu_thu_tu_client_gui(self):
+        blocks = render_attachment_blocks(
+            [self._att('a.docx', 'AAA'), self._att('b.docx', 'BBB')], total_max_chars=1000)
+        assert blocks.index('a.docx') < blocks.index('b.docx')
+        assert blocks.count('<attached-document') == 2
+
+    def test_ngan_sach_la_tran_tong_chu_khong_phai_moi_file(self):
+        # Hai file, mỗi file 100 ký tự, trần tổng 100 -> mỗi file chỉ được 50
+        blocks = render_attachment_blocks(
+            [self._att('a.docx', 'x' * 100), self._att('b.docx', 'y' * 100)], total_max_chars=100)
+        assert 'x' * 50 in blocks and 'x' * 51 not in blocks
+        assert 'y' * 50 in blocks and 'y' * 51 not in blocks
+        # Cắt thì phải báo, cả hai khối đều bị cắt nên có hai lời báo
+        assert blocks.count('KHÔNG được gửi cho bạn') == 2
+
+    def test_danh_sach_rong_tra_chuoi_rong(self):
+        assert render_attachment_blocks([], total_max_chars=1000) == ''
+
+    def test_indent_ap_cho_moi_khoi(self):
+        blocks = render_attachment_blocks(
+            [self._att('a.docx', 'p'), self._att('b.docx', 'q')], total_max_chars=1000, indent='  ')
+        for line in blocks.split('\n'):
+            assert line.startswith('  ')
+
+
+class TestDedupeFileUrls:
+    def test_bo_trung_giu_lan_xuat_hien_dau(self):
+        assert dedupe_file_urls(['a', 'b', 'a']) == [(0, 'a'), (1, 'b')]
+
+    def test_vi_tri_la_vi_tri_trong_mang_goc(self):
+        # Sau khi bỏ trùng, 'c' vẫn phải mang số 3 — đó là số client dùng để tìm file hỏng
+        assert dedupe_file_urls(['a', 'a', 'a', 'c']) == [(0, 'a'), (3, 'c')]
+
+    def test_khoang_trang_thua_van_tinh_la_trung(self):
+        assert dedupe_file_urls(['http://x/a.docx', ' http://x/a.docx ']) == [(0, 'http://x/a.docx')]
+
+    def test_url_khac_nhau_thi_giu_ca_hai(self):
+        assert len(dedupe_file_urls(['http://x/a.docx', 'http://x/b.docx'])) == 2
 
 
 class TestValidateSourceUrlForDocx:
