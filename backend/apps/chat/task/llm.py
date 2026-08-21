@@ -2496,11 +2496,35 @@ def process_stream(res: Iterator[BaseMessageChunk],
                    start_tag: str = settings.DEFAULT_REASONING_CONTENT_START,
                    end_tag: str = settings.DEFAULT_REASONING_CONTENT_END
                    ):
+    """Chuẩn hoá stream chunk của LLM thành cặp ``{content, reasoning_content}`` cho tầng trên.
+
+    Phần suy luận của model về theo HAI đường hoàn toàn khác nhau, hàm này gộp chúng về một hợp đồng:
+
+    - **Trường riêng của provider** (``additional_kwargs['reasoning_content']``): đường sạch, chỉ
+      việc chuyển tiếp. Hệ thống đang tắt đường này bằng ``LLM_DISABLE_THINKING``, nhưng model nào
+      không tôn trọng cờ đó thì vẫn rơi vào đây.
+    - **Thẻ ``<think>...</think>`` nằm lẫn trong ``content``**: prompt sinh SQL chủ động yêu cầu
+      model suy luận trong khối này (templates/template.yaml), nên đây mới là đường đang chạy thật.
+      Cần tự bóc thẻ ra khỏi ``content``, kể cả khi thẻ bị cắt đôi giữa hai chunk — đó là việc của
+      ``pending_start_tag`` và ``pending_end_tag``: mẩu đuôi khớp tiền tố của thẻ được giữ lại,
+      chờ chunk sau ghép vào rồi mới xét. Thiếu bộ đệm cho thẻ ĐÓNG thì một stream cắt kiểu
+      ``</th`` + ``ink>`` sẽ không bao giờ khớp thẻ, nuốt trọn câu trả lời vào phần suy luận và
+      để ``content`` rỗng.
+
+    Đã thấy trường riêng có nội dung thì bỏ hẳn việc so khớp thẻ: model đã tách sẵn hai luồng, mà
+    ``<think>`` xuất hiện trong câu trả lời chính thức lúc đó là dữ liệu chứ không phải thẻ.
+
+    Bất biến quan trọng: mỗi mẩu suy luận chỉ được phát ra ĐÚNG MỘT LẦN. ``current_thinking`` là
+    biến tích luỹ nội bộ, không bao giờ được đem phát — phát nó ở thẻ đóng chính là lỗi khiến toàn
+    bộ khối ``<think>`` đi qua dây hai lần (một lần theo token, một lần nguyên khối), client cộng
+    dồn ``reasoning_content`` sẽ thấy nội dung nhân đôi.
+    """
     if token_usage is None:
         token_usage = {}
     in_thinking_block = False  # 标记是否在思考过程块中
     current_thinking = ''  # 当前收集的思考过程内容
     pending_start_tag = ''  # 用于缓存可能被截断的开始标签部分
+    pending_end_tag = ''  # mẩu đuôi có thể là phần đầu của thẻ đóng bị cắt, giữ chờ chunk sau
 
     full_reasoning_log = ''  # 累积完整的思考内容，用于最终日志输出
     full_content_log = ''  # 累积完整的输出内容，用于最终日志输出
@@ -2538,6 +2562,11 @@ def process_stream(res: Iterator[BaseMessageChunk],
             content = pending_start_tag + content
             pending_start_tag = ''
 
+        # Chunk trước có giữ lại một mẩu nghi là đầu thẻ đóng thì ghép vào rồi mới xét tiếp.
+        if pending_end_tag:
+            content = pending_end_tag + content
+            pending_end_tag = ''
+
         # 检查是否开始思考过程块（处理可能被截断的开始标签）
         if enable_tag_parsing and not in_thinking_block and start_tag:
             if start_tag in content:
@@ -2567,16 +2596,27 @@ def process_stream(res: Iterator[BaseMessageChunk],
         # 处理思考块内容
         if enable_tag_parsing and in_thinking_block and end_tag:
             if end_tag in content:
-                # 找到结束标签
+                # Gặp thẻ đóng: chỉ phát PHẦN CÒN LẠI của khối suy luận nằm trước thẻ. Những token
+                # phía trước đã được phát từng mẩu ở nhánh `else` bên dưới rồi.
                 end_idx = content.index(end_tag)
-                current_thinking += content[:end_idx]  # 收集思考内容
-                reasoning_content_chunk += current_thinking  # 添加到当前块的思考内容
-                content = content[end_idx + len(end_tag):]  # 移除结束标签后的内容
-                current_thinking = ''  # 重置当前思考内容
+                reasoning_content_chunk += content[:end_idx]
+                content = content[end_idx + len(end_tag):]  # bỏ thẻ đóng, giữ phần sau nó
+                # Dọn biến tích luỹ để điều kiện đi tắt ở đầu vòng lặp (dành cho đường
+                # `additional_kwargs`) không hiểu nhầm là model đang có suy luận.
+                current_thinking = ''
                 in_thinking_block = False
-                output_content += content  # 输出结束标签之后的内容
+                output_content += content  # phần sau thẻ đóng là câu trả lời chính thức
             else:
-                # 在遇到结束标签前，持续收集思考内容
+                # Chưa tới thẻ đóng. Nhưng thẻ có thể bị tokenizer cắt đôi, nên nếu đuôi chunk
+                # khớp một tiền tố của thẻ đóng thì giữ mẩu đó lại thay vì phát ra: xét tiền tố
+                # dài trước để không cắt hụt. Phát nhầm mẩu này ra thì thẻ đóng vĩnh viễn không
+                # khớp được, cả câu trả lời chui vào phần suy luận.
+                for i in range(len(end_tag) - 1, 0, -1):
+                    if content.endswith(end_tag[:i]):
+                        pending_end_tag = end_tag[:i]
+                        content = content[:-i]
+                        break
+                # Phần chắc chắn không thuộc thẻ thì phát ngay như một mẩu suy luận.
                 current_thinking += content
                 reasoning_content_chunk += content
                 content = ''
@@ -2592,6 +2632,15 @@ def process_stream(res: Iterator[BaseMessageChunk],
             'reasoning_content': reasoning_content_chunk
         }
         get_token_usage(chunk, token_usage)
+
+    # Stream đứt giữa lúc đang giữ một mẩu nghi là đầu thẻ: hoá ra nó không phải thẻ, phải trả lại
+    # đúng chỗ nó thuộc về chứ không được nuốt mất.
+    if pending_end_tag:
+        full_reasoning_log += pending_end_tag
+        yield {'content': '', 'reasoning_content': pending_end_tag}
+    if pending_start_tag:
+        full_content_log += pending_start_tag
+        yield {'content': pending_start_tag, 'reasoning_content': ''}
 
     # 流式结束后，统一输出两条日志：思考内容与正式内容
     SQLBotLogUtil.info(f"reasoning_content: {full_reasoning_log}")
