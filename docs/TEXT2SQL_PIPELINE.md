@@ -628,7 +628,7 @@ bị tính năng này chặn.
 
 ### Chuỗi ba phép sàng
 
-`resolve_sw_permission` ([sw_permission.py:119](../backend/apps/chat/permission/sw_permission.py#L119))
+`resolve_sw_permission` ([sw_permission.py:120](../backend/apps/chat/permission/sw_permission.py#L120))
 nhận `account` của người dùng, `domain_code` của lượt hỏi và datasource đang dùng, rồi lọc dần:
 
 | Sàng | Giữ lại gì | Bỏ qua khi |
@@ -659,7 +659,7 @@ của bảng dẫn xuất chứ không phải tên cột vật lý.
 
 **Hàng** — scope query được bọc thành **bảng dẫn xuất** thay cho bảng vật lý, ngay trước khi SQL
 chạy. Phép viết lại này **tất định, làm bằng `sqlglot`, không có LLM nào tham gia**
-([sw_permission.py:215](../backend/apps/chat/permission/sw_permission.py#L215)):
+([sw_permission.py:240](../backend/apps/chat/permission/sw_permission.py#L240)):
 
 ```sql
 -- SQL model sinh ra
@@ -682,12 +682,22 @@ Ba chi tiết của phép viết lại, đều đã khoá bằng test:
 - **Không bọc đệ quy.** `transform` của sqlglot duyệt cây gốc, nên chính các bảng nằm trong scope
   query vừa chèn vào không bị bọc thêm lần nữa.
 
+**Ngoại lệ: bảng được cấp mà không kèm giới hạn.** `queries[].query` rỗng (hoặc chỉ có khoảng
+trắng) là cách SW khai *"bảng này truy cập không giới hạn"* — hợp lệ theo
+`AI_SYNC_HOOK_API_SPEC.md` §4. Bảng đó vẫn vào danh sách được phép, nhưng không có scope để bọc và
+không có projection để suy ra quyền cột: nó hiện **đủ mọi cột** trong M-Schema và SQL tham chiếu nó
+chạy **thẳng vào bảng vật lý**, không qua bảng dẫn xuất.
+
+Đừng nhầm ca này với ca *không có phần tử `queries[]` nào trỏ tới datasource đang hỏi* — ca đó là
+**không được cấp**, bảng bị loại khỏi phễu ngay ở sàng datasource. Sự **có mặt** của phần tử quyết
+định quyền; nội dung `query` bên trong chỉ quyết định phạm vi.
+
 ### Hai điểm cưỡng chế, và bốn cách một lượt hỏi bị chặn
 
 Cưỡng chế đặt ở đúng hai chỗ: `choose_table_schema` (siết bảng + cột, trước khi prompt được dựng)
 và ngay trước `execute_sql` (siết hàng). Các pha phụ nào **dựng schema độc lập**, không đi qua
 `choose_table_schema`, đều phải nhận lại đúng bộ lọc đó: task gợi ý của endpoint rời
-`/chat/recommend_questions` ([llm.py:998](../backend/apps/chat/task/llm.py#L998)) và pha sinh biểu
+`/chat/recommend_questions` ([llm.py:999](../backend/apps/chat/task/llm.py#L999)) và pha sinh biểu
 đồ. Quên một trong hai là mở lại đúng cái kênh rò rỉ vừa bịt.
 
 Pha gợi ý chạy trong lượt hỏi (§6) là ngoại lệ, và cố ý: nó **dùng lại** `chat_question.db_schema`

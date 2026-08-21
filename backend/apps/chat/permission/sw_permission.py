@@ -52,9 +52,10 @@ class SwPermission:
     - `allowed_tables`: tên bảng vật lý được phép, so khớp EXACT phân biệt hoa-thường với
       `core_table.table_name` (cả hai phía cùng chép nguyên văn từ catalog của Postgres).
     - `scope_queries`: bảng → câu SELECT giới hạn phạm vi dữ liệu (hàng + cột). SQL sinh ra sẽ bị
-      viết lại để đọc qua derived table này thay vì bảng vật lý.
+      viết lại để đọc qua derived table này thay vì bảng vật lý. Bảng không có mặt trong dict
+      nghĩa là được cấp mà KHÔNG kèm giới hạn hàng (SW khai `query` rỗng) — không bọc gì cả.
     - `allowed_columns`: bảng → tập TÊN CỘT ĐẦU RA của scope query (tôn trọng alias). Bảng không
-      có mặt trong dict nghĩa là được mọi cột (scope query dùng `SELECT *`).
+      có mặt trong dict nghĩa là được mọi cột (scope query dùng `SELECT *`, hoặc rỗng).
     - `available_domains`: các lĩnh vực user thực có trên datasource này — dùng cho thông báo lỗi
       khi `domainCode` sai hoặc phễu bảng rỗng.
     """
@@ -133,7 +134,12 @@ def resolve_sw_permission(
     - Không có dòng quyền nào cho account → KHÔNG siết (user nội bộ SQLBot dùng như nguyên bản).
     - `is_admin=true` → không siết.
     - Bảng chỉ được phép trên datasource D nếu form của nó có phần tử `queries[]` cho đúng D.
-    - Scope query không parse được → bảng bị LOẠI hẳn (kèm warning), không phải "được mọi hàng".
+      SỰ CÓ MẶT của phần tử quyết định quyền, không phải nội dung `query` bên trong nó.
+    - `query` rỗng (kể cả chỉ gồm khoảng trắng) là giá trị HỢP LỆ theo hợp đồng với SW: bảng được
+      cấp nhưng không kèm giới hạn nào — mọi cột, mọi hàng, SQL không bị bọc derived table. Khác
+      hẳn "không có phần tử nào cho D" (không được cấp). Xem `AI_SYNC_HOOK_API_SPEC.md` §4.
+    - Scope query có nội dung nhưng không parse được → bảng bị LOẠI hẳn (kèm warning), không phải
+      "được mọi hàng".
     - Cùng một bảng xuất hiện ở nhiều form với scope KHÁC nhau → lấy scope của form đầu tiên theo
       thứ tự `form_uuid` (ổn định), kèm warning — chọn siết thay vì tự ghép UNION các scope.
     """
@@ -146,19 +152,26 @@ def resolve_sw_permission(
     ds_id = str(ds.id)
     dialect = _sqlglot_dialect(ds.type)
 
-    # Sàng 1: datasource — dòng nào không có query cho datasource này thì bảng đó vô hình ở đây.
+    # Sàng 1: datasource — dòng nào không có phần tử `queries[]` nào trỏ tới datasource này thì
+    # bảng đó vô hình ở đây. Hai câu hỏi phải TÁCH BẠCH: "có phần tử cho datasource này không"
+    # (quyết định quyền) và "phần tử đó mang scope gì" (quyết định phạm vi). Gộp làm một là bug
+    # cũ — `query` rỗng, cách SW khai "không giới hạn", bị hiểu ngược thành "không có quyền".
     survivors: list[tuple[str, str, str | None, str | None]] = []  # (table, scope, dom_code, dom_name)
     for row in rows:
-        scope = next(
+        entry = next(
             (
-                item.get("query")
+                item
                 for item in (row.queries or [])
-                if str(item.get("datasourceId")) == ds_id and item.get("query")
+                if str(item.get("datasourceId")) == ds_id
             ),
             None,
         )
-        if scope is None:
+        if entry is None:
             continue
+        # `strip()` để chuỗi toàn khoảng trắng đi chung đường với chuỗi rỗng: đó là lỗi
+        # serialization phía SW chứ không phải một scope thật, và thả nó vào nhánh parse sẽ làm
+        # user mất quyền một cách im lặng (hook vẫn trả SUCCESS, chỉ hụt dữ liệu lúc hỏi).
+        scope = (entry.get("query") or "").strip()
         survivors.append((row.database_table_name, scope, row.domain_code, row.domain_name))
 
     # Lĩnh vực user thực có trên datasource này — tính TRƯỚC sàng lĩnh vực để thông báo lỗi
@@ -179,13 +192,25 @@ def resolve_sw_permission(
     allowed_tables: list[str] = []
     scope_queries: dict[str, str] = {}
     allowed_columns: dict[str, set[str]] = {}
+    # Cờ đã-xử-lý phải là `seen` chứ không phải `table_name in scope_queries`: bảng có scope rỗng
+    # cố ý KHÔNG vào `scope_queries`, nên cờ cũ sẽ bỏ sót đúng nhóm bảng đó. Nhánh này là phòng
+    # thủ — UNIQUE(user_id, database_table_name) khiến một user không thể có hai dòng cùng bảng.
+    seen: set[str] = set()
     for table_name, scope, _, _ in survivors:
-        if table_name in scope_queries:
-            if scope_queries[table_name] != scope:
+        if table_name in seen:
+            if scope_queries.get(table_name, "") != scope:
                 SQLBotLogUtil.warning(
                     f"[sw_permission] Bảng '{table_name}' có nhiều scope query khác nhau cho user "
                     f"'{account}' — giữ scope của form đầu tiên, bỏ qua scope sau."
                 )
+            continue
+        seen.add(table_name)
+        # Scope rỗng = được cấp, không kèm giới hạn. Bảng vào `allowed_tables` nhưng KHÔNG ghi vào
+        # `scope_queries`/`allowed_columns`: vắng mặt trong hai dict đó chính là cách biểu diễn
+        # "không bọc derived table" và "được mọi cột" mà các consumer đã hiểu sẵn (xem
+        # `apply_scope_to_sql` và `column_filter` trong `datasource.crud.datasource`).
+        if not scope:
+            allowed_tables.append(table_name)
             continue
         try:
             parsed = sqlglot.parse_one(scope, dialect=dialect)

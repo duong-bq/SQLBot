@@ -164,6 +164,88 @@ def test_select_star_nghia_la_moi_cot(patch_rows):
     assert decision.scope_queries["t1"] == "SELECT * FROM t1 WHERE p = '01'"
 
 
+# ---------- Scope rỗng: được cấp nhưng không kèm giới hạn ----------
+
+def test_scope_rong_nghia_la_duoc_cap_khong_gioi_han(patch_rows):
+    """`query: ""` là cách SW khai "không giới hạn dữ liệu" (hợp đồng từ 17/08).
+
+    Bảng phải NẰM TRONG `allowed_tables` nhưng VẮNG MẶT ở `scope_queries`/`allowed_columns` —
+    vắng mặt chính là cách hai dict đó biểu diễn "không bọc derived table" và "được mọi cột".
+    """
+    patch_rows([make_row("t_free", "")])
+    decision = resolve_sw_permission(StubSession(), "u1", None, DS)
+    assert decision.restricted is True
+    assert decision.allowed_tables == ["t_free"]
+    assert "t_free" not in decision.scope_queries
+    assert "t_free" not in decision.allowed_columns
+
+
+def test_scope_toan_khoang_trang_dong_nghia_voi_rong(patch_rows):
+    """Chuỗi chỉ có khoảng trắng là lỗi serialization phía SW, không phải scope thật — đi chung
+    đường với chuỗi rỗng thay vì rơi vào nhánh parse rồi làm user mất quyền im lặng."""
+    patch_rows([make_row("t_free", "   \n  ")])
+    decision = resolve_sw_permission(StubSession(), "u1", None, DS)
+    assert decision.allowed_tables == ["t_free"]
+    assert "t_free" not in decision.scope_queries
+
+
+def test_scope_rong_khong_vuot_qua_duoc_sang_datasource(patch_rows):
+    """Ca canh biên quan trọng nhất: scope rỗng nới phạm vi DỮ LIỆU, không nới phạm vi DATASOURCE.
+
+    Phần tử `queries[]` phải trỏ đúng datasource đang hỏi thì bảng mới được cấp — rỗng hay không
+    cũng vậy.
+    """
+    patch_rows([
+        make_row("t_ds7", "", ds_id="7"),
+        make_row("t_ds8", "", ds_id="8", form_uuid="form-2"),
+    ])
+    decision = resolve_sw_permission(StubSession(), "u1", None, DS)
+    assert decision.allowed_tables == ["t_ds7"]
+
+
+def test_scope_rong_van_di_qua_sang_linh_vuc(patch_rows):
+    """Scope rỗng không miễn sàng lĩnh vực: hỏi theo `domainCode` thì bảng khác lĩnh vực vẫn bị
+    loại, và bảng scope rỗng vẫn được liệt kê trong `available_domains`."""
+    patch_rows([
+        make_row("t_dan_cu", "", domain_code="LV_DAN_CU", domain_name="Dân cư"),
+        make_row("t_ngan_sach", "", domain_code="LV_NGAN_SACH", domain_name="Ngân sách",
+                 form_uuid="form-2"),
+    ])
+    decision = resolve_sw_permission(StubSession(), "u1", "LV_DAN_CU", DS)
+    assert decision.allowed_tables == ["t_dan_cu"]
+    assert [d["code"] for d in decision.available_domains] == ["LV_DAN_CU", "LV_NGAN_SACH"]
+
+
+def test_tron_bang_co_scope_va_bang_scope_rong(patch_rows):
+    """User có cả hai loại bảng: chỉ bảng có scope bị bọc, bảng scope rỗng đọc thẳng bảng vật lý."""
+    patch_rows([
+        make_row("NhanKhau", 'SELECT ho_ten, province_id FROM "NhanKhau" WHERE province_id = \'01\''),
+        make_row("dm_tinh", "", form_uuid="form-2"),
+    ])
+    decision = resolve_sw_permission(StubSession(), "u1", None, DS)
+    assert sorted(decision.allowed_tables) == ["NhanKhau", "dm_tinh"]
+    assert list(decision.scope_queries) == ["NhanKhau"]
+
+    out = apply_scope_to_sql(
+        'SELECT t.ho_ten, d.name FROM "NhanKhau" t JOIN dm_tinh d ON t.province_id = d.id',
+        decision.scope_queries, "pg")
+    assert "province_id = \'01\'" in out
+    assert "dm_tinh AS d" in out
+
+
+def test_moi_bang_scope_rong_thi_sql_di_qua_nguyen_van(patch_rows):
+    """Mọi bảng đều scope rỗng → `scope_queries` rỗng → guard ở llm.py bỏ qua hẳn phép bọc."""
+    patch_rows([
+        make_row("t1", ""),
+        make_row("t2", "", form_uuid="form-2"),
+    ])
+    decision = resolve_sw_permission(StubSession(), "u1", None, DS)
+    assert sorted(decision.allowed_tables) == ["t1", "t2"]
+    assert decision.scope_queries == {}
+    sql = "SELECT * FROM t1"
+    assert apply_scope_to_sql(sql, decision.scope_queries, "pg") == sql
+
+
 # ---------- Cảnh báo lệch hoa-thường ----------
 
 def test_ten_bang_lech_hoa_thuong_chi_canh_bao_khong_cap_quyen(patch_rows, warnings_log):
