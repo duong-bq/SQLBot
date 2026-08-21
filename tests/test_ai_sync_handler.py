@@ -36,8 +36,11 @@ def _batch(*users) -> dict:
     return {"users": list(users) if users else [_user()]}
 
 
-def test_dispatch_chi_co_authorization_sync(db_session):
+def test_dispatch_dung_hai_action_type_da_implement(db_session):
+    from apps.hooks.handlers.datasource_sync import handle_datasource_sync
+
     assert ACTION_HANDLERS[SyncActionType.AUTHORIZATION_SYNC] is handle_authorization_sync
+    assert ACTION_HANDLERS[SyncActionType.DATASOURCE_SYNC] is handle_datasource_sync
     assert set(ACTION_HANDLERS) == {SyncActionType.AUTHORIZATION_SYNC, SyncActionType.DATASOURCE_SYNC}
 
 
