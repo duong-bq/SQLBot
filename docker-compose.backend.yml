@@ -66,6 +66,12 @@ services:
       # --- Hành vi pipeline chat ---
       LLM_DISABLE_THINKING: ${LLM_DISABLE_THINKING:-True}
 
+      # Pha sinh biểu đồ của POST /chat/question. Bật thì mỗi câu hỏi tốn thêm MỘT lượt gọi LLM
+      # (2 -> 3), stream có thêm nhóm event chart-result/chart, và pha biểu đồ hỏng sẽ giết cả lượt
+      # hỏi (client nhận `error` thay cho `answer` + `finish`). Đặt False để dừng ngay sau câu trả
+      # lời bằng lời.
+      GENERATE_CHART_ENABLED: ${GENERATE_CHART_ENABLED:-True}
+
       # Cổng định tuyến câu hỏi: một lượt gọi LLM NGẮN trước pha SQL, quyết định lượt này có cần
       # truy vấn dữ liệu mới hay không. TẮT (mặc định) thì đường đi giống hệt trước khi có cổng.
       # Chỉ áp dụng cho nhánh in_chat; nhánh MCP luôn đi pha SQL bất kể biến này.
