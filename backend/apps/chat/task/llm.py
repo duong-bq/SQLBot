@@ -1062,7 +1062,7 @@ class LLMService:
                 session=_session,
                 current_user=self.current_user, ds=self.ds,
                 question=self.chat_question.question,
-                embedding=False,
+                embedding=True,
                 table_list=sw_permission.allowed_tables if restricted else None,
                 column_filter=sw_permission.allowed_columns if restricted else None)
 
