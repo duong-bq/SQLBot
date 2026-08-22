@@ -29,6 +29,7 @@ import pytest
 from apps.chat.models.chat_model import ChatFinishStep
 from apps.chat.task import llm as llm_mod
 from apps.chat.task.llm import LLMService, SqlPhaseResult
+from apps.chat.task.question_gate import RouteDecision, fail_open
 from common.error import SingleMessageError, SQLBotDBConnectionError
 
 SQL_ANSWER = '{"success":true,"sql":"SELECT 1","tables":["t1"],"chart-type":"bar"}'
@@ -287,8 +288,8 @@ class TestRunTaskGhepNoi:
             yield  # noqa: unreachable
 
         run_task_service._sql_phase = fake_phase
-        run_task_service.build_answer_fallback_prompts = lambda s, reason: (
-            chon.setdefault('nhanh', 'fallback'), 'user')
+        run_task_service.build_answer_fallback_prompts = lambda s, reason, kind: (
+            chon.setdefault('nhanh', 'fallback'), chon.setdefault('kind', kind))
         run_task_service.build_answer_prompts = lambda *a: (chon.setdefault('nhanh', 'thuong'),
                                                             'user')
         run_task_service.run_answer_worker = lambda *a: None
@@ -301,6 +302,9 @@ class TestRunTaskGhepNoi:
         list(run_task_service.run_task(in_chat=True, stream=True,
                                        finish_step=ChatFinishStep.GENERATE_ANSWER))
         assert chon['nhanh'] == 'fallback'
+        # Pha SQL hỏng thật thì phải là biến thể "failed"; nhánh cổng định tuyến bỏ qua truy vấn
+        # mới dùng "no_query". Lẫn hai cái là báo sự cố cho một lượt hoàn toàn bình thường.
+        assert chon['kind'] == 'failed'
 
     def test_data_di_toi_duoc_bang_markdown_cua_nhanh_mcp(self, run_task_service, monkeypatch):
         """``_data`` chỉ được đọc ở nhánh MCP, nên nhánh SSE không bảo vệ được nó."""
@@ -353,3 +357,105 @@ class TestRunTaskGhepNoi:
                                        finish_step=ChatFinishStep.GENERATE_CHART))
         assert nhan['chart_type'] == 'bar'
         assert nhan['table_list'] == ['t1']
+
+
+class TestCongDinhTuyenGhepNoi:
+    """Cổng định tuyến nối vào ``run_task``: ai được rẽ, ai không, và rẽ rồi thì đi đâu.
+
+    Cổng là thứ chèn vào giữa một đường đang chạy tốt, nên tiêu chí nghiệm thu nặng nhất không
+    phải "rẽ đúng" mà là "tắt thì không đổi gì". Bản thân chất lượng phân loại chỉ đo được bằng
+    lưu lượng thật ở chế độ chỉ đo, không đo được ở đây.
+    """
+
+    @staticmethod
+    def _stub_answer(service, monkeypatch, chon):
+        """Chặn hai pha chạy sau cổng và ghi lại nhánh prompt mà run_task đã chọn."""
+        service.build_answer_fallback_prompts = lambda s, reason, kind: (
+            chon.setdefault('nhanh', 'fallback'), chon.setdefault('kind', kind))
+        service.build_answer_prompts = lambda *a: (chon.setdefault('nhanh', 'thuong'), 'user')
+        service.run_answer_worker = lambda *a: None
+        service.drain_answer_queue = lambda q, st, block: iter(())
+        service.drain_recommend_queue = lambda q, st, block: iter(())
+        monkeypatch.setattr(llm_mod, 'executor',
+                            types.SimpleNamespace(submit=lambda *a, **k: None))
+        monkeypatch.setattr(llm_mod.settings, 'CHAT_INLINE_RECOMMEND_ENABLED', False)
+
+    @staticmethod
+    def _fake_phase(goi):
+        def fake_phase(_session, json_result, in_chat, stream, finish_step):
+            goi.append(True)
+            return SqlPhaseResult(result={'fields': ['a'], 'data': [{'a': 1}]}, tables=['t1'],
+                                  chart_type='bar', data=[{'a': 1}])
+            yield  # noqa: unreachable — giữ hàm là generator
+
+        return fake_phase
+
+    def _chay(self, service, monkeypatch, decision, **kwargs):
+        goi, chon = [], {}
+        service._sql_phase = self._fake_phase(goi)
+        self._stub_answer(service, monkeypatch, chon)
+        if decision == 'real':
+            pass  # dùng `decide_route` thật, để kiểm chính cái chốt bên trong nó
+        elif decision is not None:
+            monkeypatch.setattr(llm_mod, 'decide_route', lambda svc, sess: decision)
+        else:
+            monkeypatch.setattr(llm_mod, 'decide_route',
+                                lambda svc, sess: pytest.fail('cổng chạy ở nhánh không được rẽ'))
+        opts = {'in_chat': True, 'stream': True, 'finish_step': ChatFinishStep.GENERATE_ANSWER}
+        opts.update(kwargs)
+        chunks = list(service.run_task(**opts))
+        return goi, chon, chunks
+
+    def test_tat_co_thi_khong_them_event_nao_len_day(self, run_task_service, monkeypatch):
+        """Tiêu chí nghiệm thu: cờ tắt thì dây SSE giống hệt lúc chưa có cổng."""
+        goi, chon, chunks = self._chay(run_task_service, monkeypatch, fail_open('disabled'))
+        assert goi == [True]
+        assert chon['nhanh'] == 'thuong'
+        assert not any('route' in str(e.get('msg', '')) for e in parse_events(chunks))
+
+    def test_co_tat_thi_cong_that_khong_cham_toi_llm(self, run_task_service, monkeypatch):
+        """Như trên nhưng dùng `decide_route` THẬT, vì đó mới là đường chạy trên máy thật.
+
+        Test trên chặn cổng bằng monkeypatch nên chỉ kiểm được `run_task`; test này kiểm nốt nửa
+        còn lại: cổng tự chặn từ dòng đầu khi cờ tắt, không gọi LLM và không sinh chat_log.
+        """
+        monkeypatch.setattr(llm_mod.settings, 'LLM_ROUTE_ENABLED', False)
+        run_task_service.route_llm = types.SimpleNamespace(
+            stream=lambda msg: pytest.fail('cờ tắt mà cổng vẫn gọi LLM'))
+        goi, chon, chunks = self._chay(run_task_service, monkeypatch, 'real')
+        assert goi == [True]
+        assert chon['nhanh'] == 'thuong'
+        assert not any(e.get('type') == 'info' and 'route' in str(e.get('msg', ''))
+                       for e in parse_events(chunks))
+
+    def test_ret_sang_answer_thi_khong_chay_pha_sql(self, run_task_service, monkeypatch):
+        goi, chon, chunks = self._chay(
+            run_task_service, monkeypatch,
+            RouteDecision(action='answer', category='chitchat', reason='chào hỏi'))
+        assert goi == []
+        assert chon['nhanh'] == 'fallback'
+        # Biến thể prompt phải là "no_query": lượt này không có sự cố nào để kể với người dùng.
+        assert chon['kind'] == 'no_query'
+        # Không có SQL nên cũng không được có event `sql` / `sql-data` nào trên dây.
+        assert not ({'sql', 'sql-data'} & set(event_types(chunks)))
+
+    def test_chon_sql_thi_van_chay_pha_sql_va_co_dau_vet(self, run_task_service, monkeypatch):
+        goi, chon, chunks = self._chay(
+            run_task_service, monkeypatch,
+            RouteDecision(action='sql', category='need_data', reason='cần số liệu'))
+        assert goi == [True]
+        assert chon['nhanh'] == 'thuong'
+        msgs = [e.get('msg', '') for e in parse_events(chunks) if e.get('type') == 'info']
+        assert any('route sql/need_data' in m for m in msgs)
+
+    def test_nhanh_mcp_khong_bao_gio_bi_re(self, run_task_service, monkeypatch):
+        """Cả pha answer nằm trong `if in_chat`, nên rẽ MCP sang answer là trả về rỗng lặng lẽ."""
+        goi, _, _ = self._chay(run_task_service, monkeypatch, None,
+                               in_chat=False, finish_step=ChatFinishStep.GENERATE_ANSWER)
+        assert goi == [True]
+
+    def test_finish_step_dung_som_khong_bi_re(self, run_task_service, monkeypatch):
+        """Người gọi đã nói rõ họ chỉ cần SQL hoặc dữ liệu thì không có gì để định tuyến."""
+        goi, _, _ = self._chay(run_task_service, monkeypatch, None,
+                               finish_step=ChatFinishStep.QUERY_DATA)
+        assert goi == [True]

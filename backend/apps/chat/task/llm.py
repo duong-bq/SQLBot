@@ -41,6 +41,7 @@ from apps.chat.curd.chat import save_question, save_sql_answer, save_sql, \
 from apps.chat.models.chat_model import ChatQuestion, ChatRecord, Chat, RenameChat, ChatLog, OperationEnum, \
     ChatFinishStep, AxisObj, SystemPromptMessage, HumanPromptMessage, AIPromptMessage
 from apps.chat.permission.sw_permission import resolve_sw_permission, apply_scope_to_sql
+from apps.chat.task.question_gate import decide_route, fail_open
 from apps.data_training.curd.data_training import get_training_template
 from apps.datasource.crud.datasource import get_table_schema, get_tables_sample_data, usable_ds_condition
 from apps.datasource.crud.permission import get_row_permission_filters, is_normal_user
@@ -2165,20 +2166,51 @@ class LLMService:
             if not connected:
                 raise SQLBotDBConnectionError('Connect DB failed')
 
-            # Pha SQL bóc riêng: `yield from` chở event SSE lên thẳng
-            # client, còn giá trị trả về mang kết quả pha sang các pha sau.
-            # Cờ `stopped` phải kiểm ngay — xem docstring của `_sql_phase`
-            # để biết vì sao bỏ qua nó là một lỗi im lặng.
-            sql_phase = yield from self._sql_phase(
-                _session, json_result, in_chat, stream, finish_step
-            )
-            if sql_phase.stopped:
-                return
-            result = sql_phase.result
-            tables = sql_phase.tables
-            chart_type = sql_phase.chart_type
-            _data = sql_phase.data
-            degraded_reason = sql_phase.degraded_reason
+            # Cổng định tuyến: lượt này có cần chạy pha SQL không. Đặt SAU check_connection vì
+            # hai lẽ — mất kết nối phải là lỗi thật chứ không được hoá thành một câu trả lời chữ
+            # tử tế, và tới đây `table_name_list` mới chắc chắn đã có (init_messages chạy ở nhánh
+            # có sẵn ds, hoặc ở cuối select_datasource).
+            #
+            # Chỉ nhánh in_chat được rẽ. Toàn bộ pha answer nằm trong khối `if in_chat` bên dưới,
+            # nên rẽ một lượt MCP sang answer là trả về kết quả RỖNG mà không kèm lỗi nào — hỏng
+            # im lặng, đúng loại khó lần nhất. Chốt `finish_step` là dây an toàn thứ hai: người
+            # gọi đã nói rõ họ chỉ cần SQL hoặc dữ liệu thì không có gì để định tuyến.
+            route = fail_open('disabled')
+            if in_chat and finish_step.value > ChatFinishStep.QUERY_DATA.value:
+                route = decide_route(self, _session)
+                if route.forced != 'disabled':
+                    _route_msg = f'route {route.action}/{route.category}'
+                    if route.forced:
+                        _route_msg += f' (forced: {route.forced})'
+                    yield 'data:' + orjson.dumps({'type': 'info', 'msg': _route_msg}).decode() + '\n\n'
+
+            fallback_kind = 'failed'
+            if route.skip_sql:
+                # Bỏ hẳn pha SQL. Đi lại đúng nhánh hạ cấp sẵn có (không có dữ liệu thì trả lời
+                # bằng lịch sử + danh sách bảng) thay vì dựng nhánh thứ hai song song: hai nhánh
+                # cùng làm một việc sẽ trôi khỏi nhau. Khác biệt gói gọn trong `fallback_kind` —
+                # lượt này KHÔNG có sự cố nào để kể, mà prompt hạ cấp cũ thì khẳng định là có.
+                fallback_kind = 'no_query'
+                result = None
+                tables = None
+                chart_type = None
+                _data = None
+                degraded_reason = route.reason or 'Câu hỏi này không cần truy vấn dữ liệu mới.'
+            else:
+                # Pha SQL bóc riêng: `yield from` chở event SSE lên thẳng
+                # client, còn giá trị trả về mang kết quả pha sang các pha sau.
+                # Cờ `stopped` phải kiểm ngay — xem docstring của `_sql_phase`
+                # để biết vì sao bỏ qua nó là một lỗi im lặng.
+                sql_phase = yield from self._sql_phase(
+                    _session, json_result, in_chat, stream, finish_step
+                )
+                if sql_phase.stopped:
+                    return
+                result = sql_phase.result
+                tables = sql_phase.tables
+                chart_type = sql_phase.chart_type
+                _data = sql_phase.data
+                degraded_reason = sql_phase.degraded_reason
 
             if finish_step.value <= ChatFinishStep.QUERY_DATA.value:
                 if stream:
@@ -2222,7 +2254,8 @@ class LLMService:
                     # bình thường ở chỗ thiếu `sql` / `sql-data`, còn lại vẫn answer-result → answer
                     # → finish như cũ.
                     answer_sys_prompt, answer_user_prompt = self.build_answer_fallback_prompts(_session,
-                                                                                               degraded_reason)
+                                                                                               degraded_reason,
+                                                                                               fallback_kind)
                 else:
                     answer_sys_prompt, answer_user_prompt = self.build_answer_prompts(_session,
                                                                                       result.get('fields'),
