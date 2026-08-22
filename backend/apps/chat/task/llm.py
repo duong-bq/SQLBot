@@ -6,8 +6,9 @@ import traceback
 import urllib.parse
 import warnings
 from concurrent.futures import ThreadPoolExecutor, Future
+from dataclasses import dataclass
 from datetime import datetime
-from typing import Any, List, Optional, Union, Dict, Iterator
+from typing import Any, Generator, List, Optional, Union, Dict, Iterator
 
 import orjson
 import pandas as pd
@@ -185,6 +186,29 @@ def _humanize_error(message: str) -> str:
         except Exception:
             pass
     return text
+
+
+@dataclass
+class SqlPhaseResult:
+    """Kết quả pha SQL, trả về qua kênh ``return`` của ``_sql_phase``.
+
+    Gói đúng những giá trị mà các pha sau (answer, chart) đọc, thay cho cách
+    cũ là pha SQL ghi thẳng vào biến khai báo sẵn ở scope ngoài của
+    ``run_task``.
+
+    ``stopped`` báo pha đã tự kết thúc request vì ``finish_step`` dừng sớm ở
+    ``GENERATE_SQL``: nó đã phát nốt các event cuối, người gọi phải dừng ngay
+    chứ không chạy tiếp pha nào. ``degraded_reason`` khác None nghĩa là hết
+    lượt thử vẫn hỏng — lượt này không có dữ liệu mới, pha answer phải dùng
+    prompt fallback.
+    """
+
+    result: Optional[Dict[str, Any]] = None
+    tables: Optional[List[str]] = None
+    chart_type: Optional[str] = None
+    data: Any = None
+    degraded_reason: Optional[str] = None
+    stopped: bool = False
 
 
 class LLMService:
@@ -1726,6 +1750,338 @@ class LLMService:
         for chunk in self.run_task(in_chat, stream, finish_step, return_img):
             self.chunk_list.append(chunk)
 
+    def _sql_phase(
+        self,
+        _session: Session,
+        json_result: Dict[str, Any],
+        in_chat: bool,
+        stream: bool,
+        finish_step: ChatFinishStep,
+    ) -> Generator[Any, None, "SqlPhaseResult"]:
+        """Chạy trọn pha SQL: sinh, kiểm quyền, thực thi rồi lưu dữ liệu.
+
+        Bao gồm cả vòng thử lại và nhánh hạ cấp khi hết lượt thử.
+
+        Bóc khỏi ``run_task`` để pha này gọi được từ nơi khác, cụ thể là từ
+        một tool handler khi pipeline chuyển sang mô hình agent — lúc đó
+        ``run_task`` không còn là người gọi duy nhất. Hành vi giữ nguyên tuyệt
+        đối so với bản nằm inline.
+
+        Generator này có HAI kênh ra, đừng nhầm:
+
+        - kênh ``yield`` chở event SSE (hoặc markdown ở nhánh MCP) đi thẳng
+            lên client, người gọi chỉ cần ``yield from``;
+        - kênh ``return`` chở kết quả pha về cho người gọi, qua
+            ``SqlPhaseResult``.
+
+        Bẫy quan trọng: ``return`` ở đây KHÔNG còn kết thúc cả request như khi
+        khối này còn nằm trong ``run_task``. Khi ``finish_step`` dừng ở
+        ``GENERATE_SQL``, pha tự phát nốt ``finish`` rồi trả về
+        ``stopped=True``; người gọi bắt buộc phải kiểm cờ đó và ``return``
+        theo. Bỏ sót thì request chảy tiếp sang pha chart sau khi đã phát
+        ``finish`` — mà client dừng đọc ngay tại ``finish``, nên triệu chứng
+        là biểu đồ mất im lặng chứ không phải lỗi ồn ào.
+
+        ``json_result`` được truyền vào và sửa TẠI CHỖ (khóa ``sql``, ``data``,
+        ``title``): nó là kênh phụ cho nhánh không-stream. Giữ nguyên cách cũ
+        để bước bóc này không kéo theo bất kỳ thay đổi hành vi nào khác.
+
+        Ngoại lệ vẫn ném ra ngoài như cũ — ``yield from`` cho nó đi xuyên lên
+        khối ``except`` tổng của ``run_task``.
+        """
+        # Pha SQL (sinh → kiểm tra → chạy) hỏng vì nhiều lý do phần lớn là ngẫu nhiên: LLM trả
+        # JSON sai định dạng, từ chối vì hiểu nhầm câu hỏi, sinh ra SQL không parse được bảng
+        # nào, hoặc SQL chạy lỗi trên DB. Thử lại tại chỗ với thông báo lỗi đưa ngược vào hội
+        # thoại cứu được đa số ca mà không cần người dùng hỏi lại.
+        #
+        # Hết lượt thử vẫn hỏng thì KHÔNG ném lỗi ra ngoài nữa: chuyển sang nhánh answer
+        # fallback ở khối except. Câu hỏi làm gãy pha SQL thường là câu tham chiếu ngược
+        # ("trong đó bảng nào tên dài nhất") — dữ liệu để trả lời đã có từ lượt trước, chỉ là
+        # không diễn đạt được thành SQL mới, nên trả về event `error` là phí một câu trả lời
+        # hoàn toàn khả thi.
+        max_sql_retry = max(0, settings.LLM_SQL_MAX_RETRY)
+        sql_attempt = 0
+        retry_reason: Optional[str] = None
+        degraded_reason: Optional[str] = None
+        result: Optional[Dict[str, Any]] = None
+        tables = None
+        chart_type = None
+        _data = None
+
+        while True:
+            try:
+                # generate sql
+                sql_res = self.generate_sql(_session, retry_reason=retry_reason)
+                full_sql_text = ""
+                for chunk in sql_res:
+                    full_sql_text += chunk.get("content")
+                    if in_chat:
+                        yield "data:" + orjson.dumps(
+                            {
+                                "content": chunk.get("content"),
+                                "reasoning_content": chunk.get("reasoning_content"),
+                                "type": "sql-result",
+                            }
+                        ).decode() + "\n\n"
+                if in_chat:
+                    yield "data:" + orjson.dumps(
+                        {"type": "info", "msg": "sql generated"}
+                    ).decode() + "\n\n"
+                # filter sql
+                SQLBotLogUtil.info(full_sql_text)
+
+                chart_type = self.get_chart_type_from_sql_answer(full_sql_text)
+
+                # return title
+                # Chỉ đặt tiêu đề ở lần thử đầu: lần retry đặt lại chỉ sinh thêm một event
+                # `brief` thứ hai cho cùng một hội thoại, client không có cách nào hiểu đúng.
+                if self.change_title and sql_attempt == 0:
+                    llm_brief = self.get_brief_from_sql_answer(full_sql_text)
+                    llm_brief_generated = bool(llm_brief)
+                    if llm_brief_generated or (
+                        self.chat_question.question
+                        and self.chat_question.question.strip() != ""
+                    ):
+                        save_brief = (
+                            llm_brief
+                            if (llm_brief and llm_brief != "")
+                            else trim_chat_brief(self.chat_question.question)
+                        )
+                        brief = rename_chat(
+                            session=_session,
+                            rename_object=RenameChat(
+                                id=self.get_record().chat_id,
+                                brief=save_brief,
+                                brief_generate=llm_brief_generated,
+                            ),
+                        )
+                        if in_chat:
+                            yield "data:" + orjson.dumps(
+                                {"type": "brief", "brief": brief}
+                            ).decode() + "\n\n"
+                        if not stream:
+                            json_result["title"] = brief
+
+                use_dynamic_ds: bool = (
+                    self.current_assistant
+                    and self.current_assistant.type in dynamic_ds_types
+                )
+                is_page_embedded: bool = (
+                    self.current_assistant and self.current_assistant.type == 4
+                )
+                dynamic_sql_result = None
+                sqlbot_temp_sql_text = None
+                assistant_dynamic_sql = None
+                # row permission
+
+                sql_operate = OperationEnum.GENERATE_SQL
+                sql, tables = self.check_sql(
+                    session=_session, res=full_sql_text, operate=sql_operate
+                )
+
+                # 表名安全检查：用 sqlglot 解析真实 SQL，不信任 AI 返回的 tables
+                try:
+                    actual_tables = extract_tables_from_sql(sql, ds_type=self.ds.type)
+                except Exception as parse_error:
+                    raise SingleMessageError(
+                        f"SQL parsing failed: {parse_error}. "
+                        f"This may indicate an unsupported SQL syntax or a security issue."
+                    )
+                # Parse được nhưng không tham chiếu bảng nào thì cho chạy: loại SQL này (đếm
+                # trên hằng số, subquery toàn literal…) không đọc được dữ liệu nào nên không có
+                # gì để rò rỉ. Đây là cách duy nhất trả lời được các câu hỏi về chính schema,
+                # vd "datasource có bao nhiêu bảng".
+                allowed_tables = set(self.table_name_list)
+                unauthorized_tables = actual_tables - allowed_tables
+                if unauthorized_tables:
+                    raise SingleMessageError(
+                        f"SQL contains unauthorized tables: {', '.join(unauthorized_tables)}. "
+                        f"Allowed tables: {', '.join(allowed_tables)}"
+                    )
+
+                if (
+                    (not self.current_assistant or is_page_embedded)
+                    and is_normal_user(self.current_user)
+                ) or use_dynamic_ds:
+                    sql_result = None
+
+                    if use_dynamic_ds:
+                        dynamic_sql_result = self.generate_assistant_dynamic_sql(
+                            _session, sql, tables
+                        )
+                        sqlbot_temp_sql_text = (
+                            dynamic_sql_result.get("sqlbot_temp_sql_text")
+                            if dynamic_sql_result
+                            else None
+                        )
+                    else:
+                        sql_result = self.generate_filter(
+                            _session, sql, tables
+                        )  # maybe no sql and tables
+
+                    if sql_result:
+                        SQLBotLogUtil.info(sql_result)
+                        sql_operate = OperationEnum.GENERATE_SQL_WITH_PERMISSIONS
+                        sql = self.check_save_sql(
+                            session=_session, res=sql_result, operate=sql_operate
+                        )
+                    elif dynamic_sql_result and sqlbot_temp_sql_text:
+                        sql_operate = OperationEnum.GENERATE_DYNAMIC_SQL
+                        assistant_dynamic_sql = self.check_save_sql(
+                            session=_session, res=sqlbot_temp_sql_text, operate=sql_operate
+                        )
+                    else:
+                        sql = self.check_save_sql(
+                            session=_session, res=full_sql_text, operate=sql_operate
+                        )
+                else:
+                    sql = self.check_save_sql(
+                        session=_session, res=full_sql_text, operate=sql_operate
+                    )
+
+                SQLBotLogUtil.info("sql: " + sql)
+
+                if not stream:
+                    json_result["sql"] = sql
+
+                format_sql = sqlparse.format(sql, reindent=True)
+                if in_chat:
+                    yield "data:" + orjson.dumps(
+                        {"content": format_sql, "type": "sql"}
+                    ).decode() + "\n\n"
+                else:
+                    if stream:
+                        yield f"```sql\n{format_sql}\n```\n\n"
+
+                # execute sql
+                real_execute_sql = sql
+                if sqlbot_temp_sql_text and assistant_dynamic_sql:
+                    dynamic_sql_result.pop("sqlbot_temp_sql_text")
+                    for origin_table, subsql in dynamic_sql_result.items():
+                        assistant_dynamic_sql = assistant_dynamic_sql.replace(
+                            f"{dynamic_subsql_prefix}{origin_table}", subsql
+                        )
+                    real_execute_sql = assistant_dynamic_sql
+
+                if finish_step.value <= ChatFinishStep.GENERATE_SQL.value:
+                    if in_chat:
+                        yield "data:" + orjson.dumps({"type": "finish"}).decode() + "\n\n"
+                    if not stream:
+                        yield json_result
+                    # Pha đã tự phát nốt event cuối. `return` ở đây chỉ
+                    # thoát generator này, nên phải báo cờ để người gọi
+                    # dừng theo.
+                    return SqlPhaseResult(
+                        tables=tables, chart_type=chart_type, stopped=True
+                    )
+
+                # Cưỡng chế scope của quyền SW: bọc mọi tham chiếu tới bảng có scope thành
+                # derived table `(scope) AS <bảng>` — tất định bằng sqlglot, không qua LLM.
+                # Chỉ đổi bản THỰC THI (real_execute_sql, cùng khuôn với nhánh assistant động);
+                # bản `sql` đã phát cho client giữ nguyên để không rò điều kiện lọc quyền.
+                # Rewrite hỏng thì từ chối thực thi — tuyệt đối không fallback về SQL chưa bọc.
+                if (
+                    self.sw_permission
+                    and self.sw_permission.restricted
+                    and self.sw_permission.scope_queries
+                ):
+                    try:
+                        real_execute_sql = apply_scope_to_sql(
+                            real_execute_sql, self.sw_permission.scope_queries, self.ds.type
+                        )
+                    except Exception as rewrite_error:
+                        raise SingleMessageError(
+                            f"Không áp được giới hạn phạm vi dữ liệu lên SQL, "
+                            f"từ chối thực thi: {rewrite_error}"
+                        )
+
+                self.current_logs[OperationEnum.EXECUTE_SQL] = start_log(
+                    session=_session,
+                    operate=OperationEnum.EXECUTE_SQL,
+                    record_id=self.record.id,
+                    local_operation=True,
+                )
+                result = self.execute_sql(sql=real_execute_sql)
+                self.current_logs[OperationEnum.EXECUTE_SQL] = end_log(
+                    session=_session,
+                    log=self.current_logs[OperationEnum.EXECUTE_SQL],
+                    full_message={
+                        "sql": real_execute_sql,
+                        "count": len(result.get("data")),
+                    },
+                )
+
+                _data = DataFormat.convert_large_numbers_in_object_array(result.get("data"))
+                _data = DataFormat.normalize_qualified_sql_column_keys_in_object_array(
+                    _data
+                )
+                result["data"] = _data
+
+                self.save_sql_data(session=_session, data_obj=result)
+                if in_chat:
+                    # Chở luôn kết quả SQL trong `data` thay vì bắt client gọi thêm
+                    # `GET /chat/record/{id}/data`. Giữ nguyên `content` là chuỗi
+                    # 'execute-success' như hợp đồng cũ: client cũ chỉ đọc `type` nên không
+                    # vỡ, client mới thấy có `data` thì dùng thẳng.
+                    #
+                    # Phát ở đây là chỗ sớm nhất có thể, và cũng là lúc rẻ nhất: pha sinh
+                    # câu trả lời chưa khởi động nên đường truyền đang rỗng, khối dữ liệu
+                    # đi qua mà không chen ngang token nào.
+                    yield "data:" + orjson.dumps(
+                        {
+                            "content": "execute-success",
+                            "type": "sql-data",
+                            "data": self.build_sql_data_payload(result),
+                        }
+                    ).decode() + "\n\n"
+                if not stream:
+                    json_result["data"] = get_chat_chart_data(_session, self.record.id)
+            except (
+                SingleMessageError,
+                SQLBotDBError,
+                ParseSQLResultError,
+                SQLBotDBConnectionError,
+            ) as e:
+                reason = _humanize_error(str(e))
+                # Mất kết nối DB thì sinh lại SQL không cứu được gì — bỏ qua thẳng sang hạ cấp.
+                can_retry = not isinstance(e, SQLBotDBConnectionError)
+                if can_retry and sql_attempt < max_sql_retry:
+                    sql_attempt += 1
+                    retry_reason = reason
+                    # Cố ý không phát event SSE nào cho lần sinh lại: hợp đồng stream giữ nguyên
+                    # như trước, client không phải biết tới khái niệm retry. Dấu vết nằm ở log.
+                    SQLBotLogUtil.warning(
+                        f"SQL phase failed (attempt {sql_attempt}/{max_sql_retry}), retrying: {reason}"
+                    )
+                    continue
+                # Hết lượt thử. Chỉ hạ cấp khi client thực sự chờ pha answer: nhánh MCP và các
+                # finish_step dừng sớm vẫn cần nhận lỗi thật để giữ nguyên hợp đồng cũ.
+                if not (
+                    in_chat
+                    and settings.LLM_ANSWER_ON_FAILURE
+                    and finish_step.value >= ChatFinishStep.GENERATE_ANSWER.value
+                ):
+                    raise
+                degraded_reason = str(e)
+                # Cố ý KHÔNG gọi save_error: giao diện web hiện khối lỗi đỏ với mọi record có
+                # chat_record.error khác rỗng, mà lượt này sắp có câu trả lời tử tế. Lý do hỏng
+                # vẫn nằm đủ trong log ở dòng dưới để truy vết.
+                SQLBotLogUtil.warning(
+                    f"SQL phase failed after {sql_attempt} retry, "
+                    f"falling back to answer-only: {reason}"
+                )
+                break
+            break
+
+        return SqlPhaseResult(
+            result=result,
+            tables=tables,
+            chart_type=chart_type,
+            data=_data,
+            degraded_reason=degraded_reason,
+        )
+
+
     def run_task(self, in_chat: bool = True, stream: bool = True,
                  finish_step: ChatFinishStep = ChatFinishStep.GENERATE_ANSWER, return_img: bool = True):
         json_result: Dict[str, Any] = {'success': True}
@@ -1782,214 +2138,20 @@ class LLMService:
             if not connected:
                 raise SQLBotDBConnectionError('Connect DB failed')
 
-            # Pha SQL (sinh → kiểm tra → chạy) hỏng vì nhiều lý do phần lớn là ngẫu nhiên: LLM trả
-            # JSON sai định dạng, từ chối vì hiểu nhầm câu hỏi, sinh ra SQL không parse được bảng
-            # nào, hoặc SQL chạy lỗi trên DB. Thử lại tại chỗ với thông báo lỗi đưa ngược vào hội
-            # thoại cứu được đa số ca mà không cần người dùng hỏi lại.
-            #
-            # Hết lượt thử vẫn hỏng thì KHÔNG ném lỗi ra ngoài nữa: chuyển sang nhánh answer
-            # fallback ở khối except. Câu hỏi làm gãy pha SQL thường là câu tham chiếu ngược
-            # ("trong đó bảng nào tên dài nhất") — dữ liệu để trả lời đã có từ lượt trước, chỉ là
-            # không diễn đạt được thành SQL mới, nên trả về event `error` là phí một câu trả lời
-            # hoàn toàn khả thi.
-            max_sql_retry = max(0, settings.LLM_SQL_MAX_RETRY)
-            sql_attempt = 0
-            retry_reason: Optional[str] = None
-            degraded_reason: Optional[str] = None
-            result: Optional[Dict[str, Any]] = None
-            tables = None
-            chart_type = None
-            _data = None
-
-            while True:
-                try:
-                    # generate sql
-                    sql_res = self.generate_sql(_session, retry_reason=retry_reason)
-                    full_sql_text = ''
-                    for chunk in sql_res:
-                        full_sql_text += chunk.get('content')
-                        if in_chat:
-                            yield 'data:' + orjson.dumps(
-                                {'content': chunk.get('content'),
-                                 'reasoning_content': chunk.get('reasoning_content'),
-                                 'type': 'sql-result'}).decode() + '\n\n'
-                    if in_chat:
-                        yield 'data:' + orjson.dumps({'type': 'info', 'msg': 'sql generated'}).decode() + '\n\n'
-                    # filter sql
-                    SQLBotLogUtil.info(full_sql_text)
-
-                    chart_type = self.get_chart_type_from_sql_answer(full_sql_text)
-
-                    # return title
-                    # Chỉ đặt tiêu đề ở lần thử đầu: lần retry đặt lại chỉ sinh thêm một event
-                    # `brief` thứ hai cho cùng một hội thoại, client không có cách nào hiểu đúng.
-                    if self.change_title and sql_attempt == 0:
-                        llm_brief = self.get_brief_from_sql_answer(full_sql_text)
-                        llm_brief_generated = bool(llm_brief)
-                        if llm_brief_generated or (
-                                self.chat_question.question and self.chat_question.question.strip() != ''):
-                            save_brief = llm_brief if (llm_brief and llm_brief != '') else \
-                                trim_chat_brief(self.chat_question.question)
-                            brief = rename_chat(session=_session,
-                                                rename_object=RenameChat(id=self.get_record().chat_id,
-                                                                         brief=save_brief,
-                                                                         brief_generate=llm_brief_generated))
-                            if in_chat:
-                                yield 'data:' + orjson.dumps({'type': 'brief', 'brief': brief}).decode() + '\n\n'
-                            if not stream:
-                                json_result['title'] = brief
-
-                    use_dynamic_ds: bool = self.current_assistant and self.current_assistant.type in dynamic_ds_types
-                    is_page_embedded: bool = self.current_assistant and self.current_assistant.type == 4
-                    dynamic_sql_result = None
-                    sqlbot_temp_sql_text = None
-                    assistant_dynamic_sql = None
-                    # row permission
-
-                    sql_operate = OperationEnum.GENERATE_SQL
-                    sql, tables = self.check_sql(session=_session, res=full_sql_text, operate=sql_operate)
-
-                    # 表名安全检查：用 sqlglot 解析真实 SQL，不信任 AI 返回的 tables
-                    try:
-                        actual_tables = extract_tables_from_sql(sql, ds_type=self.ds.type)
-                    except Exception as parse_error:
-                        raise SingleMessageError(
-                            f"SQL parsing failed: {parse_error}. "
-                            f"This may indicate an unsupported SQL syntax or a security issue."
-                        )
-                    # Parse được nhưng không tham chiếu bảng nào thì cho chạy: loại SQL này (đếm
-                    # trên hằng số, subquery toàn literal…) không đọc được dữ liệu nào nên không có
-                    # gì để rò rỉ. Đây là cách duy nhất trả lời được các câu hỏi về chính schema,
-                    # vd "datasource có bao nhiêu bảng".
-                    allowed_tables = set(self.table_name_list)
-                    unauthorized_tables = actual_tables - allowed_tables
-                    if unauthorized_tables:
-                        raise SingleMessageError(
-                            f"SQL contains unauthorized tables: {', '.join(unauthorized_tables)}. "
-                            f"Allowed tables: {', '.join(allowed_tables)}"
-                        )
-
-                    if ((not self.current_assistant or is_page_embedded) and is_normal_user(
-                            self.current_user)) or use_dynamic_ds:
-                        sql_result = None
-
-                        if use_dynamic_ds:
-                            dynamic_sql_result = self.generate_assistant_dynamic_sql(_session, sql, tables)
-                            sqlbot_temp_sql_text = dynamic_sql_result.get(
-                                'sqlbot_temp_sql_text') if dynamic_sql_result else None
-                        else:
-                            sql_result = self.generate_filter(_session, sql, tables)  # maybe no sql and tables
-
-                        if sql_result:
-                            SQLBotLogUtil.info(sql_result)
-                            sql_operate = OperationEnum.GENERATE_SQL_WITH_PERMISSIONS
-                            sql = self.check_save_sql(session=_session, res=sql_result, operate=sql_operate)
-                        elif dynamic_sql_result and sqlbot_temp_sql_text:
-                            sql_operate = OperationEnum.GENERATE_DYNAMIC_SQL
-                            assistant_dynamic_sql = self.check_save_sql(session=_session, res=sqlbot_temp_sql_text,
-                                                                        operate=sql_operate)
-                        else:
-                            sql = self.check_save_sql(session=_session, res=full_sql_text, operate=sql_operate)
-                    else:
-                        sql = self.check_save_sql(session=_session, res=full_sql_text, operate=sql_operate)
-
-                    SQLBotLogUtil.info('sql: ' + sql)
-
-                    if not stream:
-                        json_result['sql'] = sql
-
-                    format_sql = sqlparse.format(sql, reindent=True)
-                    if in_chat:
-                        yield 'data:' + orjson.dumps({'content': format_sql, 'type': 'sql'}).decode() + '\n\n'
-                    else:
-                        if stream:
-                            yield f'```sql\n{format_sql}\n```\n\n'
-
-                    # execute sql
-                    real_execute_sql = sql
-                    if sqlbot_temp_sql_text and assistant_dynamic_sql:
-                        dynamic_sql_result.pop('sqlbot_temp_sql_text')
-                        for origin_table, subsql in dynamic_sql_result.items():
-                            assistant_dynamic_sql = assistant_dynamic_sql.replace(
-                                f'{dynamic_subsql_prefix}{origin_table}', subsql)
-                        real_execute_sql = assistant_dynamic_sql
-
-                    if finish_step.value <= ChatFinishStep.GENERATE_SQL.value:
-                        if in_chat:
-                            yield 'data:' + orjson.dumps({'type': 'finish'}).decode() + '\n\n'
-                        if not stream:
-                            yield json_result
-                        return
-
-                    # Cưỡng chế scope của quyền SW: bọc mọi tham chiếu tới bảng có scope thành
-                    # derived table `(scope) AS <bảng>` — tất định bằng sqlglot, không qua LLM.
-                    # Chỉ đổi bản THỰC THI (real_execute_sql, cùng khuôn với nhánh assistant động);
-                    # bản `sql` đã phát cho client giữ nguyên để không rò điều kiện lọc quyền.
-                    # Rewrite hỏng thì từ chối thực thi — tuyệt đối không fallback về SQL chưa bọc.
-                    if (self.sw_permission and self.sw_permission.restricted
-                            and self.sw_permission.scope_queries):
-                        try:
-                            real_execute_sql = apply_scope_to_sql(
-                                real_execute_sql, self.sw_permission.scope_queries, self.ds.type)
-                        except Exception as rewrite_error:
-                            raise SingleMessageError(
-                                f'Không áp được giới hạn phạm vi dữ liệu lên SQL, '
-                                f'từ chối thực thi: {rewrite_error}')
-
-                    self.current_logs[OperationEnum.EXECUTE_SQL] = start_log(session=_session,
-                                                                             operate=OperationEnum.EXECUTE_SQL,
-                                                                             record_id=self.record.id,
-                                                                             local_operation=True)
-                    result = self.execute_sql(sql=real_execute_sql)
-                    self.current_logs[OperationEnum.EXECUTE_SQL] = end_log(
-                        session=_session,
-                        log=self.current_logs[OperationEnum.EXECUTE_SQL],
-                        full_message={'sql': real_execute_sql, 'count': len(result.get('data'))})
-
-                    _data = DataFormat.convert_large_numbers_in_object_array(result.get('data'))
-                    _data = DataFormat.normalize_qualified_sql_column_keys_in_object_array(_data)
-                    result["data"] = _data
-
-                    self.save_sql_data(session=_session, data_obj=result)
-                    if in_chat:
-                        # Chở luôn kết quả SQL trong `data` thay vì bắt client gọi thêm
-                        # `GET /chat/record/{id}/data`. Giữ nguyên `content` là chuỗi
-                        # 'execute-success' như hợp đồng cũ: client cũ chỉ đọc `type` nên không
-                        # vỡ, client mới thấy có `data` thì dùng thẳng.
-                        #
-                        # Phát ở đây là chỗ sớm nhất có thể, và cũng là lúc rẻ nhất: pha sinh
-                        # câu trả lời chưa khởi động nên đường truyền đang rỗng, khối dữ liệu
-                        # đi qua mà không chen ngang token nào.
-                        yield 'data:' + orjson.dumps(
-                            {'content': 'execute-success', 'type': 'sql-data',
-                             'data': self.build_sql_data_payload(result)}).decode() + '\n\n'
-                    if not stream:
-                        json_result['data'] = get_chat_chart_data(_session, self.record.id)
-                except (SingleMessageError, SQLBotDBError, ParseSQLResultError, SQLBotDBConnectionError) as e:
-                    reason = _humanize_error(str(e))
-                    # Mất kết nối DB thì sinh lại SQL không cứu được gì — bỏ qua thẳng sang hạ cấp.
-                    can_retry = not isinstance(e, SQLBotDBConnectionError)
-                    if can_retry and sql_attempt < max_sql_retry:
-                        sql_attempt += 1
-                        retry_reason = reason
-                        # Cố ý không phát event SSE nào cho lần sinh lại: hợp đồng stream giữ nguyên
-                        # như trước, client không phải biết tới khái niệm retry. Dấu vết nằm ở log.
-                        SQLBotLogUtil.warning(
-                            f'SQL phase failed (attempt {sql_attempt}/{max_sql_retry}), retrying: {reason}')
-                        continue
-                    # Hết lượt thử. Chỉ hạ cấp khi client thực sự chờ pha answer: nhánh MCP và các
-                    # finish_step dừng sớm vẫn cần nhận lỗi thật để giữ nguyên hợp đồng cũ.
-                    if not (in_chat and settings.LLM_ANSWER_ON_FAILURE
-                            and finish_step.value >= ChatFinishStep.GENERATE_ANSWER.value):
-                        raise
-                    degraded_reason = str(e)
-                    # Cố ý KHÔNG gọi save_error: giao diện web hiện khối lỗi đỏ với mọi record có
-                    # chat_record.error khác rỗng, mà lượt này sắp có câu trả lời tử tế. Lý do hỏng
-                    # vẫn nằm đủ trong log ở dòng dưới để truy vết.
-                    SQLBotLogUtil.warning(f'SQL phase failed after {sql_attempt} retry, '
-                                          f'falling back to answer-only: {reason}')
-                    break
-                break
+            # Pha SQL bóc riêng: `yield from` chở event SSE lên thẳng
+            # client, còn giá trị trả về mang kết quả pha sang các pha sau.
+            # Cờ `stopped` phải kiểm ngay — xem docstring của `_sql_phase`
+            # để biết vì sao bỏ qua nó là một lỗi im lặng.
+            sql_phase = yield from self._sql_phase(
+                _session, json_result, in_chat, stream, finish_step
+            )
+            if sql_phase.stopped:
+                return
+            result = sql_phase.result
+            tables = sql_phase.tables
+            chart_type = sql_phase.chart_type
+            _data = sql_phase.data
+            degraded_reason = sql_phase.degraded_reason
 
             if finish_step.value <= ChatFinishStep.QUERY_DATA.value:
                 if stream:
