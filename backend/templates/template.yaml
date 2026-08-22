@@ -788,6 +788,65 @@ template:
           Lượt hỏi này hệ thống CHỦ ĐỘNG bỏ qua bước truy vấn dữ liệu vì đã xác định câu hỏi không cần số liệu mới. Đây là hoạt động bình thường, KHÔNG phải sự cố. Nhiệm vụ của bạn là trả lời thẳng vào câu hỏi dựa trên những gì đã có.
         insufficient_rule: >-
           Nếu <history> và <tables> KHÔNG đủ để trả lời, hãy nói ngắn gọn rằng câu hỏi này cần truy vấn dữ liệu, rồi mời người dùng hỏi lại cụ thể hơn — nêu rõ cần chỉ định bảng, chỉ tiêu hay khoảng thời gian nào. TUYỆT ĐỐI không nói rằng hệ thống gặp lỗi, gặp sự cố hay không truy vấn được: hệ thống không hề thử truy vấn ở lượt này
+  # Cổng định tuyến: quyết định lượt hỏi có cần chạy pha SQL hay không. Prompt cố ý NGẮN và không
+  # nhận m-schema — chỉ nhận tên bảng. Cổng mà đọc cả m-schema thì nó đã tốn đúng cái ngân sách
+  # ngữ cảnh mà nó sinh ra để tiết kiệm.
+  route:
+    system: |
+      <Instruction>
+        Bạn là bộ định tuyến của một trợ lý hỏi dữ liệu. Nhiệm vụ DUY NHẤT của bạn là quyết định lượt hỏi này có cần chạy một truy vấn dữ liệu MỚI hay không.
+        Bạn KHÔNG trả lời câu hỏi của người dùng. Bạn KHÔNG sinh SQL. Bạn chỉ phân loại.
+        Người dùng sẽ cung cấp thông tin cho bạn:
+          Trong khối <question> là câu hỏi của người dùng ở lượt này;
+          Trong khối <tables> là danh sách đầy đủ các bảng mà hệ thống được phép truy vấn trong datasource này;
+          Trong khối <history> là các lượt hỏi-đáp TRƯỚC ĐÓ trong cùng hội thoại, mỗi <round> gồm câu hỏi cũ, SQL đã chạy và một phần dữ liệu đã lấy được.
+      </Instruction>
+
+      Bạn phải tuân thủ các quy tắc sau:
+      <Rules>
+        <rule priority="high">
+          NGHI NGỜ THÌ CHỌN "sql". Hai loại nhầm lẫn KHÔNG cân bằng nhau: chọn nhầm "sql" chỉ tốn thêm vài giây, còn chọn nhầm "answer" khiến người dùng không nhận được số liệu họ cần. Chỉ chọn "answer" khi câu hỏi khớp RÕ RÀNG với một nhóm trong <Categories>.
+        </rule>
+        <rule>
+          Câu hỏi nhắc tới bất kỳ chỉ tiêu, khoảng thời gian, đơn vị hay tên bảng nào mà <history> chưa có số liệu tương ứng thì luôn là "sql".
+        </rule>
+        <rule>
+          Chỉ chọn nhóm backref khi dữ liệu trong <history> THẬT SỰ đủ để trả lời. Nếu câu hỏi tham chiếu ngược nhưng lại đòi thêm chiều dữ liệu mà <history> không có, đó vẫn là "sql".
+        </rule>
+        <rule>
+          <history> rỗng thì nhóm backref không bao giờ đúng.
+        </rule>
+        <rule>
+          Không suy đoán nội dung bảng từ tên bảng để kết luận rằng không có dữ liệu. Việc đó thuộc về pha sinh SQL, không phải việc của bạn.
+        </rule>
+      </Rules>
+
+      <Categories>
+        <category name="need_data" action="sql">Câu hỏi cần số liệu mới từ cơ sở dữ liệu. Đây là nhóm mặc định.</category>
+        <category name="backref" action="answer">Câu hỏi tham chiếu ngược vào kết quả lượt trước ("trong đó cái nào lớn nhất", "sắp xếp lại giúp tôi", "giải thích con số vừa rồi") và <history> đã chứa đủ dữ liệu để trả lời.</category>
+        <category name="meta" action="answer">Câu hỏi về CHÍNH datasource chứ không về dữ liệu bên trong nó: có bao nhiêu bảng, tên các bảng là gì, datasource này chứa những gì.</category>
+        <category name="chitchat" action="answer">Chào hỏi, cảm ơn, hỏi về bản thân trợ lý, hỏi trợ lý làm được gì.</category>
+        <category name="general" action="answer">Câu hỏi kiến thức chung, không liên quan tới dữ liệu trong datasource này.</category>
+      </Categories>
+
+      <Output>
+        Chỉ trả về ĐÚNG MỘT khối JSON, không giải thích thêm, không bọc trong khối mã:
+        {{"action":"sql hoặc answer","category":"một trong need_data/backref/meta/chitchat/general","reason":"một câu ngắn bằng ngôn ngữ của câu hỏi, giải thích vì sao"}}
+        Trường action phải khớp với action của category đã chọn theo bảng <Categories>.
+        Trường reason sẽ được đưa cho pha trả lời đọc, nên viết cho người dùng cuối hiểu được, không nhắc tên hàm hay thuật ngữ nội bộ.
+      </Output>
+    user: |
+      <question>
+      {question}
+      </question>
+
+      <tables>
+      {schema}
+      </tables>
+
+      <history>
+      {history}
+      </history>
   predict:
     system: |
       <Instruction>

@@ -15,6 +15,7 @@ from apps.db.constant import DB
 from apps.template.filter.generator import get_permissions_template
 from apps.template.generate_analysis.generator import get_analysis_template
 from apps.template.generate_answer.generator import get_answer_template
+from apps.template.route_question.generator import get_route_template
 from apps.template.generate_chart.generator import get_chart_template
 from apps.template.generate_dynamic.generator import get_dynamic_template
 from apps.template.generate_guess_question.generator import get_guess_question_template
@@ -50,6 +51,7 @@ class OperationEnum(Enum):
     EXECUTE_SQL = '12'
     GENERATE_PICTURE = '13'
     ANSWER = '14'
+    ROUTE_QUESTION = '15'
 
 
 class ChatFinishStep(Enum):
@@ -322,6 +324,11 @@ class AiModelQuestion(BaseModel):
     # "no_query" khi hệ thống chủ động bỏ qua truy vấn. Sai giá trị này thì câu trả lời sẽ báo
     # sự cố cho một lượt hoàn toàn bình thường, nên mặc định giữ ở nhánh cũ.
     fallback_kind: str = "failed"
+    # Đầu vào cho prompt cổng định tuyến. Tách khỏi `fallback_*` dù nội dung sinh ra từ cùng nguồn:
+    # cổng chạy TRƯỚC pha SQL còn fallback chạy SAU, nên hai bên có ngân sách token khác nhau và
+    # được cấu hình rời (LLM_ROUTE_HISTORY_* so với LLM_ANSWER_FALLBACK_*).
+    route_schema: str = ""
+    route_history: str = ""
 
     def question_for_prompt(self) -> str:
         """Câu hỏi dùng để RENDER PROMPT: có tài liệu đính kèm thì tài liệu đứng trước câu hỏi.
@@ -477,6 +484,25 @@ class AiModelQuestion(BaseModel):
                                                              reason=self.fallback_reason,
                                                              schema=self.fallback_schema,
                                                              history=self.fallback_history)
+
+    def route_sys_question(self):
+        """System prompt cho cổng định tuyến: phân loại câu hỏi có cần truy vấn dữ liệu không.
+
+        Không nhận `terminologies` lẫn `custom_prompt`: cổng chỉ phân loại chứ không trả lời, mà
+        hai khối đó là phần nặng nhất của mọi prompt khác trong file này. Nhận vào chỉ làm cổng
+        đắt lên đúng bằng thứ nó sinh ra để tiết kiệm.
+        """
+        return get_route_template()['system'].format(lang=self.lang, sqlbot_name=self.sqlbot_name)
+
+    def route_user_question(self):
+        """User prompt cho cổng: câu hỏi + danh sách bảng + tóm tắt vài lượt hỏi-đáp gần nhất.
+
+        Dùng `question_for_prompt()` để tài liệu docx đính kèm cũng được cổng nhìn thấy — câu hỏi
+        kèm tài liệu thường trả lời được ngay từ tài liệu, đúng nhóm mà cổng cần bắt.
+        """
+        return get_route_template()['user'].format(question=self.question_for_prompt(),
+                                                   schema=self.route_schema,
+                                                   history=self.route_history)
 
     def predict_sys_question(self):
         return get_predict_template()['system'].format(lang=self.lang, custom_prompt=self.custom_prompt,

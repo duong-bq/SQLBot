@@ -188,6 +188,33 @@ class Settings(BaseSettings):
     # vẫn nhận đủ `answer` + `finish`. Xem API_SPEC.md §6.8.
     GENERATE_CHART_ENABLED: bool = True
 
+    # --- Cổng định tuyến câu hỏi (question gate) ---
+    # Chạy một lượt gọi LLM NGẮN trước pha SQL để quyết định lượt này có cần truy vấn dữ liệu mới
+    # hay không. Tắt (mặc định) thì đường đi giống hệt trước khi có cổng: không thêm lời gọi LLM,
+    # không thêm event SSE, không thêm bản ghi chat_log.
+    #
+    # Vấn đề nó giải: pha SQL luôn chạy kể cả với câu chào hỏi, câu tham chiếu ngược ("trong đó
+    # cái nào lớn nhất") hay câu hỏi về chính datasource — đó là pha đắt nhất và cũng là pha bơm
+    # cả m-schema vào ngữ cảnh, nên chạy thừa vừa tốn tiền vừa làm nhiễu câu trả lời.
+    #
+    # Chỉ áp dụng cho nhánh in_chat. Nhánh MCP luôn đi pha SQL bất kể biến này: người gọi MCP xin
+    # đúng dữ liệu, mà toàn bộ pha answer lại nằm trong nhánh `if in_chat` nên định tuyến sang
+    # answer ở đó sẽ trả về kết quả rỗng không kèm lỗi.
+    LLM_ROUTE_ENABLED: bool = False
+    # Chế độ CHỈ ĐO: cổng vẫn chạy và vẫn ghi chat_log, nhưng quyết định bị ép về "sql" nên hành vi
+    # người dùng nhìn thấy không đổi. Đây là cách lấy phân bố thật trên lưu lượng thật trước khi
+    # dám bật nhánh answer — bộ eval offline quá nhỏ để tin vào tỷ lệ nó cho ra.
+    # Cố ý mặc định True: bật LLM_ROUTE_ENABLED lần đầu thì vào thẳng chế độ đo, không đổi hành vi.
+    LLM_ROUTE_SHADOW: bool = True
+    # Model riêng cho cổng, trỏ tới id trong bảng ai_model_detail. 0 = dùng chung model chính.
+    # Cổng chỉ phân loại một câu hỏi ngắn nên model nhỏ là đủ, mà rẻ và nhanh hơn hẳn. Lưu ý prompt
+    # được tinh chỉnh theo model: đổi model ở đây thì phải đo lại độ chính xác của cổng.
+    LLM_ROUTE_MODEL_ID: int = 0
+    # Số lượt hỏi-đáp cũ đưa vào prompt cổng. Cổng chỉ cần biết lượt trước đã lấy về những gì để
+    # nhận ra câu tham chiếu ngược, nên ngân sách nhỏ hơn hẳn nhánh answer.
+    LLM_ROUTE_HISTORY_ROUNDS: int = 2
+    LLM_ROUTE_HISTORY_ROWS: int = 5
+
     # --- Gợi ý câu hỏi tiếp theo ngay trong POST /chat/question ---
     # Sinh gợi ý ngay trong lượt hỏi thay vì bắt client gọi thêm `POST /chat/recommend_questions`.
     # Chạy SONG SONG với pha answer/chart nên gần như không cộng thêm độ trễ tới `finish`, cái giá

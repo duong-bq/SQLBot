@@ -218,6 +218,9 @@ class LLMService:
     record: ChatRecord
     config: LLMConfig
     llm: BaseChatModel
+    # Model của cổng định tuyến. Trỏ về chính `config`/`llm` khi LLM_ROUTE_MODEL_ID = 0.
+    route_config: LLMConfig
+    route_llm: BaseChatModel
     sql_message: List[Union[BaseMessage, dict[str, Any]]]
     chart_message: List[Union[BaseMessage, dict[str, Any]]]
 
@@ -243,7 +246,8 @@ class LLMService:
 
     def __init__(self, session: Session, current_user: CurrentUser, chat_question: ChatQuestion,
                  current_assistant: Optional[CurrentAssistant] = None, no_reasoning: bool = False,
-                 embedding: bool = False, config: LLMConfig = None):
+                 embedding: bool = False, config: LLMConfig = None,
+                 route_config: LLMConfig = None):
         self.sql_message = []
         self.chart_message = []
         self.generate_sql_logs = []
@@ -326,6 +330,12 @@ class LLMService:
         llm_instance = LLMFactory.create_llm(self.config)
         self.llm = llm_instance.llm
 
+        # Cổng định tuyến chỉ phân loại một câu hỏi ngắn nên chạy được trên model nhỏ. Không tách
+        # thành LLMService riêng: cổng dùng chung câu hỏi, danh sách bảng và record của lượt này,
+        # chỉ khác đúng cái model.
+        self.route_config = route_config or self.config
+        self.route_llm = LLMFactory.create_llm(route_config).llm if route_config else self.llm
+
         # get last_execute_sql_error
         last_execute_sql_error = get_last_execute_sql_error(session, self.chat_question.chat_id)
         if last_execute_sql_error:
@@ -349,7 +359,16 @@ class LLMService:
                         specialized_model_id = args[3].custom_model
                         print("use custom model: id[" + specialized_model_id + "]")
         config: LLMConfig = await get_default_config(specialized_model_id)
-        instance = cls(*args, **kwargs, config=config)
+        # Phải resolve ở đây chứ không trong __init__: get_default_config là async còn __init__ thì
+        # không, và run_task lại là generator đồng bộ nên không await được ở bất kỳ chỗ nào sau này.
+        route_config: Optional[LLMConfig] = None
+        if settings.LLM_ROUTE_ENABLED and settings.LLM_ROUTE_MODEL_ID:
+            try:
+                route_config = await get_default_config(settings.LLM_ROUTE_MODEL_ID)
+            except Exception as e:
+                # Cấu hình sai model cho cổng không được giết lượt hỏi: rơi về model chính.
+                SQLBotLogUtil.error(f'[route] load route model failed, use main model: {e}')
+        instance = cls(*args, **kwargs, config=config, route_config=route_config)
 
         chat_params: list[SysArgModel] = await get_groups(args[0], "chat")
         for config in chat_params:
