@@ -731,8 +731,15 @@ class LLMService:
                 answer_question.answer_history = f'<history>\n{_history}\n</history>\n'
         return answer_question.answer_sys_question(), answer_question.answer_user_question()
 
-    def build_answer_fallback_prompts(self, _session: Session, reason: str) -> tuple[str, str]:
-        """Dựng cặp prompt cho pha answer khi lượt này KHÔNG lấy được dữ liệu mới.
+    def build_answer_fallback_prompts(self, _session: Session, reason: str,
+                                      kind: str = 'failed') -> tuple[str, str]:
+        """Dựng cặp prompt cho pha answer khi lượt này KHÔNG có dữ liệu truy vấn mới.
+
+        `kind` phân biệt VÌ SAO không có dữ liệu, và chỉ chi phối mấy dòng khung của prompt
+        (xem `answer.fallback_variants`): `'failed'` là pha SQL hỏng thật, `'no_query'` là hệ
+        thống chủ động bỏ qua truy vấn. Hai trường hợp dùng chung bộ rule vì bộ rule không phụ
+        thuộc nguyên nhân; chỉ có giọng kể là phải khác, nếu không thì một lượt bình thường lại
+        được thông báo cho người dùng như một sự cố.
 
         Thay dữ liệu vừa truy vấn (không có) bằng tóm tắt các lượt hỏi-đáp cũ. Phần lớn câu hỏi làm
         pha SQL gãy là câu tham chiếu ngược ("trong đó bảng nào dài nhất") — dữ liệu để trả lời đã
@@ -747,6 +754,7 @@ class LLMService:
         phần cột không giúp gì cho loại câu hỏi này.
         """
         answer_question = self.chat_question.model_copy()
+        answer_question.fallback_kind = kind
         answer_question.fallback_reason = _humanize_error(reason)
         answer_question.fallback_schema = '\n'.join(self.table_name_list) if self.table_name_list else ''
         answer_question.fallback_history = get_recent_qa_history(

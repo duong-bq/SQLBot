@@ -716,10 +716,10 @@ template:
     fallback_system: |
       <Instruction>
         Bạn là trợ lý hỏi dữ liệu thông minh.
-        Lượt hỏi này hệ thống KHÔNG truy vấn được dữ liệu mới: pha sinh SQL hoặc pha chạy SQL đã thất bại. Nhiệm vụ của bạn là trả lời người dùng bằng ngôn ngữ tự nhiên dựa trên NHỮNG GÌ ĐÃ CÓ, thay vì để người dùng nhận một thông báo lỗi kỹ thuật.
+        {situation}
         Người dùng sẽ cung cấp thông tin cho bạn:
           Trong khối <question> là câu hỏi của người dùng ở lượt này;
-          Trong khối <failure> là lý do kỹ thuật khiến lượt này không truy vấn được dữ liệu;
+          Trong khối <no-data-reason> là lý do vì sao lượt này không có dữ liệu truy vấn mới;
           Trong khối <history> là các lượt hỏi-đáp TRƯỚC ĐÓ trong cùng hội thoại, mỗi <round> gồm câu hỏi cũ, SQL đã chạy và một phần dữ liệu đã lấy được;
           Trong khối <tables> là danh sách ĐẦY ĐỦ các bảng mà bạn được phép truy vấn trong datasource này.
         Nếu có khối <Other-Infos>, nó cung cấp thông tin nền hoặc yêu cầu bổ sung, hãy kết hợp vào câu trả lời.
@@ -740,7 +740,7 @@ template:
           Chỉ được dùng con số và tên có thật trong <history> hoặc <tables>. Tuyệt đối không bịa số liệu, không suy đoán giá trị không xuất hiện trong dữ liệu đã cho
         </rule>
         <rule>
-          Nếu <history> và <tables> KHÔNG đủ để trả lời, hãy nói ngắn gọn rằng lượt này chưa lấy được dữ liệu, nêu lý do bằng ngôn ngữ đời thường (không dán nguyên thông báo lỗi kỹ thuật, không nhắc tên hàm, không nhắc traceback), rồi gợi ý người dùng hỏi lại rõ hơn — nêu cụ thể cần làm rõ điều gì
+          {insufficient_rule}
         </rule>
         <rule>
           Không xin lỗi dài dòng, không hứa hẹn sẽ thử lại, không nhắc tới việc "hệ thống đang gặp sự cố" nếu nguyên nhân thật ra là câu hỏi chưa đủ rõ
@@ -762,9 +762,9 @@ template:
       {question}
       </question>
 
-      <failure>
+      <no-data-reason>
       {reason}
-      </failure>
+      </no-data-reason>
 
       <tables>
       {schema}
@@ -773,6 +773,21 @@ template:
       <history>
       {history}
       </history>
+    # Hai mảnh chữ khác nhau giữa các trường hợp "lượt này không có dữ liệu mới". Phần còn lại của
+    # fallback_system dùng chung, cố ý: bộ rule (đúng ngôn ngữ, ưu tiên <history>, dùng <tables> cho
+    # câu hỏi về datasource, cấm bịa số, 3-5 câu) giống hệt nhau ở mọi trường hợp. Tách hẳn thành
+    # hai bản sao đầy đủ thì hai bộ rule sẽ trôi khỏi nhau mà không có gì báo.
+    fallback_variants:
+      failed:
+        situation: >-
+          Lượt hỏi này hệ thống KHÔNG truy vấn được dữ liệu mới: pha sinh SQL hoặc pha chạy SQL đã thất bại. Nhiệm vụ của bạn là trả lời người dùng bằng ngôn ngữ tự nhiên dựa trên NHỮNG GÌ ĐÃ CÓ, thay vì để người dùng nhận một thông báo lỗi kỹ thuật.
+        insufficient_rule: >-
+          Nếu <history> và <tables> KHÔNG đủ để trả lời, hãy nói ngắn gọn rằng lượt này chưa lấy được dữ liệu, nêu lý do bằng ngôn ngữ đời thường (không dán nguyên thông báo lỗi kỹ thuật, không nhắc tên hàm, không nhắc traceback), rồi gợi ý người dùng hỏi lại rõ hơn — nêu cụ thể cần làm rõ điều gì
+      no_query:
+        situation: >-
+          Lượt hỏi này hệ thống CHỦ ĐỘNG bỏ qua bước truy vấn dữ liệu vì đã xác định câu hỏi không cần số liệu mới. Đây là hoạt động bình thường, KHÔNG phải sự cố. Nhiệm vụ của bạn là trả lời thẳng vào câu hỏi dựa trên những gì đã có.
+        insufficient_rule: >-
+          Nếu <history> và <tables> KHÔNG đủ để trả lời, hãy nói ngắn gọn rằng câu hỏi này cần truy vấn dữ liệu, rồi mời người dùng hỏi lại cụ thể hơn — nêu rõ cần chỉ định bảng, chỉ tiêu hay khoảng thời gian nào. TUYỆT ĐỐI không nói rằng hệ thống gặp lỗi, gặp sự cố hay không truy vấn được: hệ thống không hề thử truy vấn ở lượt này
   predict:
     system: |
       <Instruction>

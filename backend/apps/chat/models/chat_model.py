@@ -318,6 +318,10 @@ class AiModelQuestion(BaseModel):
     # nhiêu bảng") — loại câu hỏi mà pha SQL gần như luôn hỏng vì không bảng nghiệp vụ nào chứa
     # thông tin đó, còn schema thì hệ thống nắm sẵn.
     fallback_schema: str = ""
+    # Chọn biến thể chữ trong `answer.fallback_variants`: "failed" khi pha SQL hỏng thật,
+    # "no_query" khi hệ thống chủ động bỏ qua truy vấn. Sai giá trị này thì câu trả lời sẽ báo
+    # sự cố cho một lượt hoàn toàn bình thường, nên mặc định giữ ở nhánh cũ.
+    fallback_kind: str = "failed"
 
     def question_for_prompt(self) -> str:
         """Câu hỏi dùng để RENDER PROMPT: có tài liệu đính kèm thì tài liệu đứng trước câu hỏi.
@@ -447,19 +451,28 @@ class AiModelQuestion(BaseModel):
                                                     data_scope=self.data_scope)
 
     def answer_fallback_sys_question(self):
-        """System prompt cho pha answer khi lượt này KHÔNG lấy được dữ liệu mới.
+        """System prompt cho pha answer khi lượt này KHÔNG có dữ liệu truy vấn mới.
 
         Tách hẳn khỏi `answer_sys_question` thay vì nhét thêm rule vào đó: prompt chính bắt buộc
         "chỉ dùng số trong <data>", mà nhánh này không có <data> nào — dùng chung sẽ đẩy LLM vào
         thế phải trả lời "không tìm thấy dữ liệu" kể cả khi lịch sử hội thoại thừa sức trả lời.
+
+        `fallback_kind` chọn hai mảnh chữ khác nhau giữa các trường hợp không-có-dữ-liệu (xem
+        `answer.fallback_variants`). Giá trị lạ thì rơi về "failed": thà thừa một lời xin lỗi còn
+        hơn ném KeyError giữa lúc đang dựng prompt cho chính nhánh cứu hộ.
         """
-        return get_answer_template()['fallback_system'].format(lang=self.lang,
-                                                               terminologies=self.terminologies,
-                                                               custom_prompt=self.custom_prompt,
-                                                               sqlbot_name=self.sqlbot_name)
+        template = get_answer_template()
+        variants = template['fallback_variants']
+        variant = variants.get(self.fallback_kind) or variants['failed']
+        return template['fallback_system'].format(lang=self.lang,
+                                                  terminologies=self.terminologies,
+                                                  custom_prompt=self.custom_prompt,
+                                                  sqlbot_name=self.sqlbot_name,
+                                                  situation=variant['situation'],
+                                                  insufficient_rule=variant['insufficient_rule'])
 
     def answer_fallback_user_question(self):
-        """User prompt cho nhánh fallback: câu hỏi + lý do hỏng + danh sách bảng + các lượt hỏi-đáp cũ."""
+        """User prompt nhánh fallback: câu hỏi + lý do không có dữ liệu + bảng + các lượt cũ."""
         return get_answer_template()['fallback_user'].format(question=self.question_for_prompt(),
                                                              reason=self.fallback_reason,
                                                              schema=self.fallback_schema,
