@@ -77,20 +77,52 @@ dụng thật**, không theo thứ tự trong file.
 | `LLM_ANSWER_FALLBACK_ROUNDS` | `3` | Số lượt hỏi-đáp cũ đưa vào prompt fallback |
 | `LLM_ANSWER_FALLBACK_ROWS` | `20` | Số dòng dữ liệu tối đa của **mỗi** lượt cũ trong prompt fallback |
 
-### 2.2. Pha sinh biểu đồ
+### 2.2. Cổng định tuyến câu hỏi (fork thêm)
+
+Một lượt gọi LLM ngắn đặt **trước** pha SQL, quyết định lượt này có cần truy vấn dữ liệu mới hay
+không. Không cần thì đi thẳng nhánh hạ cấp ở §2.1. Cơ chế đầy đủ:
+[TEXT2SQL_PIPELINE.md](TEXT2SQL_PIPELINE.md) §5.1.
+
+| Biến | Mặc định | Tác dụng |
+|---|---|---|
+| `LLM_ROUTE_ENABLED` | `False` | Bật cổng. Tắt thì đường đi giống hệt trước khi có cổng: không thêm lời gọi LLM, không thêm event SSE, không thêm bản ghi `chat_log` |
+| `LLM_ROUTE_SHADOW` | `True` | **Chế độ chỉ đo**: cổng vẫn chạy và vẫn ghi log, nhưng quyết định `answer` bị ép về `sql` nên hành vi người dùng nhìn thấy không đổi |
+| `LLM_ROUTE_MODEL_ID` | `0` | Id trong bảng `ai_model_detail` của model riêng cho cổng. `0` = dùng chung model chính |
+| `LLM_ROUTE_HISTORY_ROUNDS` | `2` | Số lượt hỏi-đáp cũ đưa vào prompt cổng |
+| `LLM_ROUTE_HISTORY_ROWS` | `5` | Số dòng dữ liệu tối đa của mỗi lượt cũ trong prompt cổng |
+
+**Thứ tự bật, không được đảo.** `LLM_ROUTE_SHADOW` mặc định `True` là cố ý: bật `LLM_ROUTE_ENABLED`
+lần đầu là vào thẳng chế độ đo, không có đường nào vô tình nhảy sang đổi hành vi thật.
+
+1. `LLM_ROUTE_ENABLED=True`, giữ `LLM_ROUTE_SHADOW=True`. Chạy trên lưu lượng thật vài ngày.
+2. Đọc số: `backend/.venv/bin/python scripts/route_stats/report.py --days 7`. Con số phải xem
+   **trước** cả tỷ lệ tiết kiệm là nhóm `unparsed` / `mismatch` / `error` — nhóm đó cao nghĩa là
+   cổng đang hỏng chứ không phải đang thận trọng, và mọi tỷ lệ khác đọc ra đều vô nghĩa cho tới khi
+   siết prompt hoặc đổi model.
+3. Chế độ chỉ đo đo được **khối lượng**, không đo được **độ đúng**. Trước khi tắt shadow phải tự đọc
+   tay một mẫu các lượt `forced='shadow'` xem bỏ pha SQL ở đó thì câu trả lời còn dùng được không.
+4. Chấp nhận số rồi mới `LLM_ROUTE_SHADOW=False`.
+
+Cái giá khi bật: thêm **một** lượt gọi LLM cho **mọi** câu hỏi. Prompt cổng cố ý nghèo (chỉ tên bảng
++ vài lượt lịch sử, không có m-schema) nên rẻ, và trỏ được sang model nhỏ bằng `LLM_ROUTE_MODEL_ID`.
+Ở chế độ chỉ đo thì đó là chi phí thuần — chưa tiết kiệm gì cả.
+
+Không đụng tới nhánh MCP, bất kể cấu hình — xem bẫy ở §7.4.
+
+### 2.3. Pha sinh biểu đồ
 
 | Biến | Mặc định | Tác dụng |
 |---|---|---|
 | `GENERATE_CHART_ENABLED` | `True` | Chạy pha sinh biểu đồ sau pha answer trên `POST /chat/question`. Thực chất là chọn `finish_step` mặc định của endpoint đó: `True` → `GENERATE_CHART`, `False` → `GENERATE_ANSWER` |
 
 Cái giá khi bật: thêm **một** lượt gọi LLM cho mỗi câu hỏi (2 → 3, hoặc 3 → 4 nếu đang bật gợi ý câu
-hỏi ở §2.10). Lượt này chạy song song với pha answer nên độ trễ tới `finish` tăng ít hơn nhiều so
+hỏi ở §2.11). Lượt này chạy song song với pha answer nên độ trễ tới `finish` tăng ít hơn nhiều so
 với chi phí token.
 
 Không đụng tới nhánh MCP (tự truyền `QUERY_DATA`) lẫn nhánh hạ cấp — không có dữ liệu thì biểu đồ vô
 nghĩa, `run_task` bỏ qua bất kể biến này.
 
-### 2.3. Lịch sử hội thoại
+### 2.4. Lịch sử hội thoại
 
 | Biến | Mặc định | Tác dụng |
 |---|---|---|
@@ -101,7 +133,7 @@ nghĩa, `run_task` bỏ qua bất kể biến này.
 | `LLM_ANSWER_HISTORY_ENABLED` | `True` | Đưa lịch sử vào cả nhánh answer **bình thường**, không chỉ fallback |
 | `LLM_ANSWER_HISTORY_ROUNDS` / `_ROWS` | `3` / `20` | Ngân sách lịch sử cho nhánh answer thường (tách riêng khỏi `FALLBACK_*` để A/B được) |
 
-### 2.4. Thinking
+### 2.5. Thinking
 
 | Biến | Mặc định | Tác dụng |
 |---|---|---|
@@ -109,7 +141,7 @@ nghĩa, `run_task` bỏ qua bất kể biến này.
 | `LLM_DISABLE_THINKING_EXTRA_BODY` | `{"chat_template_kwargs": {"enable_thinking": false}}` | Payload tiêm vào `extra_body`. Chuẩn vLLM/SGLang. API kiểu DashScope cần `{"enable_thinking": false}` — **đổi biến này, đừng sửa code** |
 | `PARSE_REASONING_BLOCK_ENABLED` | `True` | Tách khối `<think>…</think>` khỏi `content` |
 
-### 2.5. Embedding và top-K
+### 2.6. Embedding và top-K
 
 | Biến | Mặc định | Tác dụng |
 |---|---|---|
@@ -124,14 +156,14 @@ nghĩa, `run_task` bỏ qua bất kể biến này.
 **Đổi model embedding thì phải re-embed toàn bộ** (`scripts/eval_text2sql/21_reembed.py`), nếu không
 vector cũ và mới không cùng không gian.
 
-### 2.6. Giới hạn dòng
+### 2.7. Giới hạn dòng
 
 | Nơi | Giá trị | Ghi chú |
 |---|---|---|
 | `GENERATE_SQL_QUERY_LIMIT_ENABLED` | `True` | Ép LLM thêm `LIMIT` vào SQL |
-| `ANSWER_MAX_ROWS` (**hằng số trong code**, [llm.py:77](../backend/apps/chat/task/llm.py#L77)) | `100` | Trần số dòng nhồi vào prompt answer. Sửa thì **bắt buộc** giữ nguyên cặp với `build_data_scope_note` |
+| `ANSWER_MAX_ROWS` (**hằng số trong code**, [llm.py:79](../backend/apps/chat/task/llm.py#L79)) | `100` | Trần số dòng nhồi vào prompt answer. Sửa thì **bắt buộc** giữ nguyên cặp với `build_data_scope_note` |
 
-### 2.7. Bảo mật và mạng
+### 2.8. Bảo mật và mạng
 
 | Biến | Mặc định | Tác dụng |
 |---|---|---|
@@ -142,7 +174,7 @@ vector cũ và mới không cùng không gian.
 | `BACKEND_CORS_ORIGINS` | `[]` | Danh sách origin, ngăn bằng dấu phẩy. Starlette so khớp **chuỗi chính xác** — khác scheme/host/port là bị chặn, không có wildcard theo domain |
 | `SQLBOT_DOC_ENABLED` | `True` | Bật `/docs` và `/openapi.json` |
 
-### 2.8. Nạp Excel bất đồng bộ và callback
+### 2.9. Nạp Excel bất đồng bộ và callback
 
 Chỉ ảnh hưởng `POST /datasource/createFromExcelAsync` và ba vòng nền đi kèm (worker nạp, vòng gửi
 callback, vòng quét phục hồi) — xem [BACKEND_ARCHITECTURE.md §5](BACKEND_ARCHITECTURE.md).
@@ -167,7 +199,7 @@ callback, vòng quét phục hồi) — xem [BACKEND_ARCHITECTURE.md §5](BACKEN
 URL, worker tự tải. Nhóm biến này chi phối bước tải đó
 ([remote_file.py](../backend/apps/datasource/utils/remote_file.py)).
 
-Ba biến mang tiền tố **`FILE_DOWNLOAD_`** dùng chung với luồng `.docx` đính kèm chat (§2.9) — đó là
+Ba biến mang tiền tố **`FILE_DOWNLOAD_`** dùng chung với luồng `.docx` đính kèm chat (§2.10) — đó là
 lý do chúng không mang tiền tố `EXCEL_`; sửa một chỗ là đổi cho cả hai tính năng. Các biến còn lại
 giữ tiền tố `EXCEL_` vì luồng docx không đụng tới.
 
@@ -197,7 +229,7 @@ không cần bắn lại tay, và không lần thử nào bị đốt trong lúc
 Chỉ `AI_CALLBACK_URL` và `FILE_DOWNLOAD_ALLOWED_HOSTS` là bắt buộc; các biến còn lại có mặc định
 dùng được ngay.
 
-### 2.9. Tài liệu `.docx` đính kèm câu hỏi
+### 2.10. Tài liệu `.docx` đính kèm câu hỏi
 
 Chi phối trường `fileUrls` của `POST /chat/question` — xem
 [TEXT2SQL_PIPELINE.md §10](TEXT2SQL_PIPELINE.md).
@@ -212,7 +244,7 @@ Chi phối trường `fileUrls` của `POST /chat/question` — xem
 | `CHAT_DOC_PROMPT_MAX_CHARS` | `30000` | **cả lượt** | Phần tài liệu đưa vào prompt của **chính lượt đính kèm**. Trần tổng, các file chia nhau — số file client gửi không làm prompt nở ra |
 | `CHAT_DOC_HISTORY_MAX_CHARS` | `10000` | **mỗi lượt trong cửa sổ** | Phần tài liệu đưa vào prompt của các **lượt sau**, qua lịch sử answer. Cũng là trần tổng, tính cho từng lượt |
 
-**Không có biến allowlist riêng**: dùng chung `FILE_DOWNLOAD_ALLOWED_HOSTS` ở §2.8 vì cùng trỏ về
+**Không có biến allowlist riêng**: dùng chung `FILE_DOWNLOAD_ALLOWED_HOSTS` ở §2.9 vì cùng trỏ về
 một MinIO — tên biến không mang tiền tố của luồng nào chính là để nhắc điều đó. Rỗng vẫn là **chặn
 tất cả**: chưa khai host thì tính năng đính kèm coi như chưa mở, mọi `fileUrls` trả
 `400 URL_HOST_NOT_ALLOWED`. Timeout bắt tay và timeout đọc cũng lấy từ cặp `FILE_DOWNLOAD_*`; riêng
@@ -222,7 +254,7 @@ chính là vòng retry.
 Hai trần cuối ảnh hưởng trực tiếp tới prompt nhưng **chưa được đo bằng harness** (§4) — đổi thì phải
 đo lại chứ đừng tin cảm giác.
 
-### 2.10. Gợi ý câu hỏi tiếp theo trong lượt hỏi
+### 2.11. Gợi ý câu hỏi tiếp theo trong lượt hỏi
 
 | Biến | Mặc định | Tác dụng |
 |---|---|---|
@@ -240,7 +272,7 @@ xem TEXT2SQL_PIPELINE.md §6.
 Không dùng chung đường với endpoint rời `/chat/recommend_questions`: endpoint đó giữ nguyên hành vi
 cũ, kể cả phần đọc câu hỏi của user khác (§7.2).
 
-### 2.11. Khác
+### 2.12. Khác
 
 `CACHE_TYPE` (`memory`/`redis`/`None`), `CACHE_REDIS_URL`, `LOG_LEVEL`, `LOG_DIR`, `SQL_DEBUG`,
 `PG_POOL_SIZE`/`PG_MAX_OVERFLOW`/`PG_POOL_RECYCLE`/`PG_POOL_PRE_PING` (pool của **DB metadata**),
@@ -277,7 +309,13 @@ Build cần ra được mạng tới ba host mà `uv.lock` ghim URL tuyệt đ�
 `test.pypi.org` (sqlbot-xpack), `download.pytorch.org` (torch CPU). Muốn đổi index thì phải sửa
 `[[tool.uv.index]]` trong `pyproject.toml` rồi `uv lock` lại — `--frozen` đọc URL trong lock.
 
-Hai điều bắt buộc trong compose file:
+Ba điều bắt buộc trong compose file:
+
+**Thêm biến cấu hình mới thì phải khai ở đây, không chỉ ở `.env.example`.** Compose không dùng
+`env_file`; nó nội suy `${VAR}` vào đúng những khoá đã liệt kê trong `environment:`. Biến thiếu ở
+đây thì dù có mặt trong `.env` cũng không vào được container, và triệu chứng là **không có triệu
+chứng** — app chạy bằng giá trị mặc định của `config.py`. Giữ hai file cùng nhóm, cùng thứ tự để
+còn đối chiếu được bằng mắt.
 
 **`SECRET_KEY` phải đặt cố định.** Compose khai `${SECRET_KEY:?...}` để fail sớm. Quote cả giá trị:
 dấu `:` trong thông báo lỗi của `${VAR:?msg}` làm YAML parser hiểu thành mapping.
@@ -422,7 +460,7 @@ GET /api/v1/chat/record/{record_id}/usage    # chỉ token usage
 
 ### Đọc thẳng bảng `chat_log`
 
-Một dòng cho mỗi thao tác, phân biệt bằng cột `operate` (`OperationEnum`). Cột quan trọng:
+Một dòng cho mỗi thao tác, phân biệt bằng cột `operate` (`OperationEnum`). Giá trị **được lưu xuống DB**, nên đánh số trùng là làm hỏng dữ liệu kiểm toán cũ — thêm bước mới thì lấy số kế tiếp, đừng chèn vào giữa. Cổng định tuyến dùng `'15'` (`ROUTE_QUESTION`), lọc theo nó là ra toàn bộ quyết định của cổng. Cột quan trọng:
 
 | Cột | Nội dung |
 |---|---|
@@ -525,7 +563,7 @@ hoa-thường, scope query hỏng cú pháp, bảng có nhiều scope mâu thu�
 **`POST /chat/recommend_questions` đọc câu hỏi của người dùng khác.** Nó lấy 20 câu hỏi gần nhất
 của **mọi** tài khoản dùng chung datasource (`get_old_questions`) rồi nhồi vào prompt, nên gợi ý trả
 về cho A có thể lộ chuyện B đang hỏi gì. Chưa sửa — endpoint giữ nguyên hành vi cũ có chủ ý. Pha gợi
-ý chạy trong `POST /chat/question` (§2.10) không dính lỗi này: nó chỉ đọc câu hỏi của chính user.
+ý chạy trong `POST /chat/question` (§2.11) không dính lỗi này: nó chỉ đọc câu hỏi của chính user.
 
 **`.mcp.json` đang được git track và chứa credential thật** của hai server MCP (một DB nghiệp vụ
 remote và DB metadata local). File này đã nằm trong lịch sử commit. Đừng chép giá trị của nó vào bất
@@ -539,9 +577,10 @@ kỳ tài liệu, log hay issue nào; nếu cần xoay vòng mật khẩu thì p
 | `POSTGRES_PASSWORD` bị encode hai lần | Ghi thô, `config.py` tự `quote()` |
 | `SECRET_KEY` không đặt | Mọi JWT chết sau mỗi lần restart |
 | `BACKEND_CORS_ORIGINS='*'` không dùng được | Kiểu là `AnyUrl`. Muốn mở hết thì đặt `CORS_ALLOW_ALL_ORIGINS=True` |
+| Biến khai trong `.env` mà **không** khai trong `docker-compose.backend.yml` | Compose không có `env_file`, nó chỉ nội suy `${VAR}` vào từng khoá liệt kê sẵn trong `environment:`. Thiếu khoá là biến **không vào được container**: đổi giá trị thấy không có gì xảy ra, không lỗi, không log. Thêm biến mới thì phải khai ở **cả hai** file, cùng một nhóm, cùng thứ tự |
 | Sửa `template.yaml` mà không restart | `apps/template/template.py` có `@cache` |
 | Đổi cấu hình model trong DB mà không restart | `LLMFactory.create_llm` có `@lru_cache(maxsize=32)` |
-| `FILE_DOWNLOAD_ALLOWED_HOSTS` rỗng làm chết **cả** đính kèm `.docx` của chat | Một biến chi phối hai tính năng (§2.9). Triệu chứng phía client là `400 URL_HOST_NOT_ALLOWED` chứ không phải lỗi cấu hình — dễ đi tìm nhầm phía đối tác |
+| `FILE_DOWNLOAD_ALLOWED_HOSTS` rỗng làm chết **cả** đính kèm `.docx` của chat | Một biến chi phối hai tính năng (§2.10). Triệu chứng phía client là `400 URL_HOST_NOT_ALLOWED` chứ không phải lỗi cấu hình — dễ đi tìm nhầm phía đối tác |
 
 ### 7.4. Hành vi pipeline
 
@@ -550,7 +589,9 @@ kỳ tài liệu, log hay issue nào; nếu cần xoay vòng mật khẩu thì p
 | Test bằng tài khoản admin thì **không thấy row-permission** | `is_normal_user` chỉ là `current_user.id != 1` |
 | Không có license xpack thì các nhánh custom prompt **im lặng không chạy**, không báo lỗi | |
 | Một lượt có thể phát **nhiều** event `info: sql generated` | Retry cố ý không phát event riêng |
-| Event `sql` và `sql-data` **có thể không xuất hiện** | Lượt hạ cấp không có SQL. Client không được coi chúng là bắt buộc |
+| Event `sql` và `sql-data` **có thể không xuất hiện** | Lượt hạ cấp không có SQL, và khi bật cổng định tuyến (§2.2) thì lượt được rẽ cũng vậy. Client không được coi chúng là bắt buộc |
+| Cổng định tuyến **không được** chạy cho nhánh MCP | Toàn bộ pha answer nằm trong nhánh `if in_chat`. Rẽ một lượt MCP sang `answer` là trả về kết quả **rỗng không kèm lỗi** — hỏng im lặng, không exception nào để lần. Điều kiện bật cổng vì thế gồm cả `in_chat` lẫn `finish_step > QUERY_DATA` |
+| Cổng định tuyến hỏng thì **im lặng đi tiếp**, không phát lỗi | Cố ý (hỏng-mở): mọi đường hỏng đều rơi về `sql`, tức hành vi cũ. Triệu chứng duy nhất là dòng log `[route] gate failed` và tỷ lệ `forced=error` trong `scripts/route_stats/report.py` — cổng hỏng hoàn toàn trông y hệt cổng đang tắt |
 | Số liệu nằm ở trường `data` của `sql-data`, **không** phải `content` | `content` vẫn là chuỗi `"execute-success"` — giữ nguyên để client cũ không vỡ |
 | Dựng payload `sql-data` **trước** `save_sql_data` → client nhận nhiều dòng hơn bản lưu DB | Bước lưu mới là chỗ cắt xuống 1000 dòng và gắn `limit`. Xem `build_sql_data_payload` |
 | Tài liệu `.docx` đính kèm **biến mất** khỏi ngữ cảnh sau vài lượt | Cố ý: nó là message, không phải hạ tầng, nên trôi theo cửa sổ lịch sử như câu hỏi thường. Người dùng báo "hỏi lại thì bot quên file" là đúng thiết kế, không phải bug — xem TEXT2SQL_PIPELINE.md §10 |

@@ -42,7 +42,7 @@ backend/
 
 | Thư mục | Trách nhiệm | File cần biết |
 |---|---|---|
-| `apps/chat/` | Hội thoại + **toàn bộ pipeline** | `task/llm.py` (2.5K dòng, trái tim hệ thống), `api/chat.py`, `curd/chat.py`, `models/chat_model.py`, `utils/attachment.py` (đọc file `.docx` đính kèm), `permission/sw_permission.py` (quyền dữ liệu theo user, đồng bộ từ SW) |
+| `apps/chat/` | Hội thoại + **toàn bộ pipeline** | `task/llm.py` (2.5K dòng, trái tim hệ thống), `api/chat.py`, `curd/chat.py`, `models/chat_model.py`, `utils/attachment.py` (đọc file `.docx` đính kèm), `permission/sw_permission.py` (quyền dữ liệu theo user, đồng bộ từ SW), `task/question_gate.py` (cổng định tuyến câu hỏi, mặc định tắt) |
 | `apps/datasource/` | Datasource, bảng, cột, quan hệ, M-Schema | `crud/datasource.py`, `api/datasource.py`, `api/table_relation.py`, `embedding/table_embedding.py`, `crud/permission.py` |
 | `apps/datasource/task/` | Ba vòng chạy nền của luồng nạp Excel bất đồng bộ (xem §5) | `excel_import_task.py`, `callback_sender.py`, `excel_recovery.py` |
 | `apps/db/` | Tầng truy cập DB nghiệp vụ đa engine | `db.py` (1.3K dòng), `constant.py` (enum `DB`), `extra_params.py` (kiểm tra tham số kết nối phụ) |
@@ -126,17 +126,18 @@ sinh khi merge nhánh), `072_add_chat_external_id.py`.
 
 | Muốn | Mở |
 |---|---|
-| Sửa cách sinh SQL / thứ tự message | [llm.py:360](../backend/apps/chat/task/llm.py#L360) `init_messages` + [llm.py:1223](../backend/apps/chat/task/llm.py#L1223) `generate_sql` |
+| Sửa cách sinh SQL / thứ tự message | [llm.py:404](../backend/apps/chat/task/llm.py#L404) `init_messages` + [llm.py:1275](../backend/apps/chat/task/llm.py#L1275) `generate_sql` |
 | Sửa nội dung prompt (bất kỳ pha nào) | [templates/template.yaml](../backend/templates/template.yaml) — bản đồ khối ở [TEXT2SQL_PIPELINE.md §10](TEXT2SQL_PIPELINE.md) |
 | Sửa prompt riêng cho một loại DB | [templates/sql_examples/](../backend/templates/sql_examples/) |
-| Sửa pha trả lời bằng lời | [llm.py:664](../backend/apps/chat/task/llm.py#L664) + khối `answer` ở [template.yaml:630](../backend/templates/template.yaml#L630) |
-| Sửa vòng retry / hạ cấp | [llm.py:1804-1977](../backend/apps/chat/task/llm.py#L1804) |
-| Sửa pha gợi ý câu hỏi tiếp theo (chạy trong lượt hỏi) | [llm.py:843](../backend/apps/chat/task/llm.py#L843) `generate_inline_recommend` + [chat.py:1429](../backend/apps/chat/curd/chat.py#L1429) `get_user_old_questions`. Endpoint rời `/chat/recommend_questions` là **đường khác**, đừng sửa nhầm |
-| Thêm/sửa event SSE | `run_task` ([llm.py:1729](../backend/apps/chat/task/llm.py#L1729)) — **rồi cập nhật `API_SPEC.md` §6.3** |
-| Đổi điểm dừng pipeline | [chat_model.py:54](../backend/apps/chat/models/chat_model.py#L54) `ChatFinishStep` |
+| Sửa pha trả lời bằng lời | [llm.py:708](../backend/apps/chat/task/llm.py#L708) + khối `answer` ở [template.yaml:630](../backend/templates/template.yaml#L630) |
+| Sửa vòng retry / hạ cấp | [llm.py:1781-2112](../backend/apps/chat/task/llm.py#L1781) `_sql_phase` |
+| Sửa cổng định tuyến câu hỏi (bỏ pha SQL khi không cần) | [apps/chat/task/question_gate.py](../backend/apps/chat/task/question_gate.py) + khối `route` ở [template.yaml:794](../backend/templates/template.yaml#L794). Điểm nối duy nhất vào pipeline: [llm.py:2178](../backend/apps/chat/task/llm.py#L2178) |
+| Sửa pha gợi ý câu hỏi tiếp theo (chạy trong lượt hỏi) | [llm.py:895](../backend/apps/chat/task/llm.py#L895) `generate_inline_recommend` + [chat.py:1429](../backend/apps/chat/curd/chat.py#L1429) `get_user_old_questions`. Endpoint rời `/chat/recommend_questions` là **đường khác**, đừng sửa nhầm |
+| Thêm/sửa event SSE | `run_task` ([llm.py:2113](../backend/apps/chat/task/llm.py#L2113)) — **rồi cập nhật `API_SPEC.md` §6.3** |
+| Đổi điểm dừng pipeline | [chat_model.py:57](../backend/apps/chat/models/chat_model.py#L57) `ChatFinishStep` |
 | Sửa M-Schema đưa vào prompt | [datasource.py:1063](../backend/apps/datasource/crud/datasource.py#L1063) `get_table_schema` |
 | Đổi cách chọn bảng theo embedding | [table_embedding.py:43](../backend/apps/datasource/embedding/table_embedding.py#L43) |
-| Sửa kiểm tra an toàn SQL | [llm.py:105](../backend/apps/chat/task/llm.py#L105) (whitelist bảng) + [db.py:1080](../backend/apps/db/db.py#L1080) (`check_sql_read`) |
+| Sửa kiểm tra an toàn SQL | [llm.py:107](../backend/apps/chat/task/llm.py#L107) (whitelist bảng) + [db.py:1080](../backend/apps/db/db.py#L1080) (`check_sql_read`) |
 | Sửa quyền dữ liệu theo user (bảng / cột / hàng) | [apps/chat/permission/sw_permission.py](../backend/apps/chat/permission/sw_permission.py) — suy diễn quyền và viết lại SQL; hai điểm cưỡng chế nằm ở `choose_table_schema` và ngay trước `execute_sql` trong `llm.py`. **Rồi cập nhật `TEXT2SQL_PIPELINE.md` §13** |
 | Thêm một loại database | [db/constant.py](../backend/apps/db/constant.py) enum `DB` + [db.py](../backend/apps/db/db.py) + một file `templates/sql_examples/*.yaml` |
 | Sửa endpoint hỏi đáp | [chat.py:485](../backend/apps/chat/api/chat.py#L485) |
@@ -189,7 +190,7 @@ xem [OPERATIONS.md §6](OPERATIONS.md).
 
 ### `chat.external_id` — vì sao tồn tại
 
-[chat_model.py:104](../backend/apps/chat/models/chat_model.py#L104). Khóa chính `chat.id` khai
+[chat_model.py:102](../backend/apps/chat/models/chat_model.py#L102). Khóa chính `chat.id` khai
 `Identity(always=True)`, tức Postgres **luôn tự sinh**, client không chèn giá trị riêng vào được.
 Nhưng đối tác tích hợp cần tự đặt định danh hội thoại phía họ. `external_id` là cột UUID riêng,
 `UNIQUE` (để hai lần hỏi cùng UUID chắc chắn rơi vào đúng một hội thoại) và `NULL` với hội thoại tạo
@@ -368,7 +369,7 @@ Hai cái bẫy đi kèm nằm ở [OPERATIONS.md §7.9](OPERATIONS.md).
    ([permission.py:49](../backend/apps/system/schemas/permission.py#L49)) dùng làm FastAPI dependency
    trên route.
 3. **Row/column permission của xpack** — cấu hình bằng tay trên UI SQLBot, sinh điều kiện `WHERE` bổ
-   sung chèn vào SQL của LLM (`generate_filter`, [llm.py:1405](../backend/apps/chat/task/llm.py#L1405)).
+   sung chèn vào SQL của LLM (`generate_filter`, [llm.py:1457](../backend/apps/chat/task/llm.py#L1457)).
 4. **Quyền dữ liệu đồng bộ từ SW** — lọc bảng/cột khỏi M-Schema và bọc phạm vi dòng vào SQL, dữ liệu
    lấy từ `ai_user_permissions` (`apps/chat/permission/sw_permission.py`).
 
@@ -427,7 +428,7 @@ Nó cung cấp:
 | `sqlbot_xpack.file_utils` | Upload file |
 
 Nhiều tính năng bị chặn sau `SQLBotLicenseUtil.valid()` — ví dụ custom prompt
-([llm.py:483](../backend/apps/chat/task/llm.py#L483)). Không có license hợp lệ thì các nhánh đó im
+([llm.py:529](../backend/apps/chat/task/llm.py#L529)). Không có license hợp lệ thì các nhánh đó im
 lặng không chạy, **không báo lỗi**.
 
 ---
@@ -466,14 +467,14 @@ Router đăng ký ở [apps/api.py](../backend/apps/api.py), prefix `settings.AP
 
 Đặc tả chi tiết đã có, **đừng viết lại**:
 
-- [API_SPEC.md](../backend/scripts/chat_stream_demo/API_SPEC.md) — luồng tích hợp chat (login,
+- [API_SPEC.md](api_spec/API_SPEC.md) — luồng tích hợp chat (login,
   datasource list, `POST /chat/question` SSE).
-- [DATASOURCE_API_SPEC.md](../backend/scripts/chat_stream_demo/DATASOURCE_API_SPEC.md) — 26 endpoint
+- [DATASOURCE_API_SPEC.md](api_spec/DATASOURCE_API_SPEC.md) — 26 endpoint
   quản trị datasource, cho cả database quan hệ (§3–§7) lẫn file Excel/CSV (§8 ba bước, §9 một lời
   gọi + callback).
-- [AI_SYNC_HOOK_API_SPEC.md](../backend/scripts/ai_sync_hook/AI_SYNC_HOOK_API_SPEC.md) — cổng nhận
+- [AI_SYNC_HOOK_API_SPEC.md](api_spec/AI_SYNC_HOOK_API_SPEC.md) — cổng nhận
   bản tin đồng bộ từ hệ thống SW (`POST /hooks/ai-sync`).
-- [AI_PERMISSION_QUERY_API_SPEC.md](../backend/scripts/ai_sync_hook/AI_PERMISSION_QUERY_API_SPEC.md)
+- [AI_PERMISSION_QUERY_API_SPEC.md](api_spec/AI_PERMISSION_QUERY_API_SPEC.md)
   — 2 endpoint GET đọc lại quyền đã đồng bộ (dev/test), tách riêng khỏi spec ghi ở trên.
 - [USER_ADMIN_API_SPEC.md](../backend/scripts/ai_sync_hook/USER_ADMIN_API_SPEC.md) — quản trị tài
   khoản cho SW (đăng nhập, tạo/sửa/khoá/xoá user, mật khẩu), định danh bằng `account`. Bản

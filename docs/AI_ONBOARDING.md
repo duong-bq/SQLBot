@@ -28,11 +28,11 @@ mạng) sẽ dẫn bạn đi sai ở đúng sáu chỗ này:
 | Phân quyền dữ liệu | Row/column permission cấu hình tay trên UI, nhờ LLM viết lại điều kiện lọc | Thêm một lớp **độc lập**: quyền bảng/cột/hàng đồng bộ từ hệ SW, cưỡng chế **tất định** bằng `sqlglot` |
 
 Hệ quả cụ thể: `ChatFinishStep` đã bị **đánh số lại** để chèn `GENERATE_ANSWER` vào giữa
-`QUERY_DATA` và `GENERATE_CHART`. Xem [chat_model.py:54](../backend/apps/chat/models/chat_model.py#L54).
+`QUERY_DATA` và `GENERATE_CHART`. Xem [chat_model.py:57](../backend/apps/chat/models/chat_model.py#L57).
 
 ## 3. Trạng thái hiện tại
 
-- Nhánh làm việc: `feature/ai-permission-answer`. Nhánh gốc để mở PR: `main`.
+- Nhánh làm việc: `feat/question-gate`. Nhánh gốc để mở PR: `main`.
 - Đối tác tích hợp: HĐND TP Hà Nội. Họ gọi API, không dùng web UI.
 - `finish_step` mặc định của `POST /chat/question` là `GENERATE_CHART`, do `GENERATE_CHART_ENABLED`
   quyết định (mặc định bật) qua `default_finish_step`
@@ -72,7 +72,13 @@ Hệ quả cụ thể: `ChatFinishStep` đã bị **đánh số lại** để ch
   sống mãi trong hội thoại; và ngân sách ký tự trong prompt là trần **của cả lượt**, các file chia
   nhau, nên số file client gửi không làm prompt nở ra. Chi tiết ở
   [TEXT2SQL_PIPELINE.md](TEXT2SQL_PIPELINE.md) §10.
-- Có thư mục test: `backend/tests/` (`uv run pytest tests/`, 121 ca), phủ phần trích `.docx`, toàn bộ
+- Có **cổng định tuyến câu hỏi** (`apps/chat/task/question_gate.py`): một lượt gọi LLM ngắn đặt
+  trước pha SQL, quyết định lượt này có cần truy vấn dữ liệu mới hay không; không cần thì đi thẳng
+  nhánh trả lời hạ cấp. **Mặc định tắt** (`LLM_ROUTE_ENABLED=False`) — tắt thì đường đi giống hệt
+  trước khi có nó. Bật lần đầu là vào **chế độ chỉ đo** (`LLM_ROUTE_SHADOW=True`): cổng chạy và ghi
+  log nhưng quyết định bị ép về `sql`, dùng để lấy phân bố thật trước khi đổi hành vi. Đọc số bằng
+  `scripts/route_stats/report.py`. Chi tiết ở [TEXT2SQL_PIPELINE.md](TEXT2SQL_PIPELINE.md) §5.1.
+- Có thư mục test: `backend/tests/` (`uv run pytest tests/`, 164 ca), phủ phần trích `.docx`, toàn bộ
   logic phân quyền theo user (chuỗi sàng + phép viết lại SQL), và phần bóc khối `<think>` khỏi stream
   LLM (`process_stream`). Phần còn lại của backend vẫn **không có test tự động** — đo chất lượng
   pipeline bằng harness ở `scripts/eval_text2sql/`, không phải bằng unit test.
@@ -93,10 +99,11 @@ Hệ quả cụ thể: `ChatFinishStep` đã bị **đánh số lại** để ch
 
 | File | Nội dung |
 |---|---|
-| [backend/scripts/chat_stream_demo/API_SPEC.md](../backend/scripts/chat_stream_demo/API_SPEC.md) | Hợp đồng tích hợp chat: login, list datasource, `POST /chat/question` (SSE) — đủ catalog event, bảng lỗi, giới hạn hệ thống |
-| [backend/scripts/chat_stream_demo/DATASOURCE_API_SPEC.md](../backend/scripts/chat_stream_demo/DATASOURCE_API_SPEC.md) | 26 endpoint quản trị datasource — tạo/sync/chọn bảng/sửa chú thích/quan hệ bảng, cho cả database quan hệ lẫn file Excel/CSV; §9 là luồng nạp Excel bất đồng bộ + hợp đồng callback |
-| [backend/scripts/ai_sync_hook/AI_SYNC_HOOK_API_SPEC.md](../backend/scripts/ai_sync_hook/AI_SYNC_HOOK_API_SPEC.md) | Cổng `POST /hooks/ai-sync` nhận bản tin đồng bộ từ SW — actionType, full-snapshot quyền (type 1), mirror schema nguồn (type 4), idempotency, bảng lỗi |
-| [backend/scripts/ai_sync_hook/AI_PERMISSION_QUERY_API_SPEC.md](../backend/scripts/ai_sync_hook/AI_PERMISSION_QUERY_API_SPEC.md) | 2 endpoint GET đọc lại quyền đã đồng bộ (dev/test), tách khỏi spec ghi ở trên |
+| [API_SPEC.md](api_spec/API_SPEC.md) | Hợp đồng tích hợp chat: login, list datasource, `POST /chat/question` (SSE) — đủ catalog event, bảng lỗi, giới hạn hệ thống |
+| [DATASOURCE_API_SPEC.md](api_spec/DATASOURCE_API_SPEC.md) | 26 endpoint quản trị datasource — tạo/sync/chọn bảng/sửa chú thích/quan hệ bảng, cho cả database quan hệ lẫn file Excel/CSV; §9 là luồng nạp Excel bất đồng bộ + hợp đồng callback |
+| [AI_SYNC_HOOK_API_SPEC.md](api_spec/AI_SYNC_HOOK_API_SPEC.md) | Cổng `POST /hooks/ai-sync` nhận bản tin đồng bộ từ SW — actionType, full-snapshot quyền (type 1), mirror schema nguồn (type 4), idempotency, bảng lỗi |
+| [AI_PERMISSION_QUERY_API_SPEC.md](api_spec/AI_PERMISSION_QUERY_API_SPEC.md) | 2 endpoint GET đọc lại quyền đã đồng bộ (dev/test), tách khỏi spec ghi ở trên |
+| [TABLE_COMMENT_API_SPEC.md](api_spec/TABLE_COMMENT_API_SPEC.md) | 3 endpoint ghi chú thích bảng/cột và bật/tắt bảng theo **tên** (không cần tra id), chỉ cần giữ `ds_id` |
 | [backend/scripts/ai_sync_hook/USER_ADMIN_API_SPEC.md](../backend/scripts/ai_sync_hook/USER_ADMIN_API_SPEC.md) | Quản trị tài khoản cho SW: đăng nhập, tạo/sửa/khoá/xoá user, đổi mật khẩu. Mọi endpoint định danh bằng `account`. Bản `..._LITE.md` cạnh đó là bản rút gọn gửi đối tác — sửa cái nào thì sửa cả hai |
 | [backend/scripts/eval_text2sql/README.md](../backend/scripts/eval_text2sql/README.md) | Cách dùng harness đánh giá chất lượng |
 
@@ -123,17 +130,17 @@ lại harness và kèm số liệu. Chi tiết trong [OPERATIONS.md](OPERATIONS.
 **2. Chú thích trong code là nguồn sự thật về "tại sao".**
 [llm.py](../backend/apps/chat/task/llm.py) và [config.py](../backend/common/core/config.py) có
 chú thích rất dày, nhiều chỗ ghi cả kết quả đo được và cảnh báo *"cố ý giữ nhánh này khi merge từ
-upstream"* (ví dụ [llm.py:105](../backend/apps/chat/task/llm.py#L105)). Trước khi "dọn dẹp" một
+upstream"* (ví dụ [llm.py:107](../backend/apps/chat/task/llm.py#L107)). Trước khi "dọn dẹp" một
 đoạn trông thừa, đọc chú thích của nó — phần lớn là vá lỗi đã đo được.
 
 **3. Mọi chỗ cắt bớt dữ liệu đưa vào prompt đều phải nói cho LLM biết đã cắt.**
 Cắt im lặng thì LLM đếm số dòng nó nhận được rồi báo đó là tổng. Ca đo thật: SQL trả 136 dòng,
 câu trả lời khẳng định "tổng cộng 72 nghị quyết". Cặp `ANSWER_MAX_ROWS` +
-`build_data_scope_note` ([llm.py:77-80](../backend/apps/chat/task/llm.py#L77)) tồn tại vì lý do
+`build_data_scope_note` ([llm.py:79-82](../backend/apps/chat/task/llm.py#L79)) tồn tại vì lý do
 đó và **phải luôn đi cùng nhau**.
 
 ## 6. Đi tiếp
 
 Muốn sửa pha answer → [TEXT2SQL_PIPELINE.md](TEXT2SQL_PIPELINE.md) §5, rồi mở
-[llm.py:664](../backend/apps/chat/task/llm.py#L664) và khối `answer` trong
+[llm.py:708](../backend/apps/chat/task/llm.py#L708) và khối `answer` trong
 [templates/template.yaml:630](../backend/templates/template.yaml#L630).

@@ -377,39 +377,48 @@ event `answer`. SQL vẫn dùng được bình thường.
 
 ### 6.3. Danh mục event
 
-| `type` | Schema | Ý nghĩa |
+Cột *Xuất hiện* nói event có chắc chắn tới hay không — đừng chờ một event tùy chọn mới render tiếp.
+Ký hiệu ★ đánh dấu hai event mang **dữ liệu chính** của lượt hỏi.
+
+| `type` | Schema | Xuất hiện | Ý nghĩa |
+|---|---|---|---|
+| `id` | `{type, id}` | luôn | **Record ID** — lưu lại để tra log |
+| `question` | `{type, question}` | luôn | Câu hỏi đã chuẩn hóa |
+| `sql-result` | `{type, content, reasoning_content}` | nhiều event, khi lượt hỏi có chạy pha SQL | Đang sinh SQL, từng token |
+| `brief` | `{type, brief}` | chỉ ở câu hỏi **đầu tiên** của hội thoại | Tiêu đề hội thoại bot tự đặt, tối đa 64 ký tự. Về cùng lúc với `sql` vì được sinh trong cùng một lượt |
+| `sql` | `{type, content}` | khi pha SQL chạy và thành công | **SQL chính thức**, đã qua kiểm duyệt và format |
+| `sql-data` | `{type, content: "execute-success", data}` | khi pha SQL chạy và thành công | ★ **Số liệu** — kết quả chạy SQL, xem [§6.6](#66-số-liệu--event-sql-data) |
+| `answer-result` | `{type, content, reasoning_content}` | nhiều event | ★ **Câu trả lời**, từng token — cộng dồn `content` |
+| `answer` | `{type, content}` | khi pha answer chạy xong trọn vẹn | Cùng câu trả lời đó, gộp sẵn một chuỗi — tùy chọn |
+| `chart` | `{type, content}` | khi hệ thống bật pha biểu đồ và pha đó thành công | **Cấu hình biểu đồ**, `content` là **chuỗi JSON** — xem [§6.9](#69-cấu-hình-biểu-đồ) |
+| `recommended_question` | `{type, content}` | khi hệ thống bật pha gợi ý và pha đó thành công | **Gợi ý câu hỏi tiếp theo**, `content` là **chuỗi JSON** chứa mảng câu hỏi — xem [§6.12](#612-gợi-ý-câu-hỏi-tiếp-theo) |
+| `info` | `{type, msg}` | nhiều event | Mốc tiến độ, phân biệt nhau bằng `msg` — xem bảng dưới |
+| `finish` | `{type}` | kết thúc bình thường | Event **cuối cùng**, dừng đọc ngay khi thấy |
+| `error` | `{type, content}` | thay cho `finish` khi cả lượt hỏi hỏng | Lỗi pipeline — xem [§6.7](#67--lỗi-giữa-stream-vẫn-là-http-200) |
+
+`sql`, `sql-data` và `sql-result` **vắng mặt** ở một số lượt hỏi mà lượt đó vẫn thành công — xem
+[§6.8](#68-lượt-hỏi-không-có-sql-và-sql-data).
+
+Event `info` phân biệt nhau bằng trường `msg`:
+
+| `msg` | Xuất hiện | Ý nghĩa |
 |---|---|---|
-| `id` | `{type, id}` | **Record ID** — lưu lại để tra log |
-| `question` | `{type, question}` | Câu hỏi đã chuẩn hóa |
-| `sql-result` | `{type, content, reasoning_content}` | Đang sinh SQL, từng token |
-| `info` | `{type, msg: "sql generated"}` | Kết thúc **một lượt** sinh SQL — có thể xuất hiện nhiều lần, xem [§6.8](#68-sql-hỏng-không-phải-lúc-nào-cũng-thành-error) |
-| `brief` | `{type, brief}` | Tiêu đề hội thoại bot tự đặt, tối đa 64 ký tự. Về cùng lúc với `sql` vì được sinh trong cùng một lượt. *Chỉ có ở câu hỏi đầu tiên của hội thoại* |
-| `sql` | `{type, content}` | **SQL chính thức**, đã qua kiểm duyệt và format. *Có thể không có* — xem [§6.8](#68-sql-hỏng-không-phải-lúc-nào-cũng-thành-error) |
-| `sql-data` | `{type, content: "execute-success", data}` | ★ **Số liệu** — kết quả chạy SQL, xem [§6.6](#66-số-liệu--event-sql-data). *Có thể không có* |
-| `answer-result` | `{type, content, reasoning_content}` | ★ **Câu trả lời**, từng token — cộng dồn `content` |
-| `info` | `{type, msg: "chart generated"}` | Pha biểu đồ xong |
-| `chart` | `{type, content}` | **Cấu hình biểu đồ**, `content` là **chuỗi JSON** — xem [§6.9](#69-cấu-hình-biểu-đồ) |
-| `info` | `{type, msg: "chart failed"}` | Pha biểu đồ lỗi — **không có** event `chart`, phần còn lại của lượt hỏi vẫn bình thường |
-| `info` | `{type, msg: "answer generated"}` | Kết thúc pha answer |
-| `info` | `{type, msg: "answer failed"}` | Pha answer lỗi — sẽ **không có** event `answer` |
-| `answer` | `{type, content}` | Cùng câu trả lời đó, gộp sẵn một chuỗi — tùy chọn |
-| `info` | `{type, msg: "recommended question generated"}` | Pha gợi ý câu hỏi tiếp theo xong |
-| `recommended_question` | `{type, content}` | **Gợi ý câu hỏi tiếp theo**, `content` là **chuỗi JSON** chứa mảng câu hỏi — xem [§6.12](#612-gợi-ý-câu-hỏi-tiếp-theo) |
-| `info` | `{type, msg: "recommended question failed"}` | Pha gợi ý lỗi — **không có** event `recommended_question`, phần còn lại của lượt hỏi vẫn bình thường |
-| `finish` | `{type}` | Kết thúc |
-| `error` | `{type, content}` | Lỗi pipeline — xem [§6.7](#67--lỗi-giữa-stream-vẫn-là-http-200) |
+| `route …` | khi hệ thống bật cổng định tuyến (mặc định tắt) | Chẩn đoán nội bộ về việc lượt này có cần chạy SQL hay không. **Đừng parse phần sau chữ `route`** — nội dung của nó không phải hợp đồng |
+| `sql generated` | mỗi lần sinh SQL xong — **có thể nhiều lần** | Kết thúc một lượt sinh SQL, xem [§6.8](#68-lượt-hỏi-không-có-sql-và-sql-data) |
+| `chart generated` | khi pha biểu đồ thành công | Pha biểu đồ xong, event `chart` về ngay sau |
+| `chart failed` | khi pha biểu đồ lỗi | **Không có** event `chart`; phần còn lại của lượt hỏi vẫn bình thường |
+| `answer generated` | khi pha answer thành công | Pha answer xong |
+| `answer failed` | khi pha answer lỗi | Phần chữ đã hiện là dở dang, **không có** event `answer` |
+| `recommended question generated` | khi pha gợi ý thành công | Event `recommended_question` về ngay sau |
+| `recommended question failed` | khi pha gợi ý lỗi | **Không có** event `recommended_question`; phần còn lại vẫn bình thường |
 
-Nhóm event biểu đồ (`info: chart generated` + `chart`, hoặc `info: chart failed`) **chỉ có khi hệ
-thống bật pha sinh biểu đồ** (mặc định bật). Không dùng biểu đồ thì bỏ qua cả nhóm, phần còn lại của
-hợp đồng không đổi.
+**Quy tắc tương thích tiến — bắt buộc.** Gặp một `type` lạ, hoặc một `msg` lạ trong `info`, thì **bỏ
+qua im lặng**, đừng ném lỗi. Server sẽ còn thêm event mốc mới, và client viết `default: throw` sẽ
+hỏng ở lần nâng cấp sau. Chỉ `type: "error"` mới nghĩa là cả lượt hỏi thất bại.
 
-Cấu hình biểu đồ **không** được stream theo từng token: nó là một khối JSON, mảnh dở dang thì không
-parse được nên chẳng dùng vào việc gì. Client nhận trọn gói ở event `chart`. Gợi ý câu hỏi tiếp theo
-cũng vậy — về trọn gói ở event `recommended_question`.
-
-Nhóm event gợi ý (`info: recommended question generated` + `recommended_question`, hoặc
-`info: recommended question failed`) **chỉ có khi hệ thống bật pha gợi ý** (mặc định bật). Không
-dùng thì bỏ qua cả nhóm, phần còn lại của hợp đồng không đổi.
+Cấu hình biểu đồ và gợi ý câu hỏi **không** được stream theo từng token: chúng là khối JSON, mảnh dở
+dang thì không parse được nên chẳng dùng vào việc gì. Client nhận trọn gói ở `chart` và
+`recommended_question`.
 
 ### 6.4. Trình tự thực tế
 
@@ -494,8 +503,9 @@ event cuối cùng. Bật nhóm này thì **`answer` không còn là event áp c
 - Pha answer lỗi → không có `answer`, chỉ có `info: answer failed`
 - Pipeline lỗi → `error` thay thế toàn bộ phần còn lại
 - SQL sinh hỏng, server sinh lại → **`sql-result` và `info: sql generated` về thành nhiều đợt**
-  (xem [§6.8](#68-sql-hỏng-không-phải-lúc-nào-cũng-thành-error))
-- SQL hỏng hẳn → không có `sql` / `sql-data`, nhưng **vẫn có `answer-result` + `answer` + `finish`**;
+  (xem [§6.8](#68-lượt-hỏi-không-có-sql-và-sql-data))
+- Lượt hỏi không chạy SQL, hoặc chạy mà hỏng hẳn → không có `sql` / `sql-data`, nhưng **vẫn có
+  `answer-result` + `answer` + `finish`** (xem [§6.8](#68-lượt-hỏi-không-có-sql-và-sql-data));
   lượt đó cũng **không có** nhóm event biểu đồ dù hệ thống đang bật biểu đồ — không có dữ liệu thì
   không vẽ được gì
 - Pha biểu đồ lỗi → `info: chart failed` thay cho `info: chart generated` + `chart`; **mọi thứ khác
@@ -560,7 +570,7 @@ Trần **1000 dòng** áp cho mọi lượt hỏi. Câu hỏi quét cả bảng 
 duy nhất để biết điều đó — nên hiện một dòng ghi chú cho người dùng khi thấy nó.
 
 Event này **có thể không xuất hiện**, khi câu hỏi không chạy được SQL nào — xem
-[§6.8](#68-sql-hỏng-không-phải-lúc-nào-cũng-thành-error).
+[§6.8](#68-lượt-hỏi-không-có-sql-và-sql-data).
 
 ### 6.7. ⚠ Lỗi giữa stream vẫn là HTTP 200
 
@@ -575,10 +585,36 @@ JSON `{"message": ..., "traceback": ...}`. Hãy hiển thị nó như text; nế
 Lỗi của file đính kèm **không** thuộc nhóm này: chúng bị bắt trước khi stream mở nên trả về
 `HTTP 400` như một response bình thường ([§3.4](#34-bảng-mã-lỗi)), không có event nào cả.
 
-### 6.8. SQL hỏng không phải lúc nào cũng thành `error`
+### 6.8. Lượt hỏi không có `sql` và `sql-data`
 
-Khi pha sinh SQL hỏng, server **tự sinh lại một lần** trước khi bỏ cuộc. Việc này **không sinh ra
-event mới nào** — client chỉ thấy pha sinh SQL lặp lại:
+Một lượt hỏi **thành công** vẫn có thể không mang theo câu SQL lẫn số liệu. Client nhận đúng dạng
+này:
+
+```
+answer-result ×K   → answer → finish   ← KHÔNG có sql, KHÔNG có sql-data, KHÔNG có error
+```
+
+Hai nguyên nhân, client không phân biệt được và cũng không cần phân biệt:
+
+| Nguyên nhân | Có `sql-result` không |
+|---|---|
+| Server đã thử sinh SQL nhưng không ra câu chạy được | Có — kèm `info: sql generated` |
+| Server xác định lượt này không cần truy vấn dữ liệu mới (chỉ khi bật cổng định tuyến, mặc định tắt) | Không |
+
+Cả hai đều thường gặp nhất với **câu hỏi tham chiếu ngược** (*"trong đó bảng nào tên dài nhất"*):
+dữ liệu để trả lời đã có từ lượt trước, không cần và cũng không diễn đạt được thành SQL mới.
+
+Với client, hệ quả gói gọn trong hai câu:
+
+- **`sql`, `sql-data` và `sql-result` là tùy chọn.** Đừng chờ `sql-data` mới bắt đầu render
+  `answer-result`, và đừng coi việc thiếu chúng là lỗi.
+- **Lý do không được gửi qua stream** — nó chỉ nằm trong log server. Người dùng cuối chỉ thấy câu
+  trả lời trong `answer-result`.
+
+#### `info: sql generated` có thể đến nhiều lần
+
+Khi pha sinh SQL hỏng, server **tự sinh lại** trước khi bỏ cuộc. Việc này **không sinh ra event mới
+nào** — client chỉ thấy pha sinh SQL lặp lại:
 
 ```
 sql-result ×N                        ← lần thử 1 (SQL hỏng, sẽ không thành event `sql`)
@@ -587,25 +623,9 @@ sql-result ×M                        ← lần thử 2, nối tiếp ngay sau
 info  {"msg":"sql generated"}
 ```
 
-Hệ quả: **`info: sql generated` có thể đến nhiều lần trong một câu hỏi**, và nội dung `sql-result`
-cộng dồn sẽ chứa cả lần hỏng lẫn lần sau. Nếu UI hiển thị `sql-result` như phần "suy luận" của bot
-thì cứ nối tiếp bình thường, không cần xử lý gì thêm. Nếu muốn tách sạch từng lần thử, hãy dùng
-`info: sql generated` làm mốc cắt.
-
-Nếu lần thử lại vẫn hỏng, thay vì trả `error`, server chuyển sang cho bot **trả lời bằng lời dựa
-trên lịch sử hội thoại**:
-
-```
-answer-result ×K   → answer → finish   ← KHÔNG có sql, KHÔNG có sql-data, KHÔNG có error
-```
-
-Đây là ca thường gặp với câu hỏi tham chiếu ngược (*"trong đó bảng nào tên dài nhất"*): dữ liệu để
-trả lời đã có từ lượt trước, chỉ là không diễn đạt được thành SQL mới. Với client, hệ quả là:
-
-- **`sql` và `sql-data` là tùy chọn**, không phải event chắc chắn có. Đừng chờ `sql-data` mới bắt
-  đầu render `answer-result`, và đừng coi việc thiếu chúng là lỗi.
-- Lý do hỏng **không được gửi qua stream** — nó chỉ nằm trong log server. Người dùng cuối chỉ thấy
-  câu trả lời trong `answer-result`.
+Nội dung `sql-result` cộng dồn vì thế chứa cả lần hỏng lẫn lần sau. Nếu UI hiển thị `sql-result` như
+phần "suy luận" của bot thì cứ nối tiếp bình thường, không cần xử lý gì thêm. Nếu muốn tách sạch
+từng lần thử, hãy dùng `info: sql generated` làm mốc cắt.
 
 ### 6.9. Cấu hình biểu đồ
 
