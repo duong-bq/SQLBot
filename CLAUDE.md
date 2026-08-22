@@ -30,6 +30,35 @@ Mọi hàm khi được viết mới hoặc sửa đều **phải có docstring 
 - Docstring nêu **mục đích** của hàm và những điều không đọc ra ngay từ code: giả định, bẫy, lý do chọn cách làm này thay vì cách khác. Không mô tả lại từng dòng.
 - Khi sửa một hàm có docstring bằng ngôn ngữ khác (vd tiếng Trung), dịch luôn sang tiếng Việt.
 
+### PEP 8 và PEP 257 — chỉ áp cho code mới
+
+Code Python **viết mới** tuân thủ [PEP 8](https://peps.python.org/pep-0008/) và
+[PEP 257](https://peps.python.org/pep-0257/). Code **cũ** thì giữ nguyên phong cách đang có.
+
+Ranh giới "mới" gồm: file mới, class mới, hàm/method mới, dòng import mới, và những dòng bạn thật
+sự viết ra bên trong một hàm cũ. Ranh giới "cũ" gồm mọi dòng bạn chỉ đi ngang qua — kể cả khi
+chúng nằm trong hàm bạn đang sửa, kể cả khi chúng dài 120 ký tự và thụt lề lạ.
+
+**Lý do phải kìm tay: conflict khi pull từ upstream.** Repo này là fork của SQLBot upstream. Format
+lại một khối code cũ làm mọi dòng trong khối đó thành "đã sửa" dưới mắt `git`, nên lần merge sau sẽ
+conflict ở đúng những chỗ mà thực chất chẳng ai đổi logic. Một hàm được dọn dẹp cho đẹp có thể đổi
+lấy hàng chục dòng conflict thủ công — cái giá đó không đáng.
+
+Hệ quả cần nhớ khi **di chuyển** code (bóc hàm, tách module): khối được di chuyển vẫn là code cũ.
+Dịch chuyển nguyên xi rồi chỉ format phần khung bạn tự viết (chữ ký, docstring, các dòng nối) —
+như thế `diff` còn đọc được là "chỉ dịch chuyển", và có thể kiểm chứng bằng cách so từng byte với
+bản gốc.
+
+Vài điểm cụ thể hay dùng:
+
+- **Độ dài dòng**: khuyến nghị 79, chấp nhận nới tới **89** nếu dòng dài hơn thật sự dễ đọc hơn.
+  Đây là ước lượng tương đối, không phải luật đếm ký tự.
+- **Docstring** (PEP 257): dòng tóm tắt nằm gọn trên **một dòng**, ngay sau `"""`, kết thúc bằng
+  dấu chấm. Docstring nhiều dòng thì để một dòng trống sau phần tóm tắt, và `"""` đóng nằm riêng
+  một dòng. Docstring của class có thêm một dòng trống trước thành viên đầu tiên.
+- **Import**: mỗi dòng một module, xếp theo nhóm thư viện chuẩn → bên thứ ba → nội bộ.
+- Hai dòng trống giữa các định nghĩa ở cấp module, một dòng trống giữa các method.
+
 ## Quy ước commit
 
 ### Commit message phải NGẮN GỌN
