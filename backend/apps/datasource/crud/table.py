@@ -3,6 +3,7 @@ import time
 import traceback
 from typing import List
 
+from openai import BadRequestError
 from sqlalchemy import and_, select, update
 
 from apps.ai_model.embedding import EmbeddingModelCache
@@ -119,8 +120,13 @@ def save_ds_embedding(session_maker, ids: List[int]):
         session = session_maker()
         for _id in ids:
             schema_table = ''
+            # Bản rút gọn dùng khi schema_table đầy đủ vượt trần ngữ cảnh của model embedding
+            # (ds nhiều bảng, vd 429 bảng của Lào Cai). Vector ds chỉ dùng để chọn ds giữa
+            # nhiều datasource nên tên bảng + comment là đủ, không cần tới chi tiết cột.
+            summary_table = ''
             ds = session.query(CoreDatasource).filter(CoreDatasource.id == _id).first()
             schema_table += f"{ds.name}, {ds.description}\n"
+            summary_table += f"{ds.name}, {ds.description}\n"
             tables = session.query(CoreTable).filter(CoreTable.ds_id == ds.id).all()
             for table in tables:
                 fields = session.query(CoreField).filter(CoreField.table_id == table.id).all()
@@ -131,8 +137,10 @@ def save_ds_embedding(session_maker, ids: List[int]):
                     table_comment = table.custom_comment.strip()
                 if table_comment == '':
                     schema_table += '\n[\n'
+                    summary_table += f"# Table: {table.table_name}\n"
                 else:
                     schema_table += f", {table_comment}\n[\n"
+                    summary_table += f"# Table: {table.table_name}, {table_comment}\n"
 
                 if fields:
                     field_list = []
@@ -147,7 +155,14 @@ def save_ds_embedding(session_maker, ids: List[int]):
                     schema_table += ",\n".join(field_list)
                 schema_table += '\n]\n'
             # table_schema.append(schema_table)
-            emb = json.dumps(model.embed_query(schema_table))
+            try:
+                emb = json.dumps(model.embed_query(schema_table))
+            except BadRequestError:
+                SQLBotLogUtil.info(
+                    f'datasource {_id} embedding text exceeds context length, '
+                    f'retry with table-name-only summary'
+                )
+                emb = json.dumps(model.embed_query(summary_table))
 
             stmt = update(CoreDatasource).where(and_(CoreDatasource.id == _id)).values(embedding=emb)
             session.execute(stmt)
