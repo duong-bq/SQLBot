@@ -782,3 +782,31 @@ luật cũ, rất dễ tưởng là sửa không ăn.
 cấu hình bên ngoài được gán thẳng vào `extraJdbc`
 ([assistant.py:295](../backend/apps/system/crud/assistant.py#L295)), nên sai tên tham số không lộ ra
 lúc cấu hình mà tới lúc người dùng hỏi mới báo 400.
+
+### 7.14. `check_embedding_ctx_length=True` gửi token id tiktoken thay vì text
+
+`EmbeddingModelCache._new_instance` ([embedding.py:36](../backend/apps/ai_model/embedding.py#L36))
+dựng `OpenAIEmbeddings` cho nhánh `EMBEDDING_PROVIDER='api'`. Cờ `check_embedding_ctx_length` của
+langchain mặc định `True`, và khi bật thì `embed_documents`/`embed_query` không gửi text — nó
+tokenize bằng **tiktoken** (`cl100k_base`, ~100k token, vocab của họ model OpenAI) rồi gửi thẳng
+mảng token id làm `input`. Endpoint embedding của repo này chạy `BAAI/bge-m3`, tokenizer
+XLM-RoBERTa (~250k token, vocab khác hẳn). Server nhận mảng id đó và giải mã bằng vocab của nó —
+ra một chuỗi hoàn toàn khác chuỗi gốc, nhưng API vẫn trả `200 OK` với một vector hợp lệ về mặt
+kiểu dữ liệu. Không có exception, không có log — vector chỉ đơn giản là *sai*.
+
+Hệ quả đo được trên dữ liệu thật (datasource 429 bảng, xem `Text2SQL_Eval_Status.md`): bảng đúng
+bị chôn ngoài top-10 ứng viên embedding vì tương quan cosine chỉ còn dựa trên nhiễu bề mặt của
+phép biến đổi, không phải ngữ nghĩa thật. Ba biến thể tên bảng gây nhiễu (`_code_submit`,
+`_code_sync`, `_field_values`) trồi lên đầu bảng xếp hạng thay cho bảng dữ liệu thật
+(`_row_values`) — sai một cách có hệ thống chứ không ngẫu nhiên, vì mọi văn bản đi qua cùng một
+phép biến đổi hỏng.
+
+Đã vá bằng cách truyền thẳng `check_embedding_ctx_length=False` vào constructor. Nhánh đó của
+langchain gửi text nguyên văn, không tokenize phía client. Đánh đổi: mất luôn bước tự cắt-khối
+khi văn bản vượt trần ngữ cảnh của model — xem bẫy tiếp theo.
+
+| Bẫy | Chi tiết |
+|---|---|
+| **Vector cũ trong DB không tự sửa khi đổi cờ** | Đổi cờ chỉ ảnh hưởng lần nhúng **tiếp theo**. Muốn sửa dữ liệu đã có phải nhúng lại: `UPDATE core_table/core_datasource SET embedding = NULL` cho phạm vi cần sửa rồi gọi `save_table_embedding`/`save_ds_embedding` (script sẵn có ở `backend/scripts/reembed_ds/run.py`, có chế độ xem trước và tự xếp hạng lại một bảng đích để kiểm chứng). Job tự động `run_fill_empty_table_and_ds_embedding` không phù hợp cho việc này — nó là hook chạy **một lần lúc khởi động backend**, quét NULL trên **toàn bộ** datasource chứ không giới hạn phạm vi, và không có tiến độ hay xác nhận |
+| **Tắt cờ làm mất bước tự cắt-khối khi văn bản dài** | `check_embedding_ctx_length=True` còn kèm một tác dụng phụ: tự cắt văn bản vượt trần thành nhiều khối, nhúng riêng rồi gộp lại bằng trung bình có trọng số. Tắt cờ là mất luôn bước đó — văn bản vượt trần bị server trả thẳng `BadRequestError` (400). Tài liệu cấp bảng (`save_table_embedding`) hiếm khi chạm trần, nhưng tài liệu cấp datasource (`save_ds_embedding`) nối **toàn bộ bảng kèm toàn bộ cột** thành một chuỗi — với nguồn hàng trăm bảng thì vượt trần gần như chắc chắn. Đã thêm nhánh dự phòng ở [table.py:159](../backend/apps/datasource/crud/table.py#L159): bắt riêng `BadRequestError` rồi thử lại bằng bản rút gọn (chỉ tên bảng + `custom_comment`, bỏ cột) — không bắt `Exception` chung vì lỗi mạng/lỗi khác vẫn phải lộ ra như cũ |
+| **Trung bình có trọng số của nhiều khối không phải là "an toàn hơn"** | Trước khi vá, ai coi cờ mặc định là lưới an toàn nên biết: trung bình vector của mười mấy khối rời rạc từ một tài liệu dài không tạo ra một điểm biểu diễn đúng nội dung — nó là điểm nằm lơ lửng giữa nhiều chủ đề không liên quan, gần như không truy hồi được. Lỗi 400 ồn ào tốt hơn một vector im lặng vô nghĩa |
