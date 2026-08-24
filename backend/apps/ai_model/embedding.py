@@ -37,6 +37,7 @@ class EmbeddingModelCache:
                 model=settings.EMBEDDING_API_MODEL,
                 openai_api_base=settings.EMBEDDING_API_BASE_URL,
                 openai_api_key=settings.EMBEDDING_API_KEY,
+                check_embedding_ctx_length=False
             )
         return HuggingFaceEmbeddings(model_name=config.name, cache_folder=config.folder,
                                      model_kwargs={'device': config.device},
