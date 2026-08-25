@@ -917,14 +917,15 @@ def preview(session: SessionDep, current_user: CurrentUser, id: int, table_id: i
             {where} 
             LIMIT 100"""
     elif ds.type == "oracle":
-        # sql = f"""SELECT "{'", "'.join(fields)}" FROM "{conf.dbSchema}"."{data.table.table_name}"
-        #     {where}
-        #     ORDER BY "{fields[0]}"
-        #     OFFSET 0 ROWS FETCH NEXT 100 ROWS ONLY"""
+        # Cố tình KHÔNG có ORDER BY. ROWNUM chỉ được gán sau khi inline view sinh xong kết quả,
+        # nên sắp xếp theo fields[0] (cột đầu theo field_index, thường không có index) buộc Oracle
+        # full scan rồi sort toàn bảng trước khi lấy được 100 dòng đầu. Đo trên bảng 4,7 triệu
+        # dòng / 7,8 GB: cost 2.040.802 khi có ORDER BY so với 10 khi bỏ đi, tức preview treo tới
+        # mức axios của frontend timeout ở 100s. Đây là màn hình xem trước nên thứ tự dòng không
+        # mang ý nghĩa gì, và các nhánh DB khác cũng chỉ LIMIT chứ không sắp xếp.
         sql = f"""SELECT * FROM
                     (SELECT "{'", "'.join(fields)}" FROM "{conf.dbSchema}"."{table.table_name}"
-                    {where} 
-                    ORDER BY "{fields[0]}")
+                    {where} )
                     WHERE ROWNUM <= 100
                     """
     elif ds.type == "ck":
