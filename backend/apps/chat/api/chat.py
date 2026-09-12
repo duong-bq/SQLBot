@@ -481,50 +481,17 @@ def default_finish_step() -> ChatFinishStep:
     )
 
 
-@router.post("/question", summary=f"{PLACEHOLDER_PREFIX}ask_question")
-@require_permissions(
-    permission=SqlbotPermission(type="chat", keyExpression="resolved_chat_id")
-)
-async def question_answer(
+async def _resolve_chat_question(
     session: SessionDep,
-    current_user: CurrentUser,
+    resolved_chat_id: int,
     request_question: ChatQuestionBase,
-    current_assistant: CurrentAssistant,
-    resolved_chat_id: int = Depends(resolve_chat_for_question),
-):
-    """
-    Endpoint cốt lõi: người dùng đặt câu hỏi, hệ thống sinh SQL và trả kết quả dạng streaming (SSE).
+) -> ChatQuestion:
+    """Chuẩn hoá ``ChatQuestionBase`` (body thô của client) thành ``ChatQuestion`` (đầu vào pipeline).
 
-    Body ``ChatQuestionBase`` gồm ``chat_id``, ``question`` và ``datasource`` (chỉ cần khi ``chat_id``
-    là UUID chưa tồn tại — xem ``resolve_chat_for_question``). Có kiểm tra quyền trên hội thoại
-    (``require_permissions`` type='chat', đọc trên ``resolved_chat_id`` chứ không phải chat_id thô).
-    Bật ``embedding=True`` để dùng RAG (thuật ngữ + SQL mẫu).
-    Toàn bộ pipeline Text-to-SQL nằm trong ``LLMService.run_task`` (apps/chat/task/llm.py).
-    Hỗ trợ quick command trong câu hỏi (regenerate / analysis / predict) — xem ``question_answer_inner``.
-
-    Điểm dừng của pipeline do ``settings.GENERATE_CHART_ENABLED`` quyết định — xem
-    ``default_finish_step``. Bật (mặc định) thì có thêm pha sinh biểu đồ chạy song song với pha
-    answer; tắt thì dừng ngay sau câu trả lời bằng lời.
-
-    Kèm ``domainCode`` (mã lĩnh vực phía SW) thì lượt hỏi bị giới hạn trong các bảng thuộc lĩnh
-    vực đó theo quyền trong ``ai_user_permissions`` — chỉ có tác dụng với user được SW cấp quyền,
-    user khác thì trường này bị bỏ qua. Không gửi trường này = hỏi trên toàn bộ lĩnh vực được cấp;
-    gửi null/rỗng = ``HTTP 400`` (code ``invalid_domain_code``); gửi mã không có trong quyền của
-    user → event SSE ``error`` kèm danh sách lĩnh vực hợp lệ. Giá trị được lưu vào record để
-    ``/regenerate`` giữ nguyên ràng buộc.
-
-    Kèm ``fileUrls`` (danh sách presigned URL của các file .docx) thì tài liệu được tải và trích
-    text NGAY TẠI ĐÂY, trước khi pipeline chạy — client chờ thêm vài giây trước khi stream mở. Các
-    file được tải SONG SONG nên thời gian chờ là của file chậm nhất, không phải tổng. Nội dung
-    trích trở thành ngữ cảnh của câu hỏi (xem ``question_for_prompt``), xếp theo đúng thứ tự trong
-    ``fileUrls`` và chia nhau một ngân sách ký tự chung; cả bộ được lưu vào bảng
-    ``chat_attachment`` (trong ``stream_sql``, sau khi record của lượt được tạo).
-
-    Hỏng một file là hỏng cả lượt: trả ``HTTP 400`` mang ``code`` là mã lỗi máy-đọc-được và
-    ``fileIndex`` là vị trí file hỏng trong ``fileUrls``, KHÔNG phải event SSE ``error``. Hỏng hóc
-    được phát hiện trước khi stream mở nên status code vẫn nói được sự thật, và không có record nào
-    được tạo. Chạy tiếp với bộ tài liệu thiếu là lựa chọn tệ hơn hẳn: người dùng vẫn nhận được một
-    câu trả lời trôi chảy, chỉ là nó dựa trên tài liệu khuyết mà không ai biết.
+    Validate ``domainCode`` và tải/nhúng ``fileUrls`` — xem chi tiết từng bước trong docstring cũ của
+    ``question_answer`` (giữ nguyên logic, chỉ tách ra để dùng chung). Dùng cho cả ``/question`` (SSE)
+    lẫn ``/ask`` (JSON đồng bộ): hai route có cùng hợp đồng đầu vào, chỉ khác cách trả kết quả cuối
+    (xem tham số ``stream``/``in_chat`` khi gọi ``question_answer_inner``).
     """
     # Phân biệt "không gửi domainCode" với "gửi null/rỗng": không gửi = hỏi trên toàn bộ lĩnh vực
     # được cấp (hợp lệ); đã gửi thì phải mang giá trị thật — null/rỗng gần như chắc chắn là bug
@@ -598,13 +565,107 @@ async def question_answer(
             question.attachments,
             total_max_chars=settings.CHAT_DOC_PROMPT_MAX_CHARS,
         )
+    return question
 
+
+@router.post("/question", summary=f"{PLACEHOLDER_PREFIX}ask_question")
+@require_permissions(
+    permission=SqlbotPermission(type="chat", keyExpression="resolved_chat_id")
+)
+async def question_answer(
+    session: SessionDep,
+    current_user: CurrentUser,
+    request_question: ChatQuestionBase,
+    current_assistant: CurrentAssistant,
+    resolved_chat_id: int = Depends(resolve_chat_for_question),
+):
+    """
+    Endpoint cốt lõi: người dùng đặt câu hỏi, hệ thống sinh SQL và trả kết quả dạng streaming (SSE).
+
+    Body ``ChatQuestionBase`` gồm ``chat_id``, ``question`` và ``datasource`` (chỉ cần khi ``chat_id``
+    là UUID chưa tồn tại — xem ``resolve_chat_for_question``). Có kiểm tra quyền trên hội thoại
+    (``require_permissions`` type='chat', đọc trên ``resolved_chat_id`` chứ không phải chat_id thô).
+    Bật ``embedding=True`` để dùng RAG (thuật ngữ + SQL mẫu).
+    Toàn bộ pipeline Text-to-SQL nằm trong ``LLMService.run_task`` (apps/chat/task/llm.py).
+    Hỗ trợ quick command trong câu hỏi (regenerate / analysis / predict) — xem ``question_answer_inner``.
+
+    Điểm dừng của pipeline do ``settings.GENERATE_CHART_ENABLED`` quyết định — xem
+    ``default_finish_step``. Bật (mặc định) thì có thêm pha sinh biểu đồ chạy song song với pha
+    answer; tắt thì dừng ngay sau câu trả lời bằng lời.
+
+    Kèm ``domainCode`` (mã lĩnh vực phía SW) thì lượt hỏi bị giới hạn trong các bảng thuộc lĩnh
+    vực đó theo quyền trong ``ai_user_permissions`` — chỉ có tác dụng với user được SW cấp quyền,
+    user khác thì trường này bị bỏ qua. Không gửi trường này = hỏi trên toàn bộ lĩnh vực được cấp;
+    gửi null/rỗng = ``HTTP 400`` (code ``invalid_domain_code``); gửi mã không có trong quyền của
+    user → event SSE ``error`` kèm danh sách lĩnh vực hợp lệ. Giá trị được lưu vào record để
+    ``/regenerate`` giữ nguyên ràng buộc.
+
+    Kèm ``fileUrls`` (danh sách presigned URL của các file .docx) thì tài liệu được tải và trích
+    text NGAY TẠI ĐÂY, trước khi pipeline chạy — client chờ thêm vài giây trước khi stream mở. Các
+    file được tải SONG SONG nên thời gian chờ là của file chậm nhất, không phải tổng. Nội dung
+    trích trở thành ngữ cảnh của câu hỏi (xem ``question_for_prompt``), xếp theo đúng thứ tự trong
+    ``fileUrls`` và chia nhau một ngân sách ký tự chung; cả bộ được lưu vào bảng
+    ``chat_attachment`` (trong ``stream_sql``, sau khi record của lượt được tạo).
+
+    Hỏng một file là hỏng cả lượt: trả ``HTTP 400`` mang ``code`` là mã lỗi máy-đọc-được và
+    ``fileIndex`` là vị trí file hỏng trong ``fileUrls``, KHÔNG phải event SSE ``error``. Hỏng hóc
+    được phát hiện trước khi stream mở nên status code vẫn nói được sự thật, và không có record nào
+    được tạo. Chạy tiếp với bộ tài liệu thiếu là lựa chọn tệ hơn hẳn: người dùng vẫn nhận được một
+    câu trả lời trôi chảy, chỉ là nó dựa trên tài liệu khuyết mà không ai biết.
+    """
+    question = await _resolve_chat_question(session, resolved_chat_id, request_question)
     return await question_answer_inner(
         session,
         current_user,
         question,
         current_assistant,
         finish_step=default_finish_step(),
+        embedding=True,
+    )
+
+
+@router.post("/ask", summary=f"{PLACEHOLDER_PREFIX}ask_question_sync")
+@require_permissions(
+    permission=SqlbotPermission(type="chat", keyExpression="resolved_chat_id")
+)
+async def ask(
+    session: SessionDep,
+    current_user: CurrentUser,
+    request_question: ChatQuestionBase,
+    current_assistant: CurrentAssistant,
+    resolved_chat_id: int = Depends(resolve_chat_for_question),
+):
+    """
+    Biến thể ĐỒNG BỘ của ``/chat/question`` — cùng hợp đồng đầu vào (``ChatQuestionBase``: ``chat_id``,
+    ``question``, ``datasource``, ``domainCode``, ``fileUrls`` — xem ``_resolve_chat_question`` và
+    docstring cũ của ``question_answer``) và cùng pipeline Text-to-SQL, khác duy nhất ở hình dạng đầu
+    ra: một JSON trọn vẹn thay vì ``text/event-stream``.
+
+    Dành cho caller server-to-server (vd. một gateway tích hợp) không tiện tiêu thụ SSE — không phải
+    thay thế ``/question`` cho giao diện chat, nơi phản hồi tăng dần vẫn cần thiết.
+
+    Dừng ở ``QUERY_DATA`` (không sinh câu trả lời bằng lời hay biểu đồ): pha sinh answer hiện chỉ
+    được nối dây cho nhánh ``in_chat`` (xem ghi chú trong ``LLMService.run_task``), nối nó vào nhánh
+    này sẽ đổi hành vi của các client MCP không-stream đang dùng chung ``question_answer_inner``.
+    Ngữ nghĩa "trả JSON xong xuôi cho caller máy-đọc" cũng tự nhiên khớp với SQL + dữ liệu thô hơn
+    là văn xuôi tổng hợp — caller tự quyết định trình bày lại thế nào.
+
+    Trả về khi thành công (HTTP 200): ``{"success": true, "record_id", "sql",
+    "data": {"fields", "fields_info", "data": [...rows], "limit"?}}`` — đúng hợp đồng JSON đã dùng
+    cho nhánh MCP không-stream (``run_task``/``_sql_phase``, qua ``get_chat_chart_data``); ``limit``
+    chỉ xuất hiện khi kết quả bị cắt ở 1000 dòng. Lỗi (kết nối DB, sinh SQL thất bại, domainCode
+    ngoài quyền...) trả HTTP 500 với ``{"success": false, "message": ...}`` — không có event SSE
+    ``error`` nào ở đây, toàn bộ là một response JSON duy nhất.
+    """
+    question = await _resolve_chat_question(session, resolved_chat_id, request_question)
+    return await question_answer_inner(
+        session,
+        current_user,
+        question,
+        current_assistant,
+        in_chat=False,
+        stream=False,
+        finish_step=ChatFinishStep.QUERY_DATA,
         embedding=True,
     )
 

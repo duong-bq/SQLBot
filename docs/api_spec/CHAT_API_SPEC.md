@@ -20,12 +20,13 @@ Tài liệu dành cho hệ thống UI bên thứ ba cần nhúng chức năng h�
 | [§4. `POST /login/access-token`](#4-post-loginaccess-token--đăng-nhập) | Đăng nhập lấy JWT |
 | [§5. `GET /datasource/list`](#5-get-datasourcelist--danh-sách-nguồn-dữ-liệu) | Liệt kê nguồn dữ liệu |
 | [§6. `POST /chat/question`](#6-post-chatquestion--hỏi-sse) | **Hỏi (SSE)** — mục dài nhất |
+| [§7. `POST /chat/ask`](#7-post-chatask--hỏi-json-đồng-bộ) | Hỏi (JSON đồng bộ) — cho caller server-to-server |
 
 **Vận dụng**
 
 | | |
 |---|---|
-| [§7. Giới hạn hệ thống](#7-giới-hạn-hệ-thống--cần-biết-trước-khi-thiết-kế-ui) | Đọc **trước khi** thiết kế UI |
+| [§8. Giới hạn hệ thống](#8-giới-hạn-hệ-thống--cần-biết-trước-khi-thiết-kế-ui) | Đọc **trước khi** thiết kế UI |
 | [Checklist tích hợp](#phụ-lục-checklist-tích-hợp) | Kiểm trước khi bàn giao |
 
 ---
@@ -771,7 +772,7 @@ tổng, nhưng timeout phía client vẫn nên tính cả khoảng này.
 gì. Server cố ý không âm thầm bỏ file hỏng và chạy tiếp: người dùng sẽ nhận được một câu trả lời
 trôi chảy dựa trên bộ tài liệu khuyết mà không ai biết.
 
-**Tài liệu không sống mãi trong hội thoại** — xem [§7.6](#76-tài-liệu-đính-kèm-trôi-theo-cửa-sổ-hội-thoại).
+**Tài liệu không sống mãi trong hội thoại** — xem [§8.6](#86-tài-liệu-đính-kèm-trôi-theo-cửa-sổ-hội-thoại).
 
 ### 6.11. Giới hạn theo lĩnh vực — `domainCode`
 
@@ -810,7 +811,7 @@ lặng mở rộng phạm vi câu hỏi trong trường hợp đó là điều n
 `/regenerate` (sinh lại câu trả lời của một lượt cũ) tự dùng lại đúng lĩnh vực của lượt gốc, không
 cần gửi lại `domainCode`.
 
-**Phạm vi dữ liệu của câu trả lời** — xem [§7.7](#77-câu-trả-lời-nằm-trong-phạm-vi-quyền-của-tài-khoản).
+**Phạm vi dữ liệu của câu trả lời** — xem [§8.7](#87-câu-trả-lời-nằm-trong-phạm-vi-quyền-của-tài-khoản).
 
 ---
 
@@ -845,39 +846,159 @@ chung được giữa các tài khoản: đừng cache theo `chat_id` hay theo d
 
 ---
 
-## 7. Giới hạn hệ thống — cần biết trước khi thiết kế UI
+## 7. `POST /chat/ask` — Hỏi (JSON đồng bộ)
 
-### 7.1. Không có cơ chế hủy
+Biến thể **đồng bộ** của [§6. `POST /chat/question`](#6-post-chatquestion--hỏi-sse): cùng pipeline
+Text-to-SQL, cùng hợp đồng đầu vào, nhưng trả về **một JSON trọn vẹn** thay vì `text/event-stream`.
+Dùng khi bên gọi là một hệ thống khác (backend-to-backend) chỉ cần SQL và số liệu để tự xử lý tiếp,
+không tiện hoặc không cần tiêu thụ SSE. **Không dùng cho giao diện chat** — endpoint này dừng lại
+trước khi sinh câu trả lời bằng lời, xem [§7.4](#74-khác-biệt-so-với-chatquestion).
+
+### 7.1. Request
+
+Giống hệt request của `/chat/question` — cùng `chat_id`, `question`, `datasource`, `fileUrls`,
+`domainCode`, xem bảng field ở [§6](#6-post-chatquestion--hỏi-sse). Chỉ khác đường dẫn và header
+`Accept`:
+
+```http
+POST /api/v1/chat/ask
+X-SQLBOT-TOKEN: Bearer <jwt>
+Content-Type: application/json
+
+{
+  "chat_id": "e64661cc-f8bb-4381-82d4-b3579d2e364e",
+  "question": "Có bao nhiêu nghị quyết được ban hành trong năm 2024?",
+  "datasource": 1
+}
+```
+
+**Response**: `Content-Type: application/json` — không có `Accept: text/event-stream` nào cả, không
+có event nào cả. Toàn bộ kết quả về trong một response duy nhất.
+
+### 7.2. Response thành công
+
+`HTTP 200`, theo đúng vỏ bọc chung của hệ thống ([§3.3](#33-định-dạng-response--bất-đối-xứng)).
+Capture thật của request ở [§7.1](#71-request):
+
+```json
+{
+  "code": 0,
+  "data": {
+    "success": true,
+    "record_id": 841,
+    "title": "Số nghị quyết ban hành năm 2024",
+    "sql": "SELECT COUNT(*) AS \"total_resolutions\" FROM \"public\".\"sync_table_wh_info\" WHERE \"receive_form_ten\" LIKE '%NGHI_QUYET%' AND EXTRACT(YEAR FROM \"created_date\") = 2024 LIMIT 1000",
+    "data": {
+      "fields": ["total_resolutions"],
+      "fields_info": [{"name": "total_resolutions", "is_numeric": true}],
+      "data": [{"total_resolutions": 0}]
+    }
+  },
+  "msg": null
+}
+```
+
+| Trường | Ý nghĩa |
+|---|---|
+| `record_id` | Cùng khái niệm `record_id` ở [§1.3](#13-record-lượt-hỏi--record_id) — lưu lại để tra log |
+| `title` | Tiêu đề hội thoại bot tự đặt. **Chỉ có mặt ở câu hỏi đầu tiên** của `chat_id` — đúng điều kiện xuất hiện của event `brief` bên `/chat/question` ([§6.3](#63-danh-mục-event)), chỉ đổi tên trường |
+| `sql` | SQL đã format — cùng nội dung với event `sql` bên `/chat/question` ([§6.5](#65-nội-dung-câu-trả-lời-và-câu-sql)) |
+| `data.fields`, `data.fields_info`, `data.data` | Đúng schema của event `sql-data` ([§6.6](#66-số-liệu--event-sql-data)), kể cả quy tắc số lớn về dạng chuỗi và khóa `data.limit` xuất hiện khi bị cắt ở 1000 dòng |
+
+Không có `answer`, không có `chart`, không có `recommended_question` — endpoint này không chạy tới
+các pha đó, xem [§7.4](#74-khác-biệt-so-với-chatquestion).
+
+### 7.3. Response lỗi
+
+`HTTP 500`, **không có vỏ bọc** `{code, data, msg}` — đúng quy tắc bất đối xứng ở
+[§3.3](#33-định-dạng-response--bất-đối-xứng): lỗi thì không có vỏ, dù endpoint này về bản chất là
+JSON chứ không phải SSE. Capture thật (datasource mất kết nối DB):
+
+```json
+{
+  "success": false,
+  "record_id": 840,
+  "message": "{\"message\":\"Connect DB failed\",\"type\":\"db-connection-err\"}"
+}
+```
+
+`record_id` vẫn có mặt — record của lượt hỏi đã được tạo trước khi pipeline chạy và hỏng.
+`success: false` và `HTTP 500` luôn đi cùng nhau, không lẫn với response thành công.
+
+⚠ `message` **không có schema cố định** — đúng bẫy đã nêu ở
+[§6.7](#67--lỗi-giữa-stream-vẫn-là-http-200) cho event `error` của `/chat/question`: khi là văn xuôi,
+khi là một chuỗi JSON như ví dụ trên. Hiển thị nó như text; muốn bóc `message`/`type` bên trong thì
+thử `JSON.parse` trong `try/catch` rồi fallback về chuỗi gốc.
+
+Lỗi input bị chặn **trước khi** pipeline chạy (`domainCode` rỗng/null, file đính kèm hỏng, `chat_id`
+mới thiếu `datasource`, datasource không tồn tại...) vẫn theo đúng [§3.4](#34-bảng-mã-lỗi) — cùng mã
+`HTTP`, cùng body — không đi qua hình dạng lỗi riêng của mục này. Chỉ lỗi **trong khi chạy pipeline**
+(sinh SQL, kết nối DB, thực thi SQL...) mới có hình dạng `{"success": false, "record_id", "message"}`
+ở trên.
+
+Riêng mã lỗi ngoài quyền `domainCode` ([§6.11](#611-giới-hạn-theo-lĩnh-vực--domaincode)) đổi hình
+dạng so với `/chat/question`: bên đó là event SSE `error`, ở `/ask` nó là lỗi trong-pipeline
+`{"success": false, ...}` như trên — `message` chứa danh sách mã lĩnh vực hợp lệ.
+
+### 7.4. Khác biệt so với `/chat/question`
+
+| | `/chat/question` | `/chat/ask` |
+|---|---|---|
+| Vận chuyển | `text/event-stream`, nhiều event | Một JSON, một lần |
+| Điểm dừng | Sinh câu trả lời bằng lời (+ biểu đồ nếu bật) | Dừng ngay sau khi chạy SQL — **không** sinh câu trả lời bằng lời, không có biểu đồ, không có gợi ý câu hỏi tiếp theo |
+| Cổng định tuyến (chào hỏi / ngoài phạm vi) | Có, khi hệ thống bật (mặc định tắt) — xem [§6.8](#68-lượt-hỏi-không-có-sql-và-sql-data) | **Luôn tắt** — mọi câu hỏi, kể cả `"hi"`/`"chào bạn"`, đều đi thẳng vào pha sinh SQL |
+| Lỗi giữa chừng | Event `error`, HTTP vẫn 200 ([§6.7](#67--lỗi-giữa-stream-vẫn-là-http-200)) | `HTTP 500`, JSON không vỏ bọc ([§7.3](#73-response-lỗi)) |
+| Đính kèm `.docx` (`fileUrls`) | Nội dung vào ngữ cảnh cả pha sinh SQL lẫn pha trả lời | Chỉ vào ngữ cảnh pha sinh SQL — không có pha trả lời để dùng tới |
+| `chat_id`, `datasource`, `domainCode` | [§6.1](#6-post-chatquestion--hỏi-sse), [§6.11](#611-giới-hạn-theo-lĩnh-vực--domaincode) | Y hệt |
+
+> **Vì `/ask` luôn tắt cổng định tuyến:** một câu hỏi kiểu xã giao hay ngoài phạm vi dữ liệu (`"chào
+> bạn"`, `"bạn là ai"`) không được nhận diện riêng — nó vẫn bị đẩy vào pha sinh SQL như một câu hỏi
+> dữ liệu bình thường, và thường ra một SQL vô nghĩa hoặc lỗi. Bên gọi `/ask` nên tự lọc những câu
+> hỏi kiểu này trước khi gửi, nếu có nhu cầu đó.
+
+Quick command trong câu hỏi (`/regenerate`, `/analysis`, `/predict`) được `/ask` nhận diện qua đúng
+bộ phân giải dùng chung với `/chat/question` — nhưng chưa được đo đạc/kiểm thử riêng cho `/ask` ở
+tài liệu này; nếu cần dùng, hãy tự xác minh trước khi phụ thuộc vào đó.
+
+---
+
+## 8. Giới hạn hệ thống — cần biết trước khi thiết kế UI
+
+### 8.1. Không có cơ chế hủy
 
 Không có endpoint dừng một câu hỏi đang chạy. Client đóng connection thì server **vẫn chạy hết
 pipeline và vẫn tiêu thụ token LLM**. Nút "Dừng" trên UI chỉ ngừng hiển thị phía client.
 
-### 7.2. Không có refresh token
+### 8.2. Không có refresh token
 
 JWT sống 8 ngày, hết hạn phải đăng nhập lại. Client cần lưu credential hoặc bắt 401 để re-login.
 
-### 7.3. Timeout phía client
+### 8.3. Timeout phía client
 
 Đặt **read timeout** (giữa hai chunk), không đặt total timeout. Khuyến nghị 30–60 giây. Câu hỏi
 thông thường trả lời trong **2–10 giây**, nhưng câu hỏi nặng trên bảng lớn có thể lâu hơn — total
 timeout sẽ cắt nhầm những câu vẫn đang chạy tốt.
 
-### 7.4. Không chạy song song nhiều câu hỏi trên cùng `chat_id`
+### 8.4. Không chạy song song nhiều câu hỏi trên cùng `chat_id`
 
 Ngữ cảnh multi-turn đọc từ lịch sử record. Hai câu hỏi chồng nhau trên cùng `chat_id` cho kết quả
-khó đoán — xếp hàng tuần tự, hoặc dùng `chat_id` khác nhau.
+khó đoán — xếp hàng tuần tự, hoặc dùng `chat_id` khác nhau. Áp dụng như nhau dù hỏi qua
+`/chat/question` hay [`/chat/ask`](#7-post-chatask--hỏi-json-đồng-bộ), kể cả trộn cả hai trên cùng
+`chat_id`.
 
-### 7.5. Số liệu thô bị cắt ở 1000 dòng
+### 8.5. Số liệu thô bị cắt ở 1000 dòng
 
 Stream của `POST /chat/question` trả đủ cả bốn thứ trong một lần gọi: **câu trả lời bằng lời**,
 **câu SQL**, **số liệu** và **cấu hình biểu đồ**. Nhưng số liệu bị cắt ở **1000 dòng** — câu hỏi
 quét cả bảng sẽ không về đủ. Client biết được điều đó qua khóa `data.limit` của event `sql-data`
 ([§6.6](#66-số-liệu--event-sql-data)), và nên báo cho người dùng thay vì hiển thị như thể trọn vẹn.
+Cùng trần, cùng khóa `data.limit`, áp dụng y hệt cho
+[`/chat/ask`](#7-post-chatask--hỏi-json-đồng-bộ).
 
 Vì vậy đừng thiết kế màn hình theo hướng xuất/duyệt toàn bộ dữ liệu. SQLBot phục vụ hỏi đáp và tổng
 hợp, không phải công cụ trích xuất dữ liệu.
 
-### 7.6. Tài liệu đính kèm trôi theo cửa sổ hội thoại
+### 8.6. Tài liệu đính kèm trôi theo cửa sổ hội thoại
 
 File `.docx` gửi kèm ([§6.10](#610-gửi-kèm-tài-liệu-docx--fileurls)) là **một phần của lượt hỏi đó**,
 không phải kiến thức gắn vào hội thoại. Nó theo lịch sử sang các lượt sau đúng như câu hỏi và câu
@@ -888,7 +1009,7 @@ Hệ quả cho UI: hỏi sâu về tài liệu thì hỏi liền mạch ngay sau
 tài liệu sau một hồi bàn chuyện khác, **đính kèm lại** — đừng cho rằng model vẫn còn nhớ. Muốn một
 tài liệu luôn có mặt thì đó là bài toán kho tri thức, không phải đính kèm.
 
-### 7.7. Câu trả lời nằm trong phạm vi quyền của tài khoản
+### 8.7. Câu trả lời nằm trong phạm vi quyền của tài khoản
 
 Câu trả lời chỉ dựa trên phần dữ liệu mà **tài khoản đang đăng nhập** được phép thấy: bảng ngoài
 quyền coi như không tồn tại, cột ngoài quyền không được đưa ra, và các dòng ngoài phạm vi không được
@@ -926,9 +1047,13 @@ bằng event `error` nói rõ điều đó, không phải câu trả lời rỗn
 - [ ] Dùng biểu đồ: coi `series` / `multi-quota` là có thể vắng mặt, `axis.y` chuẩn hóa về mảng
 - [ ] Dùng biểu đồ: `info: chart failed` chỉ ẩn biểu đồ, **không** báo lỗi cả lượt hỏi (§6.9.4)
 - [ ] Dùng đính kèm: bắt `HTTP 400` + `code` **trước khi** mở stream (§6.10)
-- [ ] Dùng đính kèm: nhắc người dùng gửi lại file nếu quay lại chủ đề đó sau nhiều lượt (§7.6)
+- [ ] Dùng đính kèm: nhắc người dùng gửi lại file nếu quay lại chủ đề đó sau nhiều lượt (§8.6)
 - [ ] Dùng lĩnh vực: hỏi toàn bộ thì **bỏ hẳn** `domainCode` khỏi JSON, không gửi `null` (§6.11)
-- [ ] Không cache câu trả lời dùng chung giữa các tài khoản — phạm vi dữ liệu theo quyền (§7.7)
+- [ ] Không cache câu trả lời dùng chung giữa các tài khoản — phạm vi dữ liệu theo quyền (§8.7)
 - [ ] Read timeout 30–60s, không dùng total timeout
 - [ ] Không gửi hai câu hỏi song song trên cùng `chat_id`
 - [ ] Xử lý 401 → đăng nhập lại (không có refresh token)
+- [ ] Dùng `/chat/ask` (caller server-to-server): kiểm `success` + `HTTP status`, không mong đợi
+      `answer`/`chart` (§7)
+- [ ] Dùng `/chat/ask`: tự lọc câu hỏi xã giao/ngoài phạm vi trước khi gửi — không có cổng định
+      tuyến để làm việc đó thay (§7.4)
