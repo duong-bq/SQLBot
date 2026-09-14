@@ -45,13 +45,11 @@ WORKDIR /opt/sqlbot/app
 # Tách 2 lần sync để layer dependency (nặng ~1.7GB, tải lâu nhất) chỉ rebuild khi
 # pyproject.toml hoặc uv.lock đổi, không rebuild mỗi lần sửa code.
 #
-# --extra cpu là BẮT BUỘC: từ khi upstream chuyển torch sang optional-dependencies, không truyền
-# extra thì torch không được cài, mà apps/ai_model/embedding.py import langchain_huggingface ngay
-# đầu file và chính lệnh import đó nạp torch — thiếu là chết lúc khởi động, bất kể
-# EMBEDDING_PROVIDER đặt là gì. Extra còn lại (cu128) kéo về wheel CUDA nặng thêm vài GB.
+# torch được pin cứng về index CPU trong pyproject.toml (tool.uv.sources) — không còn extra
+# cpu/cu128 để chọn nữa, "uv sync" trần đã luôn lấy bản CPU.
 COPY backend/pyproject.toml backend/uv.lock ./
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --frozen --extra cpu --no-install-project --no-dev
+    uv sync --frozen --no-install-project --no-dev
 
 COPY backend/ ./
 
@@ -59,7 +57,7 @@ COPY backend/ ./
 # pyproject sẽ đóng gói cả cây source, mà không cần — PYTHONPATH đã trỏ vào /opt/sqlbot/app
 # và không chỗ nào `import sqlbot` như một package.
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --frozen --extra cpu --no-install-project --no-dev
+    uv sync --frozen --no-install-project --no-dev
 
 # ---------------------------------------------------------------- runtime
 FROM python:3.11-slim-bookworm
