@@ -636,8 +636,9 @@ def sync_table(session: SessionDep, ds: CoreDatasource, tables: List[CoreTable])
         session.query(CoreField).filter(CoreField.ds_id == ds_id).delete(synchronize_session=False)
         session.commit()
 
-    # seed table relations from declared foreign keys (one-time, only when not set yet)
-    seed_table_relation(session, ds)
+    # Đối soát đồ thị quan hệ theo tập bảng/cột vừa đồng bộ: dọn node/edge treo, thêm node bảng mới,
+    # bổ sung edge từ khóa ngoại còn thiếu; đồ thị còn rỗng thì seed (xem reconcile_table_relation).
+    reconcile_table_relation(session, ds)
 
     # do table embedding
     run_save_table_embeddings(id_list)
@@ -681,8 +682,8 @@ def resync_ds_metadata(session: SessionDep, ds: CoreDatasource) -> tuple:
 
     Khác ``chooseTables`` (tập bảng đích do người dùng chọn), ở đây trạng thái đích là TOÀN BỘ
     bảng trong schema nguồn: bảng mới được thêm (``checked=True`` — quyền truy cập đã có tầng
-    permission SW gác), bảng biến mất bị xóa kèm cột. Sau đó đối soát đồ thị quan hệ để không còn
-    node/edge treo (xem ``reconcile_table_relation``). Dùng cho luồng resync từ hook AI Sync.
+    permission SW gác), bảng biến mất bị xóa kèm cột. ``sync_table`` đã đối soát đồ thị quan hệ nên
+    không còn node/edge treo (xem ``reconcile_table_relation``). Dùng cho luồng resync từ hook AI Sync.
 
     Chặn catalog rỗng một cách tường minh: 0 bảng thường là schema cấu hình sai hoặc quyền DB bị
     thu hồi, trong khi ``sync_table`` với list rỗng lại là lệnh XÓA SẠCH metadata — hook không
@@ -705,7 +706,6 @@ def resync_ds_metadata(session: SessionDep, ds: CoreDatasource) -> tuple:
 
     items = [CoreTable(table_name=t.tableName, table_comment=t.tableComment) for t in source_tables]
     sync_table(session, ds, items)
-    reconcile_table_relation(session, ds)
 
     record = session.exec(select(CoreDatasource).where(CoreDatasource.id == ds.id)).first()
     record.num = f"{len(items)}/{len(items)}"
@@ -1101,6 +1101,59 @@ def get_tables_sample_data(session: SessionDep, current_user: CurrentUser, ds: C
     return "\n".join(sample_data_parts)
 
 
+def _to_int(value):
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _resolve_relations(relations: list, all_tables: list, selected_ids: list) -> tuple[list, list]:
+    """Lọc edge của ``table_relation`` cho khối Foreign keys của M-Schema; hàm thuần, không chạm DB.
+
+    ``all_tables`` là tập bảng đã qua mọi lớp lọc (``checked``, ``table_list``, ``column_filter``),
+    mỗi phần tử mang ``fields: {field_id: field_name}`` của đúng những cột đã in vào schema.
+    ``selected_ids`` là id các bảng được chọn vào prompt (sau embedding).
+
+    Edge chỉ được giữ khi CẢ HAI đầu (bảng + cột) nằm trong tập đã lọc và ít nhất một đầu thuộc
+    ``selected_ids``. Tên bảng/cột lấy từ ``all_tables`` chứ không tra ``CoreTable``/``CoreField``,
+    nên bảng đã tắt, cột đã tắt hoặc ngoài quyền SW không lọt vào prompt qua đường quan hệ.
+
+    ``cell``/``port`` được chuẩn hóa về ``int``: đồ thị do backend seed ghi ``cell`` là int, còn
+    frontend X6 lưu lại thành chuỗi. Edge hỏng định dạng bị bỏ qua, không ném lỗi.
+
+    Trả về ``(lost_tables, fk_lines)``: bảng ngoài ``selected_ids`` được kéo vào theo quan hệ (giữ
+    thứ tự ``all_tables``) và các dòng ``bang.cot=bang.cot`` (bỏ trùng, giữ thứ tự edge).
+    """
+    table_by_id = {t.get('id'): t for t in all_tables}
+    selected = set(selected_ids)
+    lost_ids = set()
+    fk_lines = []
+    for edge in relations:
+        ends = []
+        for side in ('source', 'target'):
+            anchor = edge.get(side)
+            if not isinstance(anchor, dict):
+                break
+            table = table_by_id.get(_to_int(anchor.get('cell')))
+            port = _to_int(anchor.get('port'))
+            if table is None or port not in table.get('fields', {}):
+                break
+            ends.append((table, port))
+        if len(ends) != 2:
+            continue
+        if ends[0][0].get('id') not in selected and ends[1][0].get('id') not in selected:
+            continue
+        for table, _ in ends:
+            if table.get('id') not in selected:
+                lost_ids.add(table.get('id'))
+        line = '='.join(f"{table.get('table_name')}.{table['fields'][port]}" for table, port in ends)
+        if line not in fk_lines:
+            fk_lines.append(line)
+    lost_tables = [t for t in all_tables if t.get('id') in lost_ids]
+    return lost_tables, fk_lines
+
+
 def get_table_schema(session: SessionDep, current_user: CurrentUser, ds: CoreDatasource, question: str,
                      embedding: bool = True, table_list: list[str] = None,
                      column_filter: dict[str, set] = None) -> tuple[str, list]:
@@ -1114,8 +1167,8 @@ def get_table_schema(session: SessionDep, current_user: CurrentUser, ds: CoreDat
     những field nằm trong tập mới vào schema; bảng vắng mặt thì đủ mọi field. Lọc hết sạch field
     của một bảng là dấu hiệu tên cột phía SW lệch với core_field — log warning để vận hành biết.
 
-    Phần bổ sung bảng theo table_relation chỉ rút từ tập đã lọc (`all_tables`) nên không mở lại
-    bảng ngoài `table_list`.
+    Phần bổ sung bảng theo table_relation và khối Foreign keys chỉ rút từ tập đã lọc (`all_tables`)
+    nên không mở lại bảng/cột ngoài `table_list`, `column_filter` hay đã tắt — xem `_resolve_relations`.
     """
     schema_str = ""
     table_objs = get_table_obj_by_ds(session=session, current_user=current_user, ds=ds)
@@ -1142,12 +1195,14 @@ def get_table_schema(session: SessionDep, current_user: CurrentUser, ds: CoreDat
         else:
             schema_table += f", {table_comment}\n[\n"
 
+        printed_fields = {}
         if obj.fields:
             allowed_columns = column_filter.get(obj.table.table_name) if column_filter else None
             field_list = []
             for field in obj.fields:
                 if allowed_columns is not None and field.field_name not in allowed_columns:
                     continue
+                printed_fields[field.id] = field.field_name
                 field_comment = ''
                 if field.custom_comment:
                     field_comment = field.custom_comment.strip()
@@ -1164,7 +1219,7 @@ def get_table_schema(session: SessionDep, current_user: CurrentUser, ds: CoreDat
         schema_table += '\n]\n'
 
         t_obj = {"id": obj.table.id, "table_name": obj.table.table_name, "schema_table": schema_table,
-                 "embedding": obj.table.embedding}
+                 "embedding": obj.table.embedding, "fields": printed_fields}
         tables.append(t_obj)
         all_tables.append(t_obj)
 
@@ -1183,51 +1238,14 @@ def get_table_schema(session: SessionDep, current_user: CurrentUser, ds: CoreDat
 
     # field relation
     if tables and ds.table_relation:
-        relations = list(filter(lambda x: x.get('shape') == 'edge', ds.table_relation))
-        if relations:
-            # Complete the missing table
-            # get tables in relation, remove irrelevant relation
-            embedding_table_ids = [s.get('id') for s in tables]
-            all_relations = list(
-                filter(lambda x: x.get('source').get('cell') in embedding_table_ids or x.get('target').get(
-                    'cell') in embedding_table_ids, relations))
-
-            # get relation table ids, sub embedding table ids
-            relation_table_ids = []
-            for r in all_relations:
-                relation_table_ids.append(r.get('source').get('cell'))
-                relation_table_ids.append(r.get('target').get('cell'))
-            relation_table_ids = list(set(relation_table_ids))
-            # get table dict
-            table_records = session.query(CoreTable).filter(CoreTable.id.in_(list(map(int, relation_table_ids)))).all()
-            table_dict = {}
-            for ele in table_records:
-                table_dict[ele.id] = ele.table_name
-
-            # get lost table ids
-            lost_table_ids = list(set(relation_table_ids) - set(embedding_table_ids))
-            # get lost table schema and splice it
-            lost_tables = list(filter(lambda x: x.get('id') in lost_table_ids, all_tables))
-            if lost_tables:
-                for s in lost_tables:
-                    schema_str += s.get('schema_table')
-                    table_name_list.append(s.get('table_name'))
-
-            # get field dict
-            relation_field_ids = []
-            for relation in all_relations:
-                relation_field_ids.append(relation.get('source').get('port'))
-                relation_field_ids.append(relation.get('target').get('port'))
-            relation_field_ids = list(set(relation_field_ids))
-            field_records = session.query(CoreField).filter(CoreField.id.in_(list(map(int, relation_field_ids)))).all()
-            field_dict = {}
-            for ele in field_records:
-                field_dict[ele.id] = ele.field_name
-
-            if all_relations:
-                schema_str += '【Foreign keys】\n'
-                for ele in all_relations:
-                    schema_str += f"{table_dict.get(int(ele.get('source').get('cell')))}.{field_dict.get(int(ele.get('source').get('port')))}={table_dict.get(int(ele.get('target').get('cell')))}.{field_dict.get(int(ele.get('target').get('port')))}\n"
+        relations = [x for x in ds.table_relation if x.get('shape') == 'edge']
+        lost_tables, fk_lines = _resolve_relations(relations, all_tables, [s.get('id') for s in tables])
+        for s in lost_tables:
+            schema_str += s.get('schema_table')
+            table_name_list.append(s.get('table_name'))
+        if fk_lines:
+            schema_str += '【Foreign keys】\n'
+            schema_str += ''.join(f"{line}\n" for line in fk_lines)
 
     return schema_str, table_name_list
 

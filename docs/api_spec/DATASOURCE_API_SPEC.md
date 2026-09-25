@@ -107,7 +107,8 @@ FastAPI bắt). Client phải xử lý được cả hai.
 
 Thứ tự tích hợp tối thiểu để chatbot trả lời được:
 
-- nguồn là database: **3.2 → 3.3 → 3.4 → 3.5 → 6.2**
+- nguồn là database: **3.2 → 3.3 → 3.4 → 3.5**. Quan hệ JOIN từ khóa ngoại của DB nguồn được server
+  tự sinh; chỉ gọi 6.2 khi cần khai thêm quan hệ mà DB nguồn không khai bằng khóa ngoại
 - nguồn là file Excel/CSV: **9.2** (một lời gọi), hoặc **8.1 → 8.2 → 8.3** nếu cần can thiệp kiểu cột
 
 ---
@@ -880,10 +881,15 @@ Khuyến nghị dùng UUID, hoặc một chuỗi sinh theo công thức từ ch�
   giao diện SQLBot sẽ trống — xem 6.3 nếu điều đó là vấn đề.
 - Chỉ khai những quan hệ thật sự dùng để JOIN. Mỗi quan hệ khai thừa đều làm giảm chất lượng câu trả
   lời, vì bảng ở đầu kia bị kéo theo vào ngữ cảnh xử lý câu hỏi.
-- Khi tạo nguồn ở 3.5 và khi đổi danh sách bảng ở 7.3, nếu cấu hình quan hệ đang rỗng thì server tự
-  sinh sẵn quan hệ từ khóa ngoại khai báo trong DB nguồn. Cấu hình đã có sẵn thì không bị đụng tới.
-  Vì vậy mảng chỉ có `er-rect` mà không có `edge` nào nghĩa là **nguồn này không khai quan hệ nào**,
-  chứ không phải "chưa từng cấu hình".
+- Mỗi lần tạo nguồn ở 3.5 và đổi danh sách bảng ở 7.3, server **đối soát** cấu hình quan hệ với tập
+  bảng/cột hiện hành: dọn cell trỏ vào bảng/cột đã bị gỡ, thêm `er-rect` cho bảng mới, bổ sung `edge`
+  từ khóa ngoại khai báo trong DB nguồn mà cấu hình còn thiếu. Cấu hình đang rỗng thì sinh mới toàn bộ
+  từ khóa ngoại. `edge` khai tay qua 6.2 còn hợp lệ được giữ nguyên.
+- ⚠ `edge` sinh từ khóa ngoại mà bị xóa bằng 6.2 sẽ **quay lại** ở lần 7.3 kế tiếp. Muốn bỏ hẳn một
+  quan hệ khóa ngoại thì gỡ khóa ngoại ở DB nguồn.
+- ⚠ Gọi 6.2 với mảng rỗng là **xóa mất** cả quan hệ server đã tự sinh; không cần gọi 6.2 sau 3.5/7.3.
+- Mảng chỉ có `er-rect` mà không có `edge` nào nghĩa là **nguồn này không có quan hệ nào**, chứ không
+  phải "chưa từng cấu hình".
 
 ### 6.3. Cell `er-rect` — chỉ phục vụ sơ đồ trên giao diện
 
@@ -977,13 +983,13 @@ một nguồn đang chạy: DB nguồn có 26 cột trong khi SQLBot đang lưu 
   của nó. Thêm một bảng vẫn phải gửi lại cả những bảng đang có. Mảng rỗng xóa sạch.
 - ⚠ Bảng bị xóa rồi thêm lại sẽ mang `table_id` mới và **mất toàn bộ chú thích** của bảng lẫn các
   cột. Gọi lại với cùng danh sách thì an toàn — chú thích được giữ.
-- ⚠ Quan hệ giữa các bảng **không** được cập nhật theo, phải khai lại bằng 6.2. Nặng hơn "không cập
-  nhật": sơ đồ quan hệ vẫn giữ nguyên các bảng/cột vừa bị gỡ, và những mẩu trỏ vào chỗ trống đó đi
-  thẳng vào ngữ cảnh sinh SQL. Đổi tập bảng xong thì **luôn** gọi 6.2 để khai lại quan hệ theo tập
-  bảng mới — kể cả khi không có quan hệ nào (gửi mảng rỗng).
-- Nếu chỉ cần cập nhật cấu trúc cho khớp DB nguồn (chứ không phải tự chọn tập bảng), dùng bản tin
-  `actionType 4` của `AI_SYNC_HOOK_API_SPEC.md` §6: nó tự đọc lại catalog nguồn và tự dọn sơ đồ quan
-  hệ, không cần gọi 6.2 sau đó.
+- Quan hệ giữa các bảng được server tự đối soát theo tập bảng mới (xem lưu ý cuối 6.2): quan hệ trỏ
+  vào bảng/cột vừa bị gỡ bị dọn, quan hệ khóa ngoại của bảng mới được bổ sung. Không cần gọi 6.2 sau
+  endpoint này.
+- Gọi lại với cùng danh sách là cách cập nhật cấu trúc cột theo DB nguồn cho các bảng đang chọn: cột
+  mới được thêm và bật sẵn, cột đã mất bị xóa. Bảng mới ở nguồn **không** tự vào danh sách.
+- Nếu muốn chép lại toàn bộ bảng của DB nguồn (chứ không phải tự chọn tập bảng), dùng bản tin
+  `actionType 4` của `AI_SYNC_HOOK_API_SPEC.md` §6.
 - ⚠ Không có transaction bao trùm: hỏng giữa chừng để lại trạng thái dở dang. Xử lý bằng cách đọc
   4.4 rồi gọi lại — thao tác này lặp lại được.
 - Khác 3.5: endpoint này **có** kiểm tra kết nối, hỏng thì 500 và không thay đổi gì.
