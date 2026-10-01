@@ -1,5 +1,6 @@
 from fastapi import APIRouter
 
+from apps.ai_model_config import api as ai_model_config_api
 from apps.chat.api import chat
 from apps.dashboard.api import dashboard_api
 from apps.hooks.api import ai_sync, permission_query
@@ -35,5 +36,6 @@ api_router.include_router(variable_api.router)
 
 api_router.include_router(ai_sync.router)
 api_router.include_router(permission_query.router)
+api_router.include_router(ai_model_config_api.router)
 
 #api_router.include_router(audit_api.router)

@@ -1,6 +1,7 @@
 from typing import Optional
 from fastapi import APIRouter, HTTPException, Path, Query
 from sqlmodel import exists, or_, select, delete as sqlmodel_delete, update as sqlmodel_update   
+from apps.ai_model_config.hooks import cleanup_workspace
 from apps.swagger.i18n import PLACEHOLDER_PREFIX
 from apps.system.crud.user import clean_user_cache
 from apps.system.crud.workspace import reset_single_user_oid, reset_user_oid
@@ -318,6 +319,7 @@ async def single_delete(session: SessionDep, current_user: CurrentUser, id: int 
         # delete user_ws
         session.exec(sqlmodel_delete(UserWsModel).where(UserWsModel.oid == id))
         
+    cleanup_workspace(session, id)
     session.delete(db_model)
 
 

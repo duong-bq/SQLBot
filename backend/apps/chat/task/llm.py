@@ -28,6 +28,8 @@ from sqlglot import exp
 from sqlmodel import Session
 
 from apps.ai_model.model_factory import LLMConfig, LLMFactory, get_default_config
+from apps.ai_model_config.errors import attach_model_error_code, sanitize_secret
+from apps.ai_model_config.resolver import resolve_llm_config
 from apps.chat.curd.chat import save_question, save_sql_answer, save_sql, \
     save_error_message, save_sql_exec_data, save_chart_answer, save_chart, \
     finish_record, save_analysis_answer, save_predict_answer, save_predict_data, \
@@ -348,6 +350,11 @@ class LLMService:
 
     @classmethod
     async def create(cls, *args, **kwargs):
+        """Dựng ``LLMService`` với cấu hình LLM đã giải xong (``__init__`` không await được).
+
+        Tham số vị trí giống ``__init__``: session, user, câu hỏi, trợ lý. Thứ tự chọn LLM nằm ở
+        ``resolve_llm_config``.
+        """
         specialized_model_id = None
         _ai_model_list = []
         if args[3]:
@@ -359,7 +366,10 @@ class LLMService:
                     if any(str(model.id) == str(args[3].custom_model) for model in _ai_model_list):
                         specialized_model_id = args[3].custom_model
                         print("use custom model: id[" + specialized_model_id + "]")
-        config: LLMConfig = await get_default_config(specialized_model_id)
+        # Model của datasource/workspace do Gateway cấp (nếu có), không thì model mặc định như cũ.
+        config: LLMConfig = await resolve_llm_config(
+            args[0], args[2], specialized_model_id,
+            skip_scoped=bool(args[3]) and args[3].type in dynamic_ds_types)
         # Phải resolve ở đây chứ không trong __init__: get_default_config là async còn __init__ thì
         # không, và run_task lại là generator đồng bộ nên không await được ở bất kỳ chỗ nào sau này.
         route_config: Optional[LLMConfig] = None
@@ -2112,6 +2122,11 @@ class LLMService:
 
     def run_task(self, in_chat: bool = True, stream: bool = True,
                  finish_step: ChatFinishStep = ChatFinishStep.GENERATE_ANSWER, return_img: bool = True):
+        """Chạy toàn bộ pipeline hỏi đáp, phát kết quả theo chế độ stream hoặc JSON cuối.
+
+        Lỗi được che khoá (``sanitize_secret``) trước khi lưu và trả về; ở chế độ JSON, lỗi gọi model
+        có thêm ``code`` (``model_*``) để Gateway phân loại.
+        """
         json_result: Dict[str, Any] = {'success': True}
         _session = None
         try:
@@ -2406,6 +2421,7 @@ class LLMService:
                     {'message': 'Execute SQL Failed', 'traceback': str(e), 'type': 'exec-sql-err'}).decode()
             else:
                 error_msg = orjson.dumps({'message': str(e), 'traceback': traceback.format_exc(limit=1)}).decode()
+            error_msg = sanitize_secret(error_msg)
             if _session:
                 self.save_error(session=_session, message=error_msg)
             if in_chat:
@@ -2417,6 +2433,7 @@ class LLMService:
                 else:
                     json_result['success'] = False
                     json_result['message'] = error_msg
+                    attach_model_error_code(json_result, e)
                     yield json_result
         finally:
             self.finish(_session)
@@ -2458,6 +2475,7 @@ class LLMService:
             self.chunk_list.append(chunk)
 
     def run_analysis_or_predict_task(self, action_type: str, in_chat: bool = True, stream: bool = True):
+        """Chạy tác vụ phân tích hoặc dự đoán trên một record; xử lý lỗi giống ``run_task``."""
         json_result: Dict[str, Any] = {'success': True}
         _session = None
         try:
@@ -2576,6 +2594,7 @@ class LLMService:
                 error_msg = str(e)
             else:
                 error_msg = orjson.dumps({'message': str(e), 'traceback': traceback.format_exc(limit=1)}).decode()
+            error_msg = sanitize_secret(error_msg)
             if _session:
                 self.save_error(session=_session, message=error_msg)
             if in_chat:
@@ -2587,6 +2606,7 @@ class LLMService:
                 else:
                     json_result['success'] = False
                     json_result['message'] = error_msg
+                    attach_model_error_code(json_result, e)
                     yield json_result
         finally:
             # end

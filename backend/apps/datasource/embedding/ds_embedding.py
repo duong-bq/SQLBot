@@ -6,6 +6,7 @@ import traceback
 from typing import Optional
 
 from apps.ai_model.embedding import EmbeddingModelCache
+from apps.ai_model_config.embedding import rank_ds_by_embedding
 from apps.datasource.embedding.utils import cosine_similarity
 from apps.datasource.models.datasource import CoreDatasource
 from apps.system.crud.assistant import AssistantOutDs
@@ -18,6 +19,11 @@ from common.utils.utils import SQLBotLogUtil
 def get_ds_embedding(session: SessionDep, _ds_list, out_ds: AssistantOutDs,
                      question: str,
                      current_assistant: Optional[CurrentAssistant] = None):
+    """Chọn các datasource gần câu hỏi nhất theo embedding, tối đa ``DS_EMBEDDING_COUNT``.
+
+    Datasource nội bộ có thể dùng model embedding khác nhau nên xếp hạng theo nhóm model
+    (``rank_ds_by_embedding``). Lỗi thì trả danh sách chưa lọc, như hành vi gốc.
+    """
     _list = []
     if current_assistant and current_assistant.type == 1:
         if out_ds.ds_list:
@@ -64,18 +70,9 @@ def get_ds_embedding(session: SessionDep, _ds_list, out_ds: AssistantOutDs,
             try:
                 # text = [s.get('ds_schema') for s in _list]
 
-                model = EmbeddingModelCache.get_model()
                 start_time = time.time()
-                # results = model.embed_documents(text)
-                results = [item.get('embedding') for item in _list]
-
-                q_embedding = model.embed_query(question)
-                for index in range(len(results)):
-                    item = results[index]
-                    if item:
-                        _list[index]['cosine_similarity'] = cosine_similarity(q_embedding, json.loads(item))
-
-                _list.sort(key=lambda x: x['cosine_similarity'], reverse=True)
+                # Datasource có thể dùng model embedding khác nhau: xếp hạng theo nhóm model.
+                _list = rank_ds_by_embedding(_list, question)
                 # print(len(_list))
                 end_time = time.time()
                 SQLBotLogUtil.info(str(end_time - start_time))

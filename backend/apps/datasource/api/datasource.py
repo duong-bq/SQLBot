@@ -15,6 +15,7 @@ from fastapi.responses import StreamingResponse
 from psycopg2 import sql
 from sqlalchemy import and_
 
+from apps.ai_model_config.hooks import pin_ds_models, validate_ds_models
 from apps.db.db import get_schema
 from apps.db.engine import get_engine_conn
 from apps.swagger.i18n import PLACEHOLDER_PREFIX
@@ -864,14 +865,19 @@ async def create_from_excel(
     file: UploadFile = File(..., description=f"{PLACEHOLDER_PREFIX}ds_excel"),
     name: str = Form(..., description=f"{PLACEHOLDER_PREFIX}ds_name"),
     sheetNames: List[str] = Form([], description=f"{PLACEHOLDER_PREFIX}ds_sheet_names"),
-    description: str = Form('', description=f"{PLACEHOLDER_PREFIX}ds_description")
+    description: str = Form('', description=f"{PLACEHOLDER_PREFIX}ds_description"),
+    models: Optional[str] = Form(None)
 ):
     """
     Tạo nguồn dữ liệu từ file Excel/CSV trong đúng một lời gọi.
     Ghép từ 3 hàm /parseExcel, /importToDb, /add
+
+    ``models`` là chuỗi JSON cấu hình model riêng của datasource (xem ``CreateDatasource.models``).
+    Kiểm ngay đầu handler vì ``import_to_db`` tạo bảng vật lý trước khi có datasource.
     """
     # Kiểm tra có tồn tại tên nguồn dữ liệu trùng không
     check_name(session, trans, user, CoreDatasource(name=name))
+    validate_ds_models(session, user.oid if user.oid is not None else 1, models)
 
     parsed = await parse_excel(file=file)
 
@@ -904,7 +910,7 @@ async def create_from_excel(
     create_obj = CreateDatasource(
         name=name, description=description, type="excel",
         configuration={"filename": imported["filename"], "sheets": imported["sheets"]},
-        tables=tables
+        tables=tables, models=models
     )
 
     _normalize_ds_configuration(create_obj)
@@ -983,6 +989,7 @@ async def create_from_excel_async(
     name = (req.name or '').strip()
     if not name:
         raise HTTPException(400, "Datasource name is required")
+    model_set = validate_ds_models(session, user.oid if user.oid is not None else 1, req.models)
 
     # Kiểm URL bằng những gì đọc được từ chính chuỗi, không chạm mạng. Làm trước cả việc tra tên
     # trùng vì nó rẻ hơn một câu SELECT.
@@ -1039,6 +1046,8 @@ async def create_from_excel_async(
             raise _conflict_error(existing)
 
         ds = await create_ds_importing(session, user, name, req.description)
+        # Cùng transaction với dòng datasource: worker nền embed bằng đúng model đã chốt.
+        pin_ds_models(session, ds.id, ds.oid, model_set)
         # Danh sách sheet ghi xuống NGUYÊN VĂN, chưa đối chiếu: pha này không có file để đối chiếu.
         job = create_job(session, ds_id=ds.id, oid=ds.oid, create_by=user.id, ds_name=ds.name,
                          file_path=save_path, sheet_names=list(dict.fromkeys(req.sheetNames or [])),

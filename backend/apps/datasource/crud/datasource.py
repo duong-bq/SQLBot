@@ -8,6 +8,7 @@ from sqlalchemy import and_, delete, or_, text
 from sqlbot_xpack.permissions.models.ds_rules import DsRules
 from sqlmodel import select
 
+from apps.ai_model_config.hooks import cleanup_datasource, pin_ds_models, validate_ds_models
 from apps.datasource.crud.permission import get_column_permission_fields, get_row_permission_filters, is_normal_user
 from apps.datasource.embedding.table_embedding import calc_table_embedding
 from apps.datasource.utils.utils import aes_decrypt, aes_encrypt
@@ -133,9 +134,15 @@ def check_name(session: SessionDep, trans: Trans, user: CurrentUser, ds: CoreDat
 
 @clear_cache(namespace=CacheNamespace.AUTH_INFO, cacheName=CacheName.DS_ID_LIST, keyExpression="user.oid")
 async def create_ds(session: SessionDep, trans: Trans, user: CurrentUser, create_ds: CreateDatasource):
+    """Tạo datasource, chốt cấu hình model, rồi đồng bộ bảng và sinh embedding.
+
+    ``models`` được kiểm trước khi ghi gì; cấu hình model được chốt trong cùng transaction với dòng
+    datasource và trước ``sync_table``, để job embedding nền dùng đúng model của datasource.
+    """
     ds = CoreDatasource()
     deepcopy_ignore_extra(create_ds, ds)
     check_name(session, trans, user, ds)
+    model_set = validate_ds_models(session, user.oid if user.oid is not None else 1, create_ds.models)
     ds.create_time = datetime.datetime.now()
     # status = check_status(session, ds)
     ds.create_by = user.id
@@ -147,6 +154,8 @@ async def create_ds(session: SessionDep, trans: Trans, user: CurrentUser, create
     session.flush()
     session.refresh(record)
     ds.id = record.id
+    # Chốt model trước commit và trước sync_table: embedding nền phải thấy cấu hình của datasource.
+    pin_ds_models(session, ds.id, ds.oid, model_set)
     session.commit()
 
     # save tables and fields
@@ -241,6 +250,7 @@ def update_ds_recommended_config(session: SessionDep, datasource_id: int, recomm
 
 
 async def delete_ds(session: SessionDep, id: int):
+    """Xoá datasource cùng bảng vật lý (nguồn Excel), dòng job import, cấu hình model, bảng và cột."""
     term = session.exec(select(CoreDatasource).where(CoreDatasource.id == id)).first()
     if term.type == "excel":
         # drop all tables for current datasource
@@ -259,6 +269,7 @@ async def delete_ds(session: SessionDep, id: int):
     # một nguồn dữ liệu nạp hỏng sẽ để lại một dòng job trỏ tới id không còn tồn tại, và bảng job
     # phình lên mãi. Xóa TRƯỚC khi xóa nguồn dữ liệu để nếu có lỗi thì hai bên vẫn còn khớp nhau.
     session.execute(delete(ExcelImportJob).where(ExcelImportJob.ds_id == id))
+    cleanup_datasource(session, id)
 
     session.delete(term)
     session.commit()
@@ -1229,7 +1240,7 @@ def get_table_schema(session: SessionDep, current_user: CurrentUser, ds: CoreDat
 
     # do table embedding
     if embedding and tables and settings.TABLE_EMBEDDING_ENABLED:
-        tables = calc_table_embedding(tables, question)
+        tables = calc_table_embedding(tables, question, ds_id=ds.id)
     # splice schema
     if tables:
         for s in tables:

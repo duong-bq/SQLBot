@@ -34,6 +34,7 @@ from common.core.config import settings # noqa
 from apps.system.models.system_model import SQLModel
 from apps.hooks.models.ai_sync_model import SQLModel  # noqa
 from apps.datasource.models.excel_job import SQLModel  # noqa
+import apps.ai_model_config.models  # noqa: F401  đăng ký bảng vào metadata
 
 target_metadata = SQLModel.metadata
 

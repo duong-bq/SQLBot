@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import List, Optional, Union
+from typing import Any, List, Optional, Union
 
 from pydantic import BaseModel, field_validator
 from sqlalchemy import Column, Text, BigInteger, DateTime, Identity
@@ -107,6 +107,9 @@ class CreateDatasource(BaseModel):
     oid: int = 1
     tables: List[CoreTable] = []
     recommended_config: int = 1
+    # Cấu hình model riêng của datasource (llm/embedding/rerank) do Gateway gửi. ``Any`` để FastAPI
+    # không tự validate: lỗi 422 mặc định dội lại ``input`` có api_key. Kiểm ở ``create_ds``.
+    models: Any = None
 
 
 class RecommendedProblemResponse:
@@ -388,6 +391,8 @@ class CreateFromExcelUrlRequest(BaseModel):
     name: str = Field(..., description=f"{PLACEHOLDER_PREFIX}ds_name")
     sheetNames: List[str] = Field(default_factory=list, description=f"{PLACEHOLDER_PREFIX}ds_sheet_names")
     description: str = Field('', description=f"{PLACEHOLDER_PREFIX}ds_description")
+    # Như ``CreateDatasource.models``; kiểm thủ công ở đầu handler.
+    models: Any = None
 
 
 class CreateFromExcelAcceptedResponse(BaseModel):

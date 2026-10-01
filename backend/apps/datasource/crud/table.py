@@ -1,12 +1,10 @@
-import json
 import time
 import traceback
 from typing import List
 
-from openai import BadRequestError
 from sqlalchemy import and_, select, update
 
-from apps.ai_model.embedding import EmbeddingModelCache
+from apps.ai_model_config.embedding import DsEmbedder
 from common.core.config import settings
 from common.core.deps import SessionDep
 from common.utils.utils import SQLBotLogUtil
@@ -56,6 +54,11 @@ def run_fill_empty_table_and_ds_embedding(session_maker):
 
 
 def save_table_embedding(session_maker, ids: List[int]):
+    """Sinh và lưu embedding cho từng bảng, chạy trong thread nền.
+
+    Mỗi bảng embed bằng model của datasource chứa nó (``DsEmbedder``), vì một lượt có thể trộn bảng
+    của nhiều datasource. Embed hỏng thì bỏ qua bảng đó, giữ nguyên vector cũ.
+    """
     if not settings.TABLE_EMBEDDING_ENABLED:
         return
 
@@ -64,7 +67,7 @@ def save_table_embedding(session_maker, ids: List[int]):
     try:
         SQLBotLogUtil.info('start table embedding')
         start_time = time.time()
-        model = EmbeddingModelCache.get_model()
+        embedder = DsEmbedder()
         session = session_maker()
         for _id in ids:
             table = session.query(CoreTable).filter(CoreTable.id == _id).first()
@@ -93,7 +96,10 @@ def save_table_embedding(session_maker, ids: List[int]):
                 schema_table += ",\n".join(field_list)
             schema_table += '\n]\n'
             # table_schema.append(schema_table)
-            emb = json.dumps(model.embed_query(schema_table))
+            # Model theo datasource của bảng; lỗi được cô lập theo model, xem DsEmbedder.
+            emb = embedder.embed(table.ds_id, schema_table)
+            if emb is None:
+                continue
 
             stmt = update(CoreTable).where(and_(CoreTable.id == _id)).values(embedding=emb)
             session.execute(stmt)
@@ -108,6 +114,11 @@ def save_table_embedding(session_maker, ids: List[int]):
 
 
 def save_ds_embedding(session_maker, ids: List[int]):
+    """Sinh và lưu embedding cấp datasource (dùng để chọn datasource), chạy trong thread nền.
+
+    Embed bằng model của chính datasource; văn bản vượt ngữ cảnh thì thử lại với bản rút gọn chỉ có
+    tên bảng. Embed hỏng thì bỏ qua datasource đó, giữ nguyên vector cũ.
+    """
     if not settings.TABLE_EMBEDDING_ENABLED:
         return
 
@@ -116,7 +127,7 @@ def save_ds_embedding(session_maker, ids: List[int]):
     try:
         SQLBotLogUtil.info('start datasource embedding')
         start_time = time.time()
-        model = EmbeddingModelCache.get_model()
+        embedder = DsEmbedder()
         session = session_maker()
         for _id in ids:
             schema_table = ''
@@ -155,14 +166,10 @@ def save_ds_embedding(session_maker, ids: List[int]):
                     schema_table += ",\n".join(field_list)
                 schema_table += '\n]\n'
             # table_schema.append(schema_table)
-            try:
-                emb = json.dumps(model.embed_query(schema_table))
-            except BadRequestError:
-                SQLBotLogUtil.info(
-                    f'datasource {_id} embedding text exceeds context length, '
-                    f'retry with table-name-only summary'
-                )
-                emb = json.dumps(model.embed_query(summary_table))
+            # Nhánh rút gọn khi vượt ngữ cảnh (lỗi 400) nằm trong DsEmbedder.embed.
+            emb = embedder.embed(_id, schema_table, fallback_text=summary_table)
+            if emb is None:
+                continue
 
             stmt = update(CoreDatasource).where(and_(CoreDatasource.id == _id)).values(embedding=emb)
             session.execute(stmt)
