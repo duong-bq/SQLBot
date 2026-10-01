@@ -156,7 +156,8 @@ def test_save_table_embedding_theo_datasource(engine, models, monkeypatch):
     assert json.loads(got[3]) == [1.0, 1.0]
 
 
-def test_calc_table_embedding_dung_model_cua_datasource(engine, models):
+@pytest.mark.usefixtures("engine")
+def test_calc_table_embedding_dung_model_cua_datasource(models):
     tables = [{"id": 1, "table_name": "a", "schema_table": "a", "embedding": json.dumps([0.0, 1.0])},
               {"id": 2, "table_name": "b", "schema_table": "b", "embedding": json.dumps([1.0, 0.0])}]
     ranked = table_embedding.calc_table_embedding(tables, "q", ds_id=12)

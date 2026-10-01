@@ -866,7 +866,7 @@ async def create_from_excel(
     name: str = Form(..., description=f"{PLACEHOLDER_PREFIX}ds_name"),
     sheetNames: List[str] = Form([], description=f"{PLACEHOLDER_PREFIX}ds_sheet_names"),
     description: str = Form('', description=f"{PLACEHOLDER_PREFIX}ds_description"),
-    models: Optional[str] = Form(None)
+    models: str | None = Form(None)
 ):
     """
     Tạo nguồn dữ liệu từ file Excel/CSV trong đúng một lời gọi.

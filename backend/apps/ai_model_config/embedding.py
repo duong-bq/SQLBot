@@ -7,7 +7,6 @@ Có dòng embedding của datasource thì dùng model đó; không có thì dùn
 import json
 import threading
 from collections import OrderedDict
-from typing import Optional
 
 from langchain_core.embeddings import Embeddings
 from openai import BadRequestError
@@ -70,7 +69,7 @@ def _embedder_for_row(row: AiModelConfig) -> Embeddings:
     return model
 
 
-def get_embedding_for_ds(ds_id: Optional[int]) -> Embeddings:
+def get_embedding_for_ds(ds_id: int | None) -> Embeddings:
     """Model embedding của datasource; không có dòng cấu hình thì dùng model chung."""
     row = _embedding_rows([ds_id]).get(ds_id) if ds_id else None
     if row is None:
@@ -88,16 +87,16 @@ class DsEmbedder:
 
     def __init__(self):
         """Khởi tạo bộ nhớ tạm cho một lượt job."""
-        self._rows: dict[int, Optional[AiModelConfig]] = {}
+        self._rows: dict[int, AiModelConfig | None] = {}
         self._broken: set = set()
 
-    def _row(self, ds_id: int) -> Optional[AiModelConfig]:
+    def _row(self, ds_id: int) -> AiModelConfig | None:
         """Dòng embedding của datasource, tra một lần mỗi lượt job."""
         if ds_id not in self._rows:
             self._rows[ds_id] = _embedding_rows([ds_id]).get(ds_id)
         return self._rows[ds_id]
 
-    def embed(self, ds_id: int, text: str, fallback_text: Optional[str] = None) -> Optional[str]:
+    def embed(self, ds_id: int, text: str, fallback_text: str | None = None) -> str | None:
         """Trả vector dạng chuỗi JSON để ghi thẳng vào cột ``embedding``, hoặc None nếu bỏ qua.
 
         ``fallback_text`` là bản rút gọn dùng khi văn bản vượt ngữ cảnh của model (lỗi 400). Lỗi

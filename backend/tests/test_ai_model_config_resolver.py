@@ -97,7 +97,8 @@ def test_model_rieng_cua_tro_ly_thang(session, fake_default):
     assert fake_default == [99]
 
 
-def test_tro_ly_datasource_ngoai_bo_qua_cau_hinh(session, fake_default):
+@pytest.mark.usefixtures("fake_default")
+def test_tro_ly_datasource_ngoai_bo_qua_cau_hinh(session):
     question = _chat(session, 1, datasource=10)
     assert _resolve(session, question, skip_scoped=True) is DEFAULT
 

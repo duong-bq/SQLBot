@@ -7,7 +7,11 @@ from typing import Any
 
 from sqlmodel import Session
 
-from apps.ai_model_config.crud import check_custom_hosts, delete_scope, pin_datasource_models
+from apps.ai_model_config.crud import (
+    check_custom_hosts,
+    delete_scope,
+    pin_datasource_models,
+)
 from apps.ai_model_config.errors import ModelConfigError
 from apps.ai_model_config.models import SCOPE_DATASOURCE, SCOPE_WORKSPACE
 from apps.ai_model_config.schemas import ModelSetIn, parse_model_set

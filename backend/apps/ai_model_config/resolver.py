@@ -7,7 +7,6 @@ Tách khỏi ``embedding.py`` vì module này cần ``model_factory`` (kéo theo
 embedding được import từ rất sớm trong chuỗi import của upstream.
 """
 
-from typing import Optional
 
 from sqlmodel import Session
 
@@ -24,7 +23,7 @@ from apps.chat.models.chat_model import Chat
 from apps.datasource.models.datasource import CoreDatasource
 
 
-def _scoped_llm_row(session: Session, chat_question) -> Optional[AiModelConfig]:
+def _scoped_llm_row(session: Session, chat_question) -> AiModelConfig | None:
     """Dòng LLM áp cho lượt hỏi: của datasource nếu chat đã có datasource, không thì của workspace.
 
     Datasource lấy giống ``LLMService.__init__``: datasource đã gắn vào chat thắng
@@ -49,7 +48,7 @@ def _scoped_llm_row(session: Session, chat_question) -> Optional[AiModelConfig]:
 async def resolve_llm_config(
     session: Session,
     chat_question,
-    specialized_model_id: Optional[int] = None,
+    specialized_model_id: int | None = None,
     skip_scoped: bool = False,
 ) -> LLMConfig:
     """Chọn cấu hình LLM cho một lượt hỏi.

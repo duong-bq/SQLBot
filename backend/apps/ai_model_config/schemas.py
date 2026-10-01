@@ -5,10 +5,18 @@ Gateway gửi cho LightRAG. Trường lạ bị bỏ qua để Gateway thêm tr�
 """
 
 import json
-from typing import Any, Iterator, Optional
+from collections.abc import Iterator
+from typing import Any
 from urllib.parse import urlsplit
 
-from pydantic import BaseModel, ConfigDict, Field, SecretStr, ValidationError, field_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    SecretStr,
+    ValidationError,
+    field_validator,
+)
 
 from apps.ai_model_config.errors import invalid
 from apps.ai_model_config.models import (
@@ -89,9 +97,9 @@ class ModelSetIn(BaseModel):
 
     model_config = ConfigDict(extra="ignore")
 
-    llm: Optional[OpenAIEndpointIn] = None
-    embedding: Optional[OpenAIEndpointIn] = None
-    rerank: Optional[RerankEndpointIn] = None
+    llm: OpenAIEndpointIn | None = None
+    embedding: OpenAIEndpointIn | None = None
+    rerank: RerankEndpointIn | None = None
 
     def blocks(self) -> Iterator[tuple[str, _EndpointBase]]:
         """Lần lượt trả ``(model_type, khối)`` cho các khối có gửi."""

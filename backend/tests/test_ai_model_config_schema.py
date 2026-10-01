@@ -7,6 +7,8 @@ và khối nào dùng khoá URL nào.
 # Import sqlbot_xpack TRƯỚC để gỡ vòng import lẫn nhau của upstream.
 import sqlbot_xpack  # noqa: F401  isort:skip
 
+import json
+
 import pytest
 
 from apps.ai_model_config.errors import CODE_INVALID, ModelConfigError
@@ -36,11 +38,10 @@ def test_none_va_chuoi_rong_la_bo_trong():
 
 
 def test_doc_du_ba_khoi_tu_chuoi_json():
-    raw = (
-        '{"llm": {"base_url": "http://gw:4000/v1/", "api_key": "%s", "model": "mc-1"},'
-        ' "rerank": {"url": "http://gw:4000/v2/rerank", "api_key": "%s", "model": "mc-3"}}'
-        % (KEY, KEY)
-    )
+    raw = json.dumps({
+        "llm": {"base_url": "http://gw:4000/v1/", "api_key": KEY, "model": "mc-1"},
+        "rerank": {"url": "http://gw:4000/v2/rerank", "api_key": KEY, "model": "mc-3"},
+    })
     model_set = parse_model_set(raw)
     blocks = dict(model_set.blocks())
     assert list(blocks) == ["llm", "rerank"]

@@ -13,7 +13,11 @@ import pytest
 from sqlmodel import Session, create_engine
 
 import apps.ai_model_config.crud as crud
-from apps.ai_model_config.errors import CODE_INVALID, CODE_SECRET_UNSTABLE, ModelConfigError
+from apps.ai_model_config.errors import (
+    CODE_INVALID,
+    CODE_SECRET_UNSTABLE,
+    ModelConfigError,
+)
 from apps.ai_model_config.models import AiModelConfig
 from apps.ai_model_config.schemas import parse_model_set
 from common.utils.aes_crypto import sqlbot_aes_decrypt
