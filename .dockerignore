@@ -1,12 +1,21 @@
-# Python
-backend/__pycache__
-backend/app.egg-info
-backend/*.pyc
-backend/.mypy_cache
-backend/.coverage
-backend/htmlcov
-backend/.venv
-backend/.gitignore
-backend/README.md
-backend/scripts
-backend/.DS_Store
+# Ignore của build image backend (Dockerfile ở gốc repo).
+
+# Chặn hết rồi mở lại đúng thứ cần. Cách này an toàn hơn liệt kê từng thứ để loại:
+# thêm file rác vào repo về sau cũng không tự lọt vào context.
+*
+
+!alembic
+!alembic.ini
+!apps
+!common
+!locales
+!templates
+!main.py
+!pyproject.toml
+!uv.lock
+!docker/backend-entrypoint.sh
+
+# Loại trong các thư mục vừa mở
+**/__pycache__
+**/*.pyc
+templates/templates.7z

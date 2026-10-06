@@ -1,107 +1,232 @@
-stages:
-  - build
-  - deploy
+# ===========================================================
+# SQLBot - GitLab CI (test, build & push to Harbor)
+# CD: Argo CD. Branches: test | staging | main. Runner tag: sqlbot
+# CI variables set in GitLab, never here: HARBOR_USER, HARBOR_PASSWORD, GITOPS_PUSH_TOKEN (write access to devops/cicd/h04); optional BASE_VERSION.
+# ===========================================================
+
+workflow:
+  rules:
+    - if: '$CI_COMMIT_BRANCH =~ /^(test|staging|main)$/'
+      when: always
+    - when: never
+
+default:
+  tags:
+    - sqlbot
 
 variables:
-  IMAGE_NAME: "$HARBOR_REGISTRY/ai-sqlbot/sqlbot-backend"
-  IMAGE_TAG: "test-$CI_COMMIT_SHORT_SHA"
+  DOCKER_BUILDKIT: "1"
+  HARBOR_URL: "dockerhub.elcomlab.com"
+  HARBOR_PROJECT: "h04"
+  HARBOR_REPO: "h04-sqlbot"
+  DOCKER_BUILDKIT_NETWORK: "h04-buildkit"
+  SQLBOT_BUILDX_BUILDER: "h04-sqlbot-builder"
 
-build-test:
+stages:
+  - test
+  - build
+  - push
+  - deploy
+  - cleanup
+
+.sqlbot_rules_env:
+  rules:
+    - if: $CI_COMMIT_BRANCH == "test"
+      variables:
+        TAG_PREFIX: "test-"
+        DEPLOY_ENVIRONMENT: "test"
+    - if: $CI_COMMIT_BRANCH == "staging"
+      variables:
+        TAG_PREFIX: "stg-"
+        DEPLOY_ENVIRONMENT: "staging"
+    - if: $CI_COMMIT_BRANCH == "main"
+      variables:
+        TAG_PREFIX: "prod-"
+        DEPLOY_ENVIRONMENT: "production"
+  environment:
+    name: $DEPLOY_ENVIRONMENT
+
+.sqlbot_rules_deploy:
+  rules:
+    - if: $CI_COMMIT_BRANCH == "test"
+      variables:
+        TAG_PREFIX: "test-"
+        DEPLOY_ENVIRONMENT: "test"
+    - if: $CI_COMMIT_BRANCH == "staging"
+      variables:
+        TAG_PREFIX: "stg-"
+        DEPLOY_ENVIRONMENT: "staging"
+  environment:
+    name: $DEPLOY_ENVIRONMENT
+
+test:
+  stage: test
+  rules:
+    - if: '$CI_COMMIT_BRANCH =~ /^(test|staging|main)$/'
+  # Installs the locked dependencies (torch CPU wheels, ~1.7 GB) on the same base image the service runs on, then runs the whole suite.
+  # sqlbot_xpack creates UPLOAD_DIR at import, so every data path points at /tmp. The tests that need a real Postgres skip without SQLBOT_TEST_DB_URL.
+  script:
+    - |
+      docker run --rm -v "${CI_PROJECT_DIR}:/src:ro" \
+        -e UV_HTTP_TIMEOUT=600 -e UV_CONCURRENT_DOWNLOADS=4 \
+        -e BASE_DIR=/tmp/sqlbot -e UPLOAD_DIR=/tmp/sqlbot/data/file -e EXCEL_PATH=/tmp/sqlbot/data/excel \
+        -e MCP_IMAGE_PATH=/tmp/sqlbot/images -e LOCAL_MODEL_PATH=/tmp/sqlbot/models \
+        dockerhub.elcomlab.com/wolfi/python:v3.11.17@sha256:fdf85f09b2ccf0d5cb8d68549ddbf615adf0129019f69546bcbc9e8ee73a523c sh -c '
+        cp -r /src /home/appuser/work && cd /home/appuser/work &&
+        uv sync -q --frozen --extra cpu --python /usr/bin/python3 &&
+        .venv/bin/python -m pytest tests -q -p no:cacheprovider'
+
+build:
+  extends: .sqlbot_rules_env
   stage: build
-  tags:
-    - sqlbot
-  image: docker:27
-
+  variables:
+    # BASE_VERSION: "test-1.0.0" -> build test-1.0.1
+    BASE_VERSION: ""
   script:
-    - echo "===== BUILD INFO ====="
-    - echo "IMAGE_NAME=$IMAGE_NAME"
-    - echo "IMAGE_TAG=$IMAGE_TAG"
+    - echo "${HARBOR_PASSWORD}" | docker login "${HARBOR_URL}" -u "${HARBOR_USER}" --password-stdin
 
-    - echo "===== LOGIN HARBOR ====="
-    - echo "$HARBOR_PASSWORD" | docker login "$HARBOR_REGISTRY" -u "$HARBOR_USERNAME" --password-stdin
+    - |
+      NET="${DOCKER_BUILDKIT_NETWORK}"
+      BUILDER="${SQLBOT_BUILDX_BUILDER}"
+      CONFIG_OPT=""
+      if [ -n "${BUILDKITD_CONFIG:-}" ]; then
+        CONFIG_OPT="--buildkitd-config ${BUILDKITD_CONFIG}"
+      fi
+      docker network inspect "${NET}" >/dev/null 2>&1 || { echo "ERROR: network '${NET}' does not exist"; exit 1; }
+      if ! docker buildx inspect "${BUILDER}" >/dev/null 2>&1; then
+        docker buildx create --name "${BUILDER}" --driver docker-container \
+          --driver-opt "network=${NET}" ${CONFIG_OPT} --bootstrap
+      fi
+      docker buildx use "${BUILDER}"
 
-    - echo "===== BUILD BACKEND ====="
-    - docker build -f Dockerfile.backend -t "$IMAGE_NAME:$IMAGE_TAG" .
+    - |
+      HARBOR_IMAGE="${HARBOR_URL}/${HARBOR_PROJECT}/${HARBOR_REPO}"
+      TAG_PREFIX="${TAG_PREFIX:-}"
+      BASE_VERSION="${BASE_VERSION:-}"
+      if [ -n "${BASE_VERSION}" ]; then
+        CLEAN_BASE="${BASE_VERSION#${TAG_PREFIX}}"
+        IFS='.' read -r MAJOR MINOR PATCH <<< "${CLEAN_BASE}"
+        NEW_TAG="${TAG_PREFIX}${MAJOR}.${MINOR}.$((PATCH + 1))"
+      else
+        if [ -n "${TAG_PREFIX}" ]; then TAG_REGEX="^${TAG_PREFIX}[0-9]+\\.[0-9]+\\.[0-9]+$"; else TAG_REGEX="^[0-9]+\\.[0-9]+\\.[0-9]+$"; fi
+        API_URL="https://${HARBOR_URL}/api/v2.0/projects/${HARBOR_PROJECT}/repositories/${HARBOR_REPO}/artifacts?with_tag=true&page_size=50&sort=-push_time"
+        RAW_JSON=$(curl -sf -u "${HARBOR_USER}:${HARBOR_PASSWORD}" "${API_URL}" || echo "")
+        PREVIOUS_SEMVER_TAG=$(echo "${RAW_JSON}" | jq -r --arg re "${TAG_REGEX}" '[.[].tags[]?.name | select(test($re))][0] // empty')
+        if [ -z "${PREVIOUS_SEMVER_TAG}" ] || [ "${PREVIOUS_SEMVER_TAG}" = "null" ]; then
+          NEW_TAG="${TAG_PREFIX}1.0.1"
+        else
+          BASE="${PREVIOUS_SEMVER_TAG#${TAG_PREFIX}}"
+          IFS='.' read -r MAJOR MINOR PATCH <<< "${BASE}"
+          NEW_TAG="${TAG_PREFIX}${MAJOR}.${MINOR}.$((PATCH + 1))"
+        fi
+      fi
+      { echo "HARBOR_IMAGE=${HARBOR_IMAGE}"; echo "NEW_TAG=${NEW_TAG}"; } > ci-build.env
 
-    - echo "===== PUSH BACKEND ====="
-    - docker push "$IMAGE_NAME:$IMAGE_TAG"
+    - |
+      set -a && . ./ci-build.env && set +a
+      docker buildx build --builder "${SQLBOT_BUILDX_BUILDER}" \
+        --provenance=false --sbom=false \
+        -t "${HARBOR_IMAGE}:${NEW_TAG}" --load .
+      { echo "HARBOR_IMAGE=${HARBOR_IMAGE}"; echo "IMAGE_TAG_VERSION=${NEW_TAG}"; } > image.env
 
-    - echo "===== BUILD SUCCESS ====="
+    - docker logout "${HARBOR_URL}"
 
+  artifacts:
+    reports:
+      dotenv: image.env
+    expire_in: 1 day
 
-deploy-test:
+push:
+  extends: .sqlbot_rules_env
+  stage: push
+  needs: ["build"]
+  script:
+    - echo "${HARBOR_PASSWORD}" | docker login "${HARBOR_URL}" -u "${HARBOR_USER}" --password-stdin
+    - docker push ${HARBOR_IMAGE}:${IMAGE_TAG_VERSION}
+    - docker logout "${HARBOR_URL}"
+    - echo "Pushed ${HARBOR_IMAGE}:${IMAGE_TAG_VERSION}"
+
+deploy:
+  extends: .sqlbot_rules_deploy
   stage: deploy
-  tags:
-    - sqlbot
-  image: alpine:latest
-
-  before_script:
-    - apk add --no-cache openssh-client
-    - mkdir -p ~/.ssh
-    - echo "$DEPLOY_SSH_PRIVATE_KEY" > ~/.ssh/id_ed25519
-    - chmod 600 ~/.ssh/id_ed25519
-    - ssh-keyscan -H "$TEST_HOST" >> ~/.ssh/known_hosts
-
+  resource_group: h04-sqlbot-$DEPLOY_ENVIRONMENT
+  needs: ["build", "push"]
   script:
-
-    - echo "===== DEPLOY INFO ====="
-    - echo "TEST_HOST=$TEST_HOST"
-    - echo "TEST_USER=$TEST_USER"
-    - echo "IMAGE=$IMAGE_NAME:$IMAGE_TAG"
-
-    - echo "===== TEST SSH ====="
-    - ssh "$TEST_USER@$TEST_HOST" "hostname"
-    - ssh "$TEST_USER@$TEST_HOST" "whoami"
-
-    - echo "===== CHECK DOCKER ====="
-    - ssh "$TEST_USER@$TEST_HOST" "docker version"
-
-    - echo "===== LOGIN HARBOR ON TEST ====="
     - |
-      ssh "$TEST_USER@$TEST_HOST" \
-        "echo '$HARBOR_PASSWORD' | docker login '$HARBOR_REGISTRY' -u '$HARBOR_USERNAME' --password-stdin"
+      if [ -z "${IMAGE_TAG_VERSION}" ]; then
+        echo "ERROR: IMAGE_TAG_VERSION missing (dotenv from the build job required)"
+        exit 1
+      fi
+      if [ -z "${GITOPS_PUSH_TOKEN:-}" ]; then
+        echo "ERROR: CI variable GITOPS_PUSH_TOKEN missing (Project Access Token of devops/cicd/h04, scope write_repository)."
+        exit 1
+      fi
 
-    - echo "===== PULL IMAGE ====="
     - |
-      ssh "$TEST_USER@$TEST_HOST" \
-        "docker pull '$IMAGE_NAME:$IMAGE_TAG'"
+      GITOPS_DIR=/data/argocd/h04
+      GITOPS_URL="http://gitlab-ci-token:${GITOPS_PUSH_TOKEN}@${CI_SERVER_HOST}/devops/cicd/h04.git"
+      if [ ! -d "${GITOPS_DIR}/.git" ]; then
+        git clone --branch main "${GITOPS_URL}" "${GITOPS_DIR}"
+        git -C "${GITOPS_DIR}" remote set-url origin "http://${CI_SERVER_HOST}/devops/cicd/h04.git"
+      fi
+      exec 9>"${GITOPS_DIR}/.git/deploy.lock"
+      flock -w 600 9
+      cd "${GITOPS_DIR}"
+      git config user.email "argocd@elcom.com.vn"
+      git config user.name "argocd"
+      git fetch "${GITOPS_URL}" main
+      git reset --hard FETCH_HEAD
+      git clean -fd
+      f="products/h04-sqlbot/${DEPLOY_ENVIRONMENT}.yaml"
+      if [ ! -f "${f}" ]; then
+        echo "ERROR: ${f} not found in the gitops repository"
+        exit 1
+      fi
+      # Pipelines can finish out of order (1.0.7 after 1.0.8). Keep the newer tag instead of rolling back; both carry the same environment prefix, so a version sort is enough.
+      current="$(sed -n 's/^  tag: "\(.*\)"$/\1/p' "${f}")"
+      if [ -n "${current}" ] && [ "$(printf '%s\n%s\n' "${current}" "${IMAGE_TAG_VERSION}" | sort -V | tail -n 1)" != "${IMAGE_TAG_VERSION}" ]; then
+        echo "Current tag ${current} is newer than ${IMAGE_TAG_VERSION}, leaving it"
+        exit 0
+      fi
+      # The tag is the only line that starts with two spaces and "tag:" (under image:); the env list uses "- name:" and "  value:".
+      sed -i "s/^  tag: \".*\"$/  tag: \"${IMAGE_TAG_VERSION}\"/" "${f}"
+      git add "${f}"
+      if git diff --cached --quiet; then
+        echo "Tag unchanged, nothing to commit"
+        exit 0
+      fi
+      git commit -m "deploy(${DEPLOY_ENVIRONMENT}): bump image tag to ${IMAGE_TAG_VERSION} [skip ci]"
+      for attempt in 1 2 3; do
+        git push "${GITOPS_URL}" HEAD:main && exit 0
+        git pull --rebase "${GITOPS_URL}" main
+      done
+      echo "ERROR: could not push to the gitops repo after 3 attempts"
+      exit 1
 
-    - echo "===== CHECK COMPOSE FILE ====="
+cleanup:
+  extends: .sqlbot_rules_env
+  stage: cleanup
+  needs: ["build", "push"]
+  script:
     - |
-      ssh "$TEST_USER@$TEST_HOST" \
-        "ls -lh /data/ngocpt/sqlbot/docker-compose.backend.yml"
-
-    - echo "===== VALIDATE COMPOSE ====="
-    - |
-      ssh "$TEST_USER@$TEST_HOST" \
-        "cd /data/ngocpt/sqlbot && \
-        BACKEND_IMAGE='$IMAGE_NAME:$IMAGE_TAG' \
-        docker compose -f docker-compose.backend.yml config"
-
-    - echo "===== DEPLOY DOCKER COMPOSE ====="
-    - |
-      ssh "$TEST_USER@$TEST_HOST" \
-        "cd /data/ngocpt/sqlbot && \
-        BACKEND_IMAGE='$IMAGE_NAME:$IMAGE_TAG' \
-        docker compose -f docker-compose.backend.yml up -d"
-
-    - echo "===== CHECK CONTAINER STATUS ====="
-    - |
-      ssh "$TEST_USER@$TEST_HOST" \
-        "cd /data/ngocpt/sqlbot && \
-        BACKEND_IMAGE='$IMAGE_NAME:$IMAGE_TAG' \
-        docker compose -f docker-compose.backend.yml ps"
-
-    - echo "===== CHECK BACKEND IMAGE ====="
-    - |
-      ssh "$TEST_USER@$TEST_HOST" \
-        "docker inspect sqlbot-backend --format '{{.Config.Image}}'"
-
-    - echo "===== CHECK BACKEND STATUS ====="
-    - |
-      ssh "$TEST_USER@$TEST_HOST" \
-        "docker ps --filter 'name=sqlbot-backend' --format 'table {{.Names}}\t{{.Status}}\t{{.Image}}'"
-
-    - echo "========================================"
-    - echo "DEPLOY TEST SUCCESS"
-    - echo "========================================"
+      HARBOR_IMAGE="${HARBOR_IMAGE:-${HARBOR_URL}/${HARBOR_PROJECT}/${HARBOR_REPO}}"
+      if [ -z "${IMAGE_TAG_VERSION}" ] || [ -z "${HARBOR_IMAGE}" ]; then exit 0; fi
+      docker images "${HARBOR_IMAGE}" --format '{{.Repository}}:{{.Tag}}' | while read -r img; do
+        TAG="${img##*:}"
+        case "${img}" in
+          "${HARBOR_IMAGE}:${IMAGE_TAG_VERSION}") ;;
+          "${HARBOR_IMAGE}:<none>"|"${HARBOR_IMAGE}:") ;;
+          *)
+            if [ -n "${TAG_PREFIX}" ]; then
+              case "${TAG}" in
+                "${TAG_PREFIX}"*) docker rmi "${img}" || true ;;
+              esac
+            else
+              case "${TAG}" in
+                dev-*|stg-*|test-*|prod-*) ;;
+                *) docker rmi "${img}" || true ;;
+              esac
+            fi
+            ;;
+        esac
+      done
