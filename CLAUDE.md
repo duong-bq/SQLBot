@@ -86,8 +86,8 @@ Xong một task **có sửa code** thì ngay lập tức đề xuất với user
   |---|---|
   | Pha trong pipeline, `ChatFinishStep`, vòng retry/hạ cấp | `docs/TEXT2SQL_PIPELINE.md` |
   | Prompt trong `templates/` | `docs/TEXT2SQL_PIPELINE.md` |
-  | Event SSE (thêm/bỏ/đổi schema) | `docs/TEXT2SQL_PIPELINE.md` **và** `backend/scripts/chat_stream_demo/API_SPEC.md` |
-  | Endpoint datasource | `backend/scripts/chat_stream_demo/DATASOURCE_API_SPEC.md` |
+  | Event SSE (thêm/bỏ/đổi schema) | `docs/TEXT2SQL_PIPELINE.md` **và** `scripts/chat_stream_demo/API_SPEC.md` |
+  | Endpoint datasource | `scripts/chat_stream_demo/DATASOURCE_API_SPEC.md` |
   | Biến trong `common/core/config.py` | `docs/OPERATIONS.md` |
   | Cấu trúc thư mục, model DB, migration, cách chạy/deploy | `docs/BACKEND_ARCHITECTURE.md` / `docs/OPERATIONS.md` |
   | Phát hiện một bẫy mới (hành vi im lặng, lỗi khó đoán) | mục "Bẫy đã biết" của `docs/OPERATIONS.md` |

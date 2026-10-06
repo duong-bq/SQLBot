@@ -8,7 +8,7 @@ Cách lấy JWT: dùng POST /mcp/access_token thay vì /login/access-token, vì 
 username/password qua sqlbot_decrypt (mã hóa phía frontend, hàm giải mã nằm trong package biên dịch
 sẵn sqlbot_xpack) nên không gọi thẳng bằng script được. JWT hai đường sinh ra là như nhau.
 
-Chạy (từ thư mục backend/):
+Chạy (từ gốc repo):
     .venv/bin/python scripts/chat_stream_demo/01_chat_standard.py
     .venv/bin/python scripts/chat_stream_demo/02_chat_mcp.py
 """

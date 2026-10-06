@@ -28,7 +28,7 @@ Ba câu hỏi đã chốt qua trao đổi trực tiếp với user:
 
 ## Thiết kế
 
-### 1. `SyncEnvelope` (`backend/apps/hooks/schemas/ai_sync_schema.py`)
+### 1. `SyncEnvelope` (`apps/hooks/schemas/ai_sync_schema.py`)
 
 - Xoá field `version`, xoá field `timestamp`.
 - Đổi tên field `data` → `payload` (cả tên Python lẫn key JSON, không còn `AliasChoices`) — tránh

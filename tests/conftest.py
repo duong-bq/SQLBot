@@ -1,4 +1,4 @@
-"""Fixture dùng chung cho test: đưa `backend/` vào sys.path và cấp session Postgres thật.
+"""Fixture dùng chung cho test: đưa thư mục gốc repo vào sys.path và cấp session Postgres thật.
 
 Repo không có hạ tầng test DB sẵn; các test cần JSONB / partial unique index / ON CONFLICT nên
 không thể chạy trên SQLite. Fixture `pg_url` skip (không fail) khi thiếu SQLBOT_TEST_DB_URL để
@@ -11,9 +11,9 @@ from pathlib import Path
 
 import pytest
 
-BACKEND_DIR = Path(__file__).resolve().parents[1] / "backend"
-if str(BACKEND_DIR) not in sys.path:
-    sys.path.insert(0, str(BACKEND_DIR))
+ROOT_DIR = Path(__file__).resolve().parents[1]
+if str(ROOT_DIR) not in sys.path:
+    sys.path.insert(0, str(ROOT_DIR))
 
 # `main.py` import `sqlbot_xpack` độc lập TRƯỚC bất kỳ module `apps.*` nào. Nếu bỏ dòng này, module
 # đầu tiên import `apps.system.schemas.permission` (vd `apps.hooks.api.ai_sync`) sẽ kích hoạt vòng

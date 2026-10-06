@@ -4,7 +4,7 @@
 
 **Goal:** Dựng endpoint `POST /api/v1/hooks/ai-sync` làm cổng tiếp nhận bản tin đồng bộ từ hệ thống SW, phase này chỉ triển khai `actionType = 1` (AUTHORIZATION_SYNC), ghi audit vào `ai_sync_hook_logs` và replace snapshot quyền vào `ai_user_permissions`.
 
-**Architecture:** Domain mới `backend/apps/hooks/` ngang hàng với `apps/chat`, `apps/datasource`. Route chỉ lo giao thức (xác thực static token, đọc body thô, ghi audit, dịch lỗi thành HTTP status); nghiệp vụ của từng `actionType` nằm trong handler riêng, tra qua dict `ACTION_HANDLERS`. Ba pha commit thủ công để dòng audit sống sót khi pha nghiệp vụ rollback.
+**Architecture:** Domain mới `apps/hooks/` ngang hàng với `apps/chat`, `apps/datasource`. Route chỉ lo giao thức (xác thực static token, đọc body thô, ghi audit, dịch lỗi thành HTTP status); nghiệp vụ của từng `actionType` nằm trong handler riêng, tra qua dict `ACTION_HANDLERS`. Ba pha commit thủ công để dòng audit sống sót khi pha nghiệp vụ rollback.
 
 **Tech Stack:** FastAPI, SQLModel/SQLAlchemy 2.x, Pydantic v2, Alembic, PostgreSQL 16/17, pytest + unittest.mock.
 
@@ -14,31 +14,31 @@
 
 - Mọi hàm viết mới **phải có docstring tiếng Việt**, nêu mục đích + giả định/bẫy, không mô tả lại từng dòng. Thuật ngữ IT giữ nguyên tiếng Anh.
 - Commit message: **một dòng**, tiếng Việt, tiền tố Conventional Commits.
-- Python `==3.11.*`, chạy mọi lệnh qua `uv run --directory backend`.
+- Python `==3.11.*`, chạy mọi lệnh qua `uv run` từ gốc repo.
 - Ruff select `E,W,F,I,B,C4,UP,ARG001` (`E501` được ignore).
 - **Không** đụng pipeline Text2SQL (`apps/chat/task/llm.py`).
-- Response của hook luôn là `JSONResponse` trả trực tiếp, để `ResponseMiddleware` bỏ qua ở [response_middleware.py:43](../../../backend/common/core/response_middleware.py#L43) — không bọc envelope `{code,data,msg}`.
+- Response của hook luôn là `JSONResponse` trả trực tiếp, để `ResponseMiddleware` bỏ qua ở [response_middleware.py:43](../../../common/core/response_middleware.py#L43) — không bọc envelope `{code,data,msg}`.
   > **Giả định này SAI, đã sửa sau khi test trên app thật.** `isinstance(response, JSONResponse)` không bao giờ đúng khi có nhiều `BaseHTTPMiddleware` xếp chồng. Phải khai path vào `direct_paths` — xem [OPERATIONS.md §7.8](../../OPERATIONS.md).
 - `actionType` chưa triển khai **phải** trả lỗi, tuyệt đối không im lặng bỏ qua.
 - Không log giá trị `AI_SYNC_HOOK_TOKEN` ở bất cứ đâu; so sánh token bằng `secrets.compare_digest`.
-- Test đặt ở `tests/` (root repo), chạy `pytest ../tests` từ `backend/`.
+- Test đặt ở `tests/` (root repo), chạy `pytest tests` từ gốc repo.
 - TDD: mỗi task viết test trước, chạy cho fail, rồi mới implement. Test fail thì sửa code, không sửa test cho khớp.
 
 ## File Structure
 
 | File | Trách nhiệm |
 |---|---|
-| `backend/apps/hooks/constants.py` | `SyncActionType`, `IMPLEMENTED_ACTION_TYPES`, `SyncStatus`, `SyncErrorCode`, `resolve_action_type()`. **Không import gì từ `common/`** để nạp được độc lập |
-| `backend/apps/hooks/errors.py` | `SyncHookError` mang sẵn HTTP status + errorCode |
-| `backend/apps/hooks/models/ai_sync_model.py` | 2 SQLModel table, index khai trong `__table_args__` |
-| `backend/apps/hooks/schemas/ai_sync_schema.py` | Pydantic envelope/payload/response + 3 hàm thuần |
-| `backend/apps/hooks/crud/ai_sync_log.py` | Ghi/đọc audit log, kiểm idempotency, đọc mốc version |
-| `backend/apps/hooks/crud/ai_user_permission.py` | Replace snapshot quyền, đọc quyền theo `user_id` |
-| `backend/apps/hooks/handlers/authorization.py` | Handler `actionType=1` + `HandlerResult` |
-| `backend/apps/hooks/handlers/__init__.py` | Dict `ACTION_HANDLERS` |
-| `backend/apps/hooks/api/ai_sync.py` | Route + xác thực + dịch lỗi |
-| `backend/alembic/versions/074_ai_sync_hook.py` | Migration tạo 2 bảng |
-| `tests/conftest.py` | `sys.path` → `backend/`, fixture `pg_url` / `db_session` |
+| `apps/hooks/constants.py` | `SyncActionType`, `IMPLEMENTED_ACTION_TYPES`, `SyncStatus`, `SyncErrorCode`, `resolve_action_type()`. **Không import gì từ `common/`** để nạp được độc lập |
+| `apps/hooks/errors.py` | `SyncHookError` mang sẵn HTTP status + errorCode |
+| `apps/hooks/models/ai_sync_model.py` | 2 SQLModel table, index khai trong `__table_args__` |
+| `apps/hooks/schemas/ai_sync_schema.py` | Pydantic envelope/payload/response + 3 hàm thuần |
+| `apps/hooks/crud/ai_sync_log.py` | Ghi/đọc audit log, kiểm idempotency, đọc mốc version |
+| `apps/hooks/crud/ai_user_permission.py` | Replace snapshot quyền, đọc quyền theo `user_id` |
+| `apps/hooks/handlers/authorization.py` | Handler `actionType=1` + `HandlerResult` |
+| `apps/hooks/handlers/__init__.py` | Dict `ACTION_HANDLERS` |
+| `apps/hooks/api/ai_sync.py` | Route + xác thực + dịch lỗi |
+| `alembic/versions/074_ai_sync_hook.py` | Migration tạo 2 bảng |
+| `tests/conftest.py` | `sys.path` → gốc repo, fixture `pg_url` / `db_session` |
 | `tests/test_ai_sync_*.py` | 7 module test (chi tiết trong từng task) |
 
 Mỗi thư mục con cần `__init__.py` rỗng. Sửa file có sẵn: `common/core/config.py` (2 biến), `apps/api.py` (đăng ký router), `common/utils/whitelist.py` (thêm `/hooks/*`), `alembic/env.py` (import model).
@@ -61,8 +61,8 @@ Thiếu biến này thì các test đó **skip** chứ không fail — nhưng ta
 ### Task 1: Constants, error type, config
 
 **Files:**
-- Create: `backend/apps/hooks/__init__.py`, `constants.py`, `errors.py`
-- Modify: `backend/common/core/config.py` (chèn sau `SQLBOT_DB_URL`, ~dòng 66)
+- Create: `apps/hooks/__init__.py`, `constants.py`, `errors.py`
+- Modify: `common/core/config.py` (chèn sau `SQLBOT_DB_URL`, ~dòng 66)
 - Test: `tests/conftest.py`, `tests/test_ai_sync_constants.py`
 
 **Interfaces — Produces:**
@@ -76,7 +76,7 @@ Thiếu biến này thì các test đó **skip** chứ không fail — nhưng ta
 
 - [ ] **Step 1: Tạo `tests/conftest.py`**
 
-Ba thứ: đưa `backend/` vào `sys.path` (repo không có package install, các test hiện có tự chèn thủ công); fixture `pg_url` scope session đọc `SQLBOT_TEST_DB_URL`, `pytest.skip` nếu thiếu; fixture `db_session` tạo 2 bảng hook bằng `Model.__table__.create(engine, checkfirst=True)` rồi `TRUNCATE` cả hai, yield `sqlmodel.Session`, `engine.dispose()` khi xong.
+Ba thứ: đưa gốc repo vào `sys.path` (repo không có package install, các test hiện có tự chèn thủ công); fixture `pg_url` scope session đọc `SQLBOT_TEST_DB_URL`, `pytest.skip` nếu thiếu; fixture `db_session` tạo 2 bảng hook bằng `Model.__table__.create(engine, checkfirst=True)` rồi `TRUNCATE` cả hai, yield `sqlmodel.Session`, `engine.dispose()` khi xong.
 
 Lý do tạo bảng bằng metadata thay vì chạy alembic: test không phụ thuộc toàn bộ lịch sử migration. Điều này chỉ đúng khi index được khai trong `__table_args__` của model (Task 2).
 
@@ -90,7 +90,7 @@ Các ca:
 
 - [ ] **Step 3: Chạy test cho fail**
 
-Run: `uv run --directory backend pytest ../tests/test_ai_sync_constants.py -v`
+Run: `uv run pytest tests/test_ai_sync_constants.py -v`
 Expected: FAIL — `ModuleNotFoundError: No module named 'apps.hooks'`
 
 - [ ] **Step 4: Implement `constants.py` và `errors.py`**
@@ -101,17 +101,17 @@ Kèm comment giải thích: mặc định tắt và token rỗng → hook trả 
 
 - [ ] **Step 6: Chạy test, phải PASS**
 
-Run: `uv run --directory backend pytest ../tests/test_ai_sync_constants.py -v`
+Run: `uv run pytest tests/test_ai_sync_constants.py -v`
 
 - [ ] **Step 7: Kiểm config nạp được**
 
-Run: `uv run --directory backend python -c "from common.core.config import settings; print(settings.AI_SYNC_HOOK_ENABLED, repr(settings.AI_SYNC_HOOK_TOKEN))"`
+Run: `uv run python -c "from common.core.config import settings; print(settings.AI_SYNC_HOOK_ENABLED, repr(settings.AI_SYNC_HOOK_TOKEN))"`
 Expected: `False ''`
 
 - [ ] **Step 8: Commit**
 
 ```bash
-git add backend/apps/hooks backend/common/core/config.py tests/conftest.py tests/test_ai_sync_constants.py
+git add apps/hooks common/core/config.py tests/conftest.py tests/test_ai_sync_constants.py
 git commit -m "feat: hằng số và cấu hình cho AI Sync Hook"
 ```
 
@@ -120,8 +120,8 @@ git commit -m "feat: hằng số và cấu hình cho AI Sync Hook"
 ### Task 2: Hai bảng dữ liệu + migration
 
 **Files:**
-- Create: `backend/apps/hooks/models/__init__.py`, `models/ai_sync_model.py`, `backend/alembic/versions/074_ai_sync_hook.py`
-- Modify: `backend/alembic/env.py` (thêm import vào khối import model, ~dòng 34)
+- Create: `apps/hooks/models/__init__.py`, `models/ai_sync_model.py`, `alembic/versions/074_ai_sync_hook.py`
+- Modify: `alembic/env.py` (thêm import vào khối import model, ~dòng 34)
 - Test: `tests/test_ai_sync_models.py`
 
 **Interfaces — Produces:**
@@ -156,7 +156,7 @@ Migration: `revision = '074a1b2c3d4e'`, `down_revision = '19d092e65217'`, có `d
 
 - [ ] **Step 2: Chạy test cho fail**
 
-Run: `uv run --directory backend pytest ../tests/test_ai_sync_models.py -v`
+Run: `uv run pytest tests/test_ai_sync_models.py -v`
 Expected: FAIL — `ModuleNotFoundError: No module named 'apps.hooks.models'`
 
 - [ ] **Step 3: Implement `models/ai_sync_model.py`**
@@ -165,7 +165,7 @@ Khai index trong `__table_args__` (không chỉ trong migration) để `db_sessi
 
 - [ ] **Step 4: Chạy test, phải PASS**
 
-Run: `uv run --directory backend pytest ../tests/test_ai_sync_models.py -v`
+Run: `uv run pytest tests/test_ai_sync_models.py -v`
 
 - [ ] **Step 5: Viết migration `074_ai_sync_hook.py`**
 
@@ -175,13 +175,12 @@ Theo idiom sẵn có của file: `from apps.hooks.models.ai_sync_model import SQ
 
 - [ ] **Step 7: Kiểm alembic chỉ có một head**
 
-Run: `uv run --directory backend alembic heads`
+Run: `uv run alembic heads`
 Expected: một dòng duy nhất, `074a1b2c3d4e (head)`
 
 - [ ] **Step 8: Chạy migration lên/xuống/lên trên Postgres test**
 
 ```bash
-cd backend
 SQLBOT_DB_URL="$SQLBOT_TEST_DB_URL" uv run alembic upgrade head
 SQLBOT_DB_URL="$SQLBOT_TEST_DB_URL" uv run alembic downgrade -1
 SQLBOT_DB_URL="$SQLBOT_TEST_DB_URL" uv run alembic upgrade head
@@ -191,7 +190,7 @@ Expected: cả 3 exit 0. Chưa dựng Postgres test thì bỏ step này và **gh
 - [ ] **Step 9: Commit**
 
 ```bash
-git add backend/apps/hooks/models backend/alembic tests/test_ai_sync_models.py
+git add apps/hooks/models alembic tests/test_ai_sync_models.py
 git commit -m "feat: bảng ai_sync_hook_logs và ai_user_permissions"
 ```
 
@@ -200,7 +199,7 @@ git commit -m "feat: bảng ai_sync_hook_logs và ai_user_permissions"
 ### Task 3: Schema Pydantic và các hàm thuần
 
 **Files:**
-- Create: `backend/apps/hooks/schemas/__init__.py`, `schemas/ai_sync_schema.py`
+- Create: `apps/hooks/schemas/__init__.py`, `schemas/ai_sync_schema.py`
 - Test: `tests/test_ai_sync_schema.py`
 
 **Interfaces — Produces** (mọi model dùng `ConfigDict(populate_by_name=True, extra="ignore")`):
@@ -238,19 +237,19 @@ Không cần DB. Dùng một constant `VALID_DATA` đúng payload mẫu trong sp
 
 - [ ] **Step 2: Chạy test cho fail**
 
-Run: `uv run --directory backend pytest ../tests/test_ai_sync_schema.py -v`
+Run: `uv run pytest tests/test_ai_sync_schema.py -v`
 Expected: FAIL — `ModuleNotFoundError: No module named 'apps.hooks.schemas'`
 
 - [ ] **Step 3: Implement `schemas/ai_sync_schema.py`**
 
 - [ ] **Step 4: Chạy test, phải PASS**
 
-Run: `uv run --directory backend pytest ../tests/test_ai_sync_schema.py -v`
+Run: `uv run pytest tests/test_ai_sync_schema.py -v`
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add backend/apps/hooks/schemas tests/test_ai_sync_schema.py
+git add apps/hooks/schemas tests/test_ai_sync_schema.py
 git commit -m "feat: schema envelope và payload authorization sync"
 ```
 
@@ -259,7 +258,7 @@ git commit -m "feat: schema envelope và payload authorization sync"
 ### Task 4: CRUD audit log
 
 **Files:**
-- Create: `backend/apps/hooks/crud/__init__.py`, `crud/ai_sync_log.py`
+- Create: `apps/hooks/crud/__init__.py`, `crud/ai_sync_log.py`
 - Test: `tests/test_ai_sync_crud.py`
 
 **Interfaces:**
@@ -286,19 +285,19 @@ Dùng fixture `db_session`. Các ca:
 
 - [ ] **Step 2: Chạy test cho fail**
 
-Run: `uv run --directory backend pytest ../tests/test_ai_sync_crud.py -v`
+Run: `uv run pytest tests/test_ai_sync_crud.py -v`
 Expected: FAIL — `ModuleNotFoundError: No module named 'apps.hooks.crud'`. Nếu ra SKIP thì chưa dựng Postgres test — xem mục "Chuẩn bị môi trường".
 
 - [ ] **Step 3: Implement `crud/ai_sync_log.py`**
 
 - [ ] **Step 4: Chạy test, phải PASS (không SKIP)**
 
-Run: `SQLBOT_TEST_DB_URL="postgresql+psycopg://test:test@127.0.0.1:55432/sqlbot_test" uv run --directory backend pytest ../tests/test_ai_sync_crud.py -v`
+Run: `SQLBOT_TEST_DB_URL="postgresql+psycopg://test:test@127.0.0.1:55432/sqlbot_test" uv run pytest tests/test_ai_sync_crud.py -v`
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add backend/apps/hooks/crud tests/test_ai_sync_crud.py
+git add apps/hooks/crud tests/test_ai_sync_crud.py
 git commit -m "feat: crud audit log cho AI Sync Hook"
 ```
 
@@ -307,7 +306,7 @@ git commit -m "feat: crud audit log cho AI Sync Hook"
 ### Task 5: CRUD quyền user (replace snapshot + đọc)
 
 **Files:**
-- Create: `backend/apps/hooks/crud/ai_user_permission.py`
+- Create: `apps/hooks/crud/ai_user_permission.py`
 - Test: `tests/test_ai_sync_permission_crud.py`
 
 **Interfaces:**
@@ -332,19 +331,19 @@ Helper `_forms(*specs)` dựng `list[FormQuery]` từ tuple `(form_uuid, table_n
 
 - [ ] **Step 2: Chạy test cho fail**
 
-Run: `SQLBOT_TEST_DB_URL=... uv run --directory backend pytest ../tests/test_ai_sync_permission_crud.py -v`
+Run: `SQLBOT_TEST_DB_URL=... uv run pytest tests/test_ai_sync_permission_crud.py -v`
 Expected: FAIL — `ModuleNotFoundError: No module named 'apps.hooks.crud.ai_user_permission'`
 
 - [ ] **Step 3: Implement `crud/ai_user_permission.py`**
 
 - [ ] **Step 4: Chạy test, phải PASS**
 
-Run: `SQLBOT_TEST_DB_URL="postgresql+psycopg://test:test@127.0.0.1:55432/sqlbot_test" uv run --directory backend pytest ../tests/test_ai_sync_permission_crud.py -v`
+Run: `SQLBOT_TEST_DB_URL="postgresql+psycopg://test:test@127.0.0.1:55432/sqlbot_test" uv run pytest tests/test_ai_sync_permission_crud.py -v`
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add backend/apps/hooks/crud/ai_user_permission.py tests/test_ai_sync_permission_crud.py
+git add apps/hooks/crud/ai_user_permission.py tests/test_ai_sync_permission_crud.py
 git commit -m "feat: replace snapshot quyền user theo bản tin authorization sync"
 ```
 
@@ -353,7 +352,7 @@ git commit -m "feat: replace snapshot quyền user theo bản tin authorization 
 ### Task 6: Handler AUTHORIZATION_SYNC + bảng dispatch
 
 **Files:**
-- Create: `backend/apps/hooks/handlers/__init__.py`, `handlers/authorization.py`
+- Create: `apps/hooks/handlers/__init__.py`, `handlers/authorization.py`
 - Test: `tests/test_ai_sync_handler.py`
 
 **Interfaces:**
@@ -381,19 +380,19 @@ Dùng `db_session`. Helper `_envelope(data)`, `_data(user_id, forms)`, và `_mar
 
 - [ ] **Step 2: Chạy test cho fail**
 
-Run: `SQLBOT_TEST_DB_URL=... uv run --directory backend pytest ../tests/test_ai_sync_handler.py -v`
+Run: `SQLBOT_TEST_DB_URL=... uv run pytest tests/test_ai_sync_handler.py -v`
 Expected: FAIL — `ModuleNotFoundError: No module named 'apps.hooks.handlers'`
 
 - [ ] **Step 3: Implement `handlers/authorization.py` và `handlers/__init__.py`**
 
 - [ ] **Step 4: Chạy test, phải PASS**
 
-Run: `SQLBOT_TEST_DB_URL="postgresql+psycopg://test:test@127.0.0.1:55432/sqlbot_test" uv run --directory backend pytest ../tests/test_ai_sync_handler.py -v`
+Run: `SQLBOT_TEST_DB_URL="postgresql+psycopg://test:test@127.0.0.1:55432/sqlbot_test" uv run pytest tests/test_ai_sync_handler.py -v`
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add backend/apps/hooks/handlers tests/test_ai_sync_handler.py
+git add apps/hooks/handlers tests/test_ai_sync_handler.py
 git commit -m "feat: handler authorization sync và bảng dispatch actionType"
 ```
 
@@ -402,8 +401,8 @@ git commit -m "feat: handler authorization sync và bảng dispatch actionType"
 ### Task 7: Route, xác thực, đăng ký vào app
 
 **Files:**
-- Create: `backend/apps/hooks/api/__init__.py`, `api/ai_sync.py`
-- Modify: `backend/apps/api.py`, `backend/common/utils/whitelist.py`
+- Create: `apps/hooks/api/__init__.py`, `api/ai_sync.py`
+- Modify: `apps/api.py`, `common/utils/whitelist.py`
 - Test: `tests/test_ai_sync_api.py`
 
 **Interfaces:**
@@ -451,37 +450,37 @@ Các ca:
 
 - [ ] **Step 2: Chạy test cho fail**
 
-Run: `uv run --directory backend pytest ../tests/test_ai_sync_api.py -v`
+Run: `uv run pytest tests/test_ai_sync_api.py -v`
 Expected: FAIL — `ModuleNotFoundError: No module named 'apps.hooks.api'`
 
 - [ ] **Step 3: Implement `api/ai_sync.py`**
 
-- [ ] **Step 4: Đăng ký router trong `backend/apps/api.py`**
+- [ ] **Step 4: Đăng ký router trong `apps/api.py`**
 
 Thêm `from apps.hooks.api import ai_sync` và `api_router.include_router(ai_sync.router)`.
 
-- [ ] **Step 5: Thêm `"/hooks/*"` vào `wlist` trong `backend/common/utils/whitelist.py`**
+- [ ] **Step 5: Thêm `"/hooks/*"` vào `wlist` trong `common/utils/whitelist.py`**
 
 Kèm comment: hook tự xác thực bằng static token riêng, không dùng JWT `X-SQLBOT-TOKEN`.
 
 - [ ] **Step 6: Chạy test, phải PASS**
 
-Run: `uv run --directory backend pytest ../tests/test_ai_sync_api.py -v`
+Run: `uv run pytest tests/test_ai_sync_api.py -v`
 
 - [ ] **Step 7: Kiểm route có mặt trong app thật**
 
-Run: `uv run --directory backend python -c "from apps.api import api_router; print([r.path for r in api_router.routes if 'hooks' in r.path])"`
+Run: `uv run python -c "from apps.api import api_router; print([r.path for r in api_router.routes if 'hooks' in r.path])"`
 Expected: `['/hooks/ai-sync']`
 
 - [ ] **Step 8: Chạy toàn bộ suite để chắc không phá gì**
 
-Run: `uv run --directory backend pytest ../tests -v`
+Run: `uv run pytest tests -v`
 Expected: PASS hết (test cần DB thì PASS nếu có `SQLBOT_TEST_DB_URL`, không thì SKIP)
 
 - [ ] **Step 9: Commit**
 
 ```bash
-git add backend/apps/hooks/api backend/apps/api.py backend/common/utils/whitelist.py tests/test_ai_sync_api.py
+git add apps/hooks/api apps/api.py common/utils/whitelist.py tests/test_ai_sync_api.py
 git commit -m "feat: endpoint POST /hooks/ai-sync nhận bản tin đồng bộ từ SW"
 ```
 
@@ -490,7 +489,7 @@ git commit -m "feat: endpoint POST /hooks/ai-sync nhận bản tin đồng bộ 
 ### Task 8: Kiểm thử đầu-cuối trên Postgres thật + tài liệu
 
 **Files:**
-- Create: `tests/test_ai_sync_e2e.py`, `backend/scripts/ai_sync_hook/AI_SYNC_HOOK_API_SPEC.md`
+- Create: `tests/test_ai_sync_e2e.py`, `scripts/ai_sync_hook/AI_SYNC_HOOK_API_SPEC.md`
 - Modify: `docs/BACKEND_ARCHITECTURE.md`, `docs/OPERATIONS.md`, `docs/AI_ONBOARDING.md`
 
 **Interfaces:** không có interface code mới.
@@ -511,18 +510,18 @@ Hai ca phụ: `actionType=3` → 422 `UNSUPPORTED_ACTION_TYPE` nhưng log vẫn 
 
 - [ ] **Step 2: Chạy test e2e**
 
-Run: `SQLBOT_TEST_DB_URL="postgresql+psycopg://test:test@127.0.0.1:55432/sqlbot_test" uv run --directory backend pytest ../tests/test_ai_sync_e2e.py -v`
+Run: `SQLBOT_TEST_DB_URL="postgresql+psycopg://test:test@127.0.0.1:55432/sqlbot_test" uv run pytest tests/test_ai_sync_e2e.py -v`
 Expected: PASS. FAIL thì sửa code, không sửa test cho khớp.
 
 - [ ] **Step 3: Chạy toàn bộ suite + lint**
 
 ```bash
-SQLBOT_TEST_DB_URL="postgresql+psycopg://test:test@127.0.0.1:55432/sqlbot_test" uv run --directory backend pytest ../tests -v
-uv run --directory backend ruff check apps/hooks
+SQLBOT_TEST_DB_URL="postgresql+psycopg://test:test@127.0.0.1:55432/sqlbot_test" uv run pytest tests -v
+uv run ruff check apps/hooks
 ```
 Expected: pytest PASS hết, ruff sạch trên `apps/hooks`.
 
-- [ ] **Step 4: Viết spec API cho bên tích hợp `backend/scripts/ai_sync_hook/AI_SYNC_HOOK_API_SPEC.md`**
+- [ ] **Step 4: Viết spec API cho bên tích hợp `scripts/ai_sync_hook/AI_SYNC_HOOK_API_SPEC.md`**
 
 Phải có: endpoint + headers; ví dụ JSON đầy đủ của envelope và payload `actionType=1`; bảng mapping 6 actionType kèm cột trạng thái triển khai; bảng lỗi đúng như spec §4; ngữ nghĩa **full snapshot** nói rõ `formQueries: []` = thu hồi hết quyền và gửi thiếu form = thu hồi form đó; quy tắc idempotency (bắt buộc, trùng → 200 DUPLICATE kèm kết quả lần đầu); quy tắc chống bản tin lùi (`STALE`, dựa trên `timestamp` nên đồng hồ SW phải đồng bộ NTP); ví dụ `curl` một request thành công.
 
@@ -547,7 +546,7 @@ Thêm dòng trỏ `AI_SYNC_HOOK_API_SPEC.md` vào bảng "Bản đồ tài liệ
 - [ ] **Step 8: Commit**
 
 ```bash
-git add tests/test_ai_sync_e2e.py backend/scripts/ai_sync_hook docs/
+git add tests/test_ai_sync_e2e.py scripts/ai_sync_hook docs/
 git commit -m "test: kiểm thử đầu-cuối AI Sync Hook và cập nhật tài liệu"
 ```
 

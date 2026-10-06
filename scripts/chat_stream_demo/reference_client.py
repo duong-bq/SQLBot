@@ -7,7 +7,6 @@ dịch sang ngôn ngữ khác được dễ dàng. Mục tiêu là ĐÚNG và Đ
 Ba điểm dễ sai nhất được đánh dấu [BẪY] ngay tại chỗ trong code.
 
 Chạy:
-    cd backend
     .venv/bin/python scripts/chat_stream_demo/reference_client.py
 """
 

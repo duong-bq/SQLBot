@@ -1,13 +1,13 @@
 # Sample data cho pipeline chọn table schema — Thiết kế
 
 > Phạm vi: sửa `get_table_sample_data`/`get_tables_sample_data`/`get_table_schema` trong
-> `backend/apps/datasource/crud/datasource.py` và điểm gọi `choose_table_schema()` trong
-> `backend/apps/chat/task/llm.py`. **Không** đụng tới việc nối `ai_user_permissions` (AI Sync Hook)
+> `apps/datasource/crud/datasource.py` và điểm gọi `choose_table_schema()` trong
+> `apps/chat/task/llm.py`. **Không** đụng tới việc nối `ai_user_permissions` (AI Sync Hook)
 > vào pipeline — đó là gap riêng, đã biết (`docs/AI_ONBOARDING.md:40-42`), làm ở spec khác.
 
 ## 1. Vấn đề hiện tại
 
-Đọc code thật tại `backend/apps/datasource/crud/datasource.py` (nhánh trước khi sửa):
+Đọc code thật tại `apps/datasource/crud/datasource.py` (nhánh trước khi sửa):
 
 1. **`fields[:10]`** (dòng 577, trong `get_table_sample_data`) cắt cứng 10 field đầu theo thứ tự
    `obj.fields` gốc (không sort theo `field_index`, không liên quan gì đến câu hỏi) → field liên
@@ -42,7 +42,7 @@
 ## 2. Kiến trúc
 
 Tách logic chọn field/normalize/permission thành các hàm thuần trong file mới
-`backend/apps/datasource/crud/sample_data.py`:
+`apps/datasource/crud/sample_data.py`:
 
 ```
 sample_data.py
@@ -136,7 +136,7 @@ thiết kế cách map `database_table_name` → `CoreTable` và cách dùng `po
 
 ## 6. Config mới
 
-`backend/common/core/config.py` — theo pattern có sẵn (`TABLE_EMBEDDING_COUNT`):
+`common/core/config.py` — theo pattern có sẵn (`TABLE_EMBEDDING_COUNT`):
 
 ```python
 SAMPLE_DATA_MAX_FIELDS: int = 10

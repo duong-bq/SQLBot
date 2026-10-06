@@ -53,7 +53,7 @@ domain_description: str | None = Field(default=None, sa_column=Column(Text, null
 
 Thêm vào `__table_args__`: `Index("idx_ai_user_permissions_domain_code", "domain_code")`.
 
-### 3.2. Migration — `backend/alembic/versions/075_ai_user_permissions_domain_info.py`
+### 3.2. Migration — `alembic/versions/075_ai_user_permissions_domain_info.py`
 
 `ALTER TABLE ai_user_permissions ADD COLUMN domain_code/domain_uuid/domain_name/domain_description`
 (nullable, không default) + `CREATE INDEX idx_ai_user_permissions_domain_code`. Không backfill — dữ
@@ -117,7 +117,7 @@ input SW gửi để dễ đối chiếu "SW gửi gì — SQLBot lưu được 
 
 Theo bảng ánh xạ trong `CLAUDE.md` — **đề xuất, chưa tự sửa**:
 
-- `backend/scripts/ai_sync_hook/AI_SYNC_HOOK_API_SPEC.md` §4: thêm 4 field domain vào bảng mô tả
+- `scripts/ai_sync_hook/AI_SYNC_HOOK_API_SPEC.md` §4: thêm 4 field domain vào bảng mô tả
   payload `tableInfo`, kèm ví dụ JSON.
-- `backend/scripts/ai_sync_hook/AI_PERMISSION_QUERY_API_SPEC.md`: thêm 4 field domain vào ví dụ
+- `scripts/ai_sync_hook/AI_PERMISSION_QUERY_API_SPEC.md`: thêm 4 field domain vào ví dụ
   response và bảng mô tả `tableInfo` output.

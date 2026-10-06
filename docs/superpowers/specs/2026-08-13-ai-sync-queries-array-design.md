@@ -91,7 +91,7 @@ queries: list[dict[str, Any]] = Field(
 )
 ```
 
-## 7. Migration — `backend/alembic/versions/076_ai_user_permissions_queries.py`
+## 7. Migration — `alembic/versions/076_ai_user_permissions_queries.py`
 
 `down_revision` trỏ về `075a1b2c3d4e` (migration domain info gần nhất).
 
@@ -147,9 +147,9 @@ Không backfill `queries` từ dữ liệu `postgres_query`/`clickhouse_query` c
 
 Theo bảng ánh xạ trong `CLAUDE.md` — **đề xuất, chưa tự sửa**:
 
-- `backend/scripts/ai_sync_hook/AI_SYNC_HOOK_API_SPEC.md` §4: thay ví dụ JSON và bảng mô tả field
+- `scripts/ai_sync_hook/AI_SYNC_HOOK_API_SPEC.md` §4: thay ví dụ JSON và bảng mô tả field
   — bỏ `formQueries[].postgresQuery`/`formQueries[].clickHouseQuery`, thêm
   `tableInfo.queries[]`/`queries[].datasourceId`/`queries[].datasourceType`/`queries[].query`.
   §7 (bảng lỗi): thêm dòng `DUPLICATE_DATASOURCE_ID`.
-- `backend/scripts/ai_sync_hook/AI_PERMISSION_QUERY_API_SPEC.md`: cập nhật ví dụ response — bỏ
+- `scripts/ai_sync_hook/AI_PERMISSION_QUERY_API_SPEC.md`: cập nhật ví dụ response — bỏ
   `postgresQuery`/`clickHouseQuery` ở cấp `formQueries[]`, thêm `queries[]` trong `tableInfo`.

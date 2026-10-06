@@ -10,16 +10,16 @@
 
 ### Yêu cầu
 
-- **Python 3.11** đúng minor version (`requires-python = "==3.11.*"` trong `backend/pyproject.toml`).
+- **Python 3.11** đúng minor version (`requires-python = "==3.11.*"` trong `pyproject.toml`).
 - `uv` để quản lý dependency.
-- PostgreSQL có extension **pgvector** + Redis (tùy chọn). `docker-compose.service.yml` dựng sẵn cả
-  hai: Postgres `pgvector/pgvector:pg16` ở cổng **5434**, Redis ở **6380**.
+- PostgreSQL có extension **pgvector** (dùng Postgres bên ngoài, repo không dựng Postgres) + Redis
+  (tùy chọn; chạy local bằng `docker run -d -p 6380:6379 redis:7-alpine`).
 
-### `.env` nằm ở **repo root**, không phải trong `backend/`
+### `.env` nằm ở thư mục làm việc (gốc repo)
 
-`config.py` khai `env_file="../.env"` ([config.py:29](../backend/common/core/config.py#L29)) — đường
-dẫn tương đối so với thư mục làm việc `backend/`. Đặt `.env` trong `backend/` thì nó bị bỏ qua im
-lặng. File này nằm trong `.gitignore`.
+`config.py` khai `env_file=".env"` ([config.py:28](../common/core/config.py#L28)) — đường dẫn
+tương đối so với thư mục làm việc, nên phải chạy backend từ gốc repo. Chạy từ thư mục khác thì `.env`
+bị bỏ qua im lặng. File này nằm trong `.gitignore`.
 
 Ba nhóm giá trị **bắt buộc sửa khi chạy local**:
 
@@ -32,22 +32,18 @@ Ba nhóm giá trị **bắt buộc sửa khi chạy local**:
 ### Lệnh
 
 ```bash
-# hạ tầng
-docker compose -f docker-compose.service.yml up -d
+# hạ tầng: Postgres (pgvector) bên ngoài; Redis tùy chọn
+docker run -d --name sqlbot-redis -p 6380:6379 redis:7-alpine
 
 # backend
-cd backend
 uv sync --extra cpu          # KHÔNG chạy `uv sync` trần — xem ghi chú dưới
 uv run uvicorn main:app --host 0.0.0.0 --port 8000 --reload
-
-# frontend
-cd frontend && npm install && npm run dev     # cổng 5173
 ```
 
 ### `--extra cpu` là **bắt buộc**
 
 Upstream đã chuyển `torch` sang `[project.optional-dependencies]`
-([pyproject.toml:62](../backend/pyproject.toml#L62)), chia thành hai extra `cpu` và `cu128` — và khai
+([pyproject.toml:62](../pyproject.toml#L62)), chia thành hai extra `cpu` và `cu128` — và khai
 chúng là **conflicting** trong `[tool.uv]`, nên `uv` không tự chọn hộ. `uv sync` trần **không cài
 torch**, mà `apps/ai_model/embedding.py` import `langchain_huggingface` ngay đầu file và chính lệnh
 import đó nạp torch → chết lúc khởi động, **bất kể `EMBEDDING_PROVIDER` đặt là gì**.
@@ -55,17 +51,17 @@ import đó nạp torch → chết lúc khởi động, **bất kể `EMBEDDING_
 Dùng `--extra cu128` thay cho `cpu` nếu thật sự cần chạy embedding trên GPU — wheel CUDA nặng thêm
 vài GB. Không dùng cả hai cùng lúc.
 
-`torch` cũng là lý do `uv sync` lần đầu tải ~1,7GB. `Dockerfile.backend` vì thế tách làm hai lần sync
+`torch` cũng là lý do `uv sync` lần đầu tải ~1,7GB. `Dockerfile` vì thế tách làm hai lần sync
 để layer dependency chỉ rebuild khi `pyproject.toml`/`uv.lock` đổi.
 
 **Không có bước migrate thủ công**: `lifespan` gọi `alembic upgrade head` mỗi lần khởi động
-([main.py:66](../backend/main.py#L66)).
+([main.py:66](../main.py#L66)).
 
 ---
 
 ## 2. Biến cấu hình
 
-Nguồn duy nhất: [common/core/config.py](../backend/common/core/config.py). Bảng dưới nhóm theo **tác
+Nguồn duy nhất: [common/core/config.py](../common/core/config.py). Bảng dưới nhóm theo **tác
 dụng thật**, không theo thứ tự trong file.
 
 ### 2.1. Retry và hạ cấp (fork thêm)
@@ -95,7 +91,7 @@ không. Không cần thì đi thẳng nhánh hạ cấp ở §2.1. Cơ chế đ�
 lần đầu là vào thẳng chế độ đo, không có đường nào vô tình nhảy sang đổi hành vi thật.
 
 1. `LLM_ROUTE_ENABLED=True`, giữ `LLM_ROUTE_SHADOW=True`. Chạy trên lưu lượng thật vài ngày.
-2. Đọc số: `backend/.venv/bin/python scripts/route_stats/report.py --days 7`. Con số phải xem
+2. Đọc số: `.venv/bin/python scripts/route_stats/report.py --days 7`. Con số phải xem
    **trước** cả tỷ lệ tiết kiệm là nhóm `unparsed` / `mismatch` / `error` — nhóm đó cao nghĩa là
    cổng đang hỏng chứ không phải đang thận trọng, và mọi tỷ lệ khác đọc ra đều vô nghĩa cho tới khi
    siết prompt hoặc đổi model.
@@ -161,7 +157,7 @@ vector cũ và mới không cùng không gian.
 | Nơi | Giá trị | Ghi chú |
 |---|---|---|
 | `GENERATE_SQL_QUERY_LIMIT_ENABLED` | `True` | Ép LLM thêm `LIMIT` vào SQL |
-| `ANSWER_MAX_ROWS` (**hằng số trong code**, [llm.py:79](../backend/apps/chat/task/llm.py#L79)) | `100` | Trần số dòng nhồi vào prompt answer. Sửa thì **bắt buộc** giữ nguyên cặp với `build_data_scope_note` |
+| `ANSWER_MAX_ROWS` (**hằng số trong code**, [llm.py:79](../apps/chat/task/llm.py#L79)) | `100` | Trần số dòng nhồi vào prompt answer. Sửa thì **bắt buộc** giữ nguyên cặp với `build_data_scope_note` |
 
 ### 2.8. Bảo mật và mạng
 
@@ -197,7 +193,7 @@ callback, vòng quét phục hồi) — xem [BACKEND_ARCHITECTURE.md §5](BACKEN
 
 **Tải file nguồn từ URL.** `createFromExcelAsync` không nhận bytes nữa: hệ ngoài đưa một presigned
 URL, worker tự tải. Nhóm biến này chi phối bước tải đó
-([remote_file.py](../backend/apps/datasource/utils/remote_file.py)).
+([remote_file.py](../apps/datasource/utils/remote_file.py)).
 
 Ba biến mang tiền tố **`FILE_DOWNLOAD_`** dùng chung với luồng `.docx` đính kèm chat (§2.10) — đó là
 lý do chúng không mang tiền tố `EXCEL_`; sửa một chỗ là đổi cho cả hai tính năng. Các biến còn lại
@@ -217,12 +213,11 @@ giữ tiền tố `EXCEL_` vì luồng docx không đụng tới.
 `EXCEL_DOWNLOAD_ALLOWED_HOSTS` / `_CONNECT_TIMEOUT` / `_READ_TIMEOUT` vẫn nạp đúng, khai cả hai thì
 tên mới thắng. Alias tồn tại vì `Settings` đặt `extra="ignore"`: không có nó, một `.env` cũ sẽ bị bỏ
 qua **im lặng** và allowlist thành rỗng, tức tắt sạch hai tính năng mà không một dòng log nào.
-Alias chỉ cứu biến đi thẳng vào process — với Docker thì compose nội suy đúng cái tên viết trong
-file YAML, nên `.env` cạnh compose phải đổi sang tên mới.
+Alias chỉ cứu biến đi thẳng vào process: trong Kubernetes, biến phải khai đúng tên mới trong env của
+repo gitops.
 
-**Bật ở deployment Docker**: `docker-compose.backend.yml` truyền `FILE_DOWNLOAD_ALLOWED_HOSTS` và
-`AI_CALLBACK_URL` xuống container, giá trị lấy từ file `.env` **cạnh compose file** (trên server
-triển khai là `/data/ngocpt/sqlbot/.env`, xem `.gitlab-ci.yml`). Chạy backend thẳng trên host thì
+**Bật ở deployment Kubernetes**: khai `FILE_DOWNLOAD_ALLOWED_HOSTS` và `AI_CALLBACK_URL` trong
+`products/h04-sqlbot/<môi trường>.yaml` của repo gitops `devops/cicd/h04`. Chạy backend thẳng trên host thì
 đặt trong `.env` ở repo root như mọi biến khác. Điền URL rồi restart là các thư đang chờ tự đi —
 không cần bắn lại tay, và không lần thử nào bị đốt trong lúc URL còn rỗng.
 
@@ -279,7 +274,7 @@ cũ, kể cả phần đọc câu hỏi của user khác (§7.2).
 `ORACLE_CLIENT_PATH`, `CONTEXT_PATH` (prefix URL, mặc định rỗng).
 
 Biến bool nhận cả `"true"`/`"True"`/`"false"` nhờ validator `lowercase_bool`
-([config.py:323](../backend/common/core/config.py#L323)).
+([config.py:323](../common/core/config.py#L323)).
 
 ---
 
@@ -287,18 +282,21 @@ Biến bool nhận cả `"true"`/`"True"`/`"false"` nhờ validator `lowercase_b
 
 Ba đường, chọn theo mục đích:
 
-### 3.1. `docker-compose.backend.yml` — đường đang dùng cho đối tác
+### 3.1. Image backend — đường đang dùng
 
-Chỉ container backend; Postgres/Redis là service bên ngoài.
+Chỉ container backend; Postgres (có pgvector) và Redis là service bên ngoài. Triển khai lên Kubernetes
+qua Argo CD (repo gitops `devops/cicd/h04`, sản phẩm `h04-sqlbot`); `.gitlab-ci.yml` build image và ghi tag
+vào repo gitops.
 
 ```bash
-docker compose -f docker-compose.backend.yml up -d --build
+docker build -t sqlbot-backend:test .
 ```
 
-Build từ `Dockerfile.backend`, khác `Dockerfile` (all-in-one của upstream) ở bốn điểm, tất cả đều
+Build từ `Dockerfile`, khác bản all-in-one của upstream (đã xóa khỏi repo) ở bốn điểm, tất cả đều
 cố ý:
 
-- Base `python:3.11-slim`, không nhúng Postgres 17 vào cùng container.
+- Base là image Python tự dựng trên Wolfi (`dockerhub.elcomlab.com/wolfi/python`), chạy bằng user
+  `appuser` uid 10001, không nhúng Postgres 17 vào cùng container.
 - **Không build frontend và g2-ssr** — container này chỉ phục vụ REST/SSE. Pha sinh biểu đồ đã bỏ
   nên g2-ssr thành vô dụng.
 - **Không nhúng model embedding ~2GB**; dùng `EMBEDDING_PROVIDER=api`.
@@ -309,27 +307,12 @@ Build cần ra được mạng tới ba host mà `uv.lock` ghim URL tuyệt đ�
 `test.pypi.org` (sqlbot-xpack), `download.pytorch.org` (torch CPU). Muốn đổi index thì phải sửa
 `[[tool.uv.index]]` trong `pyproject.toml` rồi `uv lock` lại — `--frozen` đọc URL trong lock.
 
-Ba điều bắt buộc trong compose file:
+**`SECRET_KEY` phải đặt cố định** (từ Secret, cùng một giá trị cho mọi replica). Không đặt thì code sinh
+khóa ngẫu nhiên mỗi lần khởi động và mọi JWT chết theo mỗi lần restart.
 
-**Thêm biến cấu hình mới thì phải khai ở đây, không chỉ ở `.env.example`.** Compose không dùng
-`env_file`; nó nội suy `${VAR}` vào đúng những khoá đã liệt kê trong `environment:`. Biến thiếu ở
-đây thì dù có mặt trong `.env` cũng không vào được container, và triệu chứng là **không có triệu
-chứng** — app chạy bằng giá trị mặc định của `config.py`. Giữ hai file cùng nhóm, cùng thứ tự để
-còn đối chiếu được bằng mắt.
-
-**`SECRET_KEY` phải đặt cố định.** Compose khai `${SECRET_KEY:?...}` để fail sớm. Quote cả giá trị:
-dấu `:` trong thông báo lỗi của `${VAR:?msg}` làm YAML parser hiểu thành mapping.
-
-**Dùng named volume, KHÔNG bind-mount** cho `/opt/sqlbot/data` và `/opt/sqlbot/images`. Container
-chạy uid 1000 (không phải root):
-
-- Named volume: lần đầu Docker copy nội dung từ image vào volume, **giữ nguyên owner uid 1000** →
-  ghi được ngay, và có sẵn cả `file/` lẫn `excel/`.
-- Bind-mount: Docker **không** copy nội dung image vào; thư mục host thiếu thì daemon tự tạo, trên
-  Docker Engine thuần thành `root:root` → uid 1000 hết ghi được. Ngoài ra `excel/` sẽ không tồn tại
-  vì chỉ `UPLOAD_DIR` được `mkdir` lúc import.
-
-Vẫn muốn bind-mount thì phải tự tạo và `chown 1000:1000` **trước khi** `up`.
+**Ghi file dưới `/opt/sqlbot/data` và `/opt/sqlbot/images`** — container chạy uid 10001, nên volume gắn vào
+hai đường dẫn này phải ghi được bởi uid/gid 10001 (`fsGroup: 10001` trong Kubernetes). Thư mục `excel/`
+chứa file Excel tạm của luồng nạp dữ liệu; nhiều replica cần dùng chung thư mục này.
 
 **Trước khi deploy bản có migration `076`**, đếm số dòng nó sẽ backfill:
 
@@ -348,21 +331,18 @@ chết luôn. Timeout `SQLBOT_WAIT_TIMEOUT` (mặc định 120s). Uvicorn chạy
 
 ### 3.2. Image all-in-one của upstream
 
-`Dockerfile` + `docker-compose.yaml`, hoặc lệnh `docker run` một dòng trong `README.md`. Gộp
-Postgres + backend + frontend + g2-ssr vào một container. Dùng khi cần bản đầy đủ có web UI.
-Thư mục `installer/` là bộ cài offline của upstream.
+Đã xóa khỏi repo này (gộp Postgres + backend + frontend + g2-ssr vào một container, kèm bộ cài offline
+`installer/`). Cần bản đầy đủ có web UI thì lấy từ upstream `dataease/SQLBot`.
 
 ### 3.3. Dev
 
-`docker-compose.service.yml` (Postgres + Redis) + chạy uvicorn/vite trên host — xem §1.
-`docker-compose.data.yml` dựng các Postgres chứa **dữ liệu nghiệp vụ để test** (Lào Cai), cổng
-5436/5437 — không liên quan gì tới DB metadata của SQLBot.
+Redis (tùy chọn) + Postgres bên ngoài + chạy uvicorn trên host — xem §1.
 
 ---
 
 ## 4. Harness đánh giá
 
-Hướng dẫn đầy đủ: [scripts/eval_text2sql/README.md](../backend/scripts/eval_text2sql/README.md).
+Hướng dẫn đầy đủ: [scripts/eval_text2sql/README.md](../scripts/eval_text2sql/README.md).
 Phần dưới chỉ là những gì cần biết để quyết định *khi nào phải chạy*.
 
 ### Hai bộ test độc lập, dùng chung phần chấm điểm
@@ -378,7 +358,6 @@ Chọn bộ nào: cần đo **đúng bề mặt đối tác gọi** (kèm lỗi 
 cần đo sâu vào pipeline hoặc dừng sớm theo `finish_step` → DataLaoCai.
 
 ```bash
-cd backend
 .venv/bin/python scripts/eval_text2sql/run_eval_http.py              # bộ HĐND, toàn bộ
 .venv/bin/python scripts/eval_text2sql/run_eval_http.py --only S1,M1
 .venv/bin/python scripts/eval_text2sql/run_eval.py --finish-step GENERATE_SQL   # rẻ nhất
@@ -431,7 +410,7 @@ Các báo cáo cũ hơn cho bộ DataLaoCai: `BaoCao_DanhGia_Text2SQL_SQLBot.md`
 
 ## 5. Log
 
-File log ở `backend/logs/`: `debug.log` (có xoay vòng `.1`…`.4`), `info.log`, `warn.log`,
+File log ở `logs/`: `debug.log` (có xoay vòng `.1`…`.4`), `info.log`, `warn.log`,
 `error.log`. Cấu hình bằng `LOG_LEVEL`, `LOG_DIR`, `LOG_FORMAT`.
 
 Những gì `run_task` ghi ra log và **không** phát thành event SSE:
@@ -456,7 +435,7 @@ GET /api/v1/chat/record/{record_id}/log      # toàn bộ bước xử lý
 GET /api/v1/chat/record/{record_id}/usage    # chỉ token usage
 ```
 
-([chat.py:195](../backend/apps/chat/api/chat.py#L195) và [chat.py:213](../backend/apps/chat/api/chat.py#L213))
+([chat.py:195](../apps/chat/api/chat.py#L195) và [chat.py:213](../apps/chat/api/chat.py#L213))
 
 ### Đọc thẳng bảng `chat_log`
 
@@ -537,7 +516,7 @@ SELECT table_name FROM core_table WHERE ds_id = <datasource_id>;
 
 Bước 3 là chỗ hay hỏng nhất. Lệch hoa-thường thì bảng **không** được cấp quyền, nhưng log có dòng
 `[sw_permission] Bảng '<tên SW gửi>' … khớp khi bỏ hoa-thường ('<tên thật>')` nêu đúng cặp tên gần
-nhau. `grep sw_permission backend/logs/warn.log` là ra ngay mọi thứ đã bị bỏ qua âm thầm: tên lệch
+nhau. `grep sw_permission logs/warn.log` là ra ngay mọi thứ đã bị bỏ qua âm thầm: tên lệch
 hoa-thường, scope query hỏng cú pháp, bảng có nhiều scope mâu thuẫn.
 
 ---
@@ -551,7 +530,7 @@ hoa-thường, scope query hỏng cú pháp, bảng có nhiều scope mâu thu�
 | **`source.cell` / `target.cell` phải là số nguyên** | Trong `POST /table_relation/save/{ds_id}`. Truyền chuỗi thì API trả **200 OK, không lỗi, không log**, nhưng quan hệ bị vô hiệu hoàn toàn → mọi câu hỏi cần JOIN sẽ sai. Xem `DATASOURCE_API_SPEC.md` §6.2 |
 | **`editTable` / `editField` thiếu `custom_comment` là xóa mất chú thích** | Hai endpoint này ghi đè toàn bộ record, không phải PATCH. Chú thích là đầu vào trực tiếp của M-Schema nên mất là chất lượng SQL tụt ngay |
 | **`chooseTables` thay thế toàn bộ danh sách** | Không phải "thêm bảng". Gửi thiếu một bảng đang dùng là bỏ chọn nó |
-| **`chooseTables` bỏ chọn bảng nhưng KHÔNG dọn đồ thị quan hệ** | `sync_table` chỉ gọi `seed_table_relation` ([datasource.py:640](../backend/apps/datasource/crud/datasource.py#L640)), mà hàm seed **no-op khi đồ thị đã khác rỗng**. Hệ quả: bỏ chọn bảng để lại node/port/edge trỏ vào id đã xoá, và chọn lại thì bảng mang **id mới** trong khi seed vẫn từ chối chạy. Triệu chứng ở tầng trên là khối `Foreign keys` của M-Schema có dòng `None.None=...` — LLM đọc phải rác đó khi cần JOIN. Không có đường phục hồi từ UI. Hiện chỉ `DATASOURCE_SYNC` (hook actionType 4) là dọn, vì nó gọi thêm `reconcile_table_relation` ([datasource.py:454](../backend/apps/datasource/crud/datasource.py#L454)). Kiểm tồn đọng bằng cách so `table_relation` với `core_table`/`core_field` của cùng `ds_id` |
+| **`chooseTables` bỏ chọn bảng nhưng KHÔNG dọn đồ thị quan hệ** | `sync_table` chỉ gọi `seed_table_relation` ([datasource.py:640](../apps/datasource/crud/datasource.py#L640)), mà hàm seed **no-op khi đồ thị đã khác rỗng**. Hệ quả: bỏ chọn bảng để lại node/port/edge trỏ vào id đã xoá, và chọn lại thì bảng mang **id mới** trong khi seed vẫn từ chối chạy. Triệu chứng ở tầng trên là khối `Foreign keys` của M-Schema có dòng `None.None=...` — LLM đọc phải rác đó khi cần JOIN. Không có đường phục hồi từ UI. Hiện chỉ `DATASOURCE_SYNC` (hook actionType 4) là dọn, vì nó gọi thêm `reconcile_table_relation` ([datasource.py:454](../apps/datasource/crud/datasource.py#L454)). Kiểm tồn đọng bằng cách so `table_relation` với `core_table`/`core_field` của cùng `ds_id` |
 | **Lỗi thường trả 500 thay vì 403/404** | Không suy ra được nguyên nhân từ status code; phải đọc body |
 
 ### 7.2. Rò rỉ thông tin
@@ -573,11 +552,11 @@ kỳ tài liệu, log hay issue nào; nếu cần xoay vòng mật khẩu thì p
 
 | Bẫy | Chi tiết |
 |---|---|
-| `.env` đặt nhầm chỗ | Phải ở **repo root**, không phải `backend/`. Đặt sai thì bị bỏ qua im lặng, app chạy bằng toàn giá trị mặc định |
+| `.env` đặt nhầm chỗ | Phải ở thư mục làm việc (gốc repo). Chạy từ thư mục khác thì bị bỏ qua im lặng, app chạy bằng toàn giá trị mặc định |
 | `POSTGRES_PASSWORD` bị encode hai lần | Ghi thô, `config.py` tự `quote()` |
 | `SECRET_KEY` không đặt | Mọi JWT chết sau mỗi lần restart |
 | `BACKEND_CORS_ORIGINS='*'` không dùng được | Kiểu là `AnyUrl`. Muốn mở hết thì đặt `CORS_ALLOW_ALL_ORIGINS=True` |
-| Biến khai trong `.env` mà **không** khai trong `docker-compose.backend.yml` | Compose không có `env_file`, nó chỉ nội suy `${VAR}` vào từng khoá liệt kê sẵn trong `environment:`. Thiếu khoá là biến **không vào được container**: đổi giá trị thấy không có gì xảy ra, không lỗi, không log. Thêm biến mới thì phải khai ở **cả hai** file, cùng một nhóm, cùng thứ tự |
+| Biến khai trong `.env` mà **không** khai trong env của repo gitops | Pod chỉ nhận các biến liệt kê trong `products/h04-sqlbot/<môi trường>.yaml`; thiếu khóa thì app chạy bằng giá trị mặc định của `config.py`, **không có triệu chứng** |
 | Sửa `template.yaml` mà không restart | `apps/template/template.py` có `@cache` |
 | Đổi cấu hình model trong DB mà không restart | `LLMFactory.create_llm` có `@lru_cache(maxsize=32)` |
 | `FILE_DOWNLOAD_ALLOWED_HOSTS` rỗng làm chết **cả** đính kèm `.docx` của chat | Một biến chi phối hai tính năng (§2.10). Triệu chứng phía client là `400 URL_HOST_NOT_ALLOWED` chứ không phải lỗi cấu hình — dễ đi tìm nhầm phía đối tác |
@@ -633,7 +612,7 @@ kỳ tài liệu, log hay issue nào; nếu cần xoay vòng mật khẩu thì p
 | **URL ký sẵn là credential, không phải đường dẫn** | Chữ ký nằm trong query string và nó được ghi nguyên văn xuống cột `excel_import_jobs.file_url`. Không bao giờ log cả URL, không dán vào issue hay chat: dùng `RemoteSource.safe_label` (host + object key). Hệ quả vận hành: ai đọc được bảng đó là đọc được file nguồn cho tới khi chữ ký hết hạn |
 | **Hạn chữ ký tính từ lúc ký, không phải từ lúc worker chạy** | Job xếp hàng sau các job khác, hoặc được vòng phục hồi nhặt lại sau khi tiến trình chết, đều có thể tới lượt tải hàng chục phút sau khi nhận việc. Vì vậy URL được kiểm hạn **lại lần nữa** ngay trước khi tải, và đối tác được yêu cầu ký ≥ 1 giờ. Triệu chứng khi ký quá ngắn: `400 URL_EXPIRED` ở pha đồng bộ, hoặc `DOWNLOAD_FORBIDDEN` trong callback |
 | **`status` thành `Failed` trước khi `error_code` được ghi** | `fail_import_job` đổi trạng thái nguồn dữ liệu rồi mới ghi dòng job. Hệ ngoài hỏi `excelImportStatus` đúng khe giữa hai bước sẽ thấy `Failed` kèm `errorCode: null`. Khe này rất hẹp và tự khỏi ở lần hỏi sau, nhưng đủ để một client hỏi liên tục gặp phải |
-| **Khối `COPY` chết ở `uploadExcel`** | [datasource.py:563](../backend/apps/datasource/api/datasource.py#L563) có một khối `COPY FROM STDIN` chạy sau `to_sql` nhưng thiếu `seek(0)`, nên nó đọc chuỗi rỗng và nạp 0 dòng. Vô hại đúng vì lỗi đó — ai "sửa" bằng cách thêm `seek(0)` sẽ làm **mọi bảng nhân đôi dữ liệu**. Đường mới (`utils/excel_import.py`) đã bỏ hẳn khối này |
+| **Khối `COPY` chết ở `uploadExcel`** | [datasource.py:563](../apps/datasource/api/datasource.py#L563) có một khối `COPY FROM STDIN` chạy sau `to_sql` nhưng thiếu `seek(0)`, nên nó đọc chuỗi rỗng và nạp 0 dòng. Vô hại đúng vì lỗi đó — ai "sửa" bằng cách thêm `seek(0)` sẽ làm **mọi bảng nhân đôi dữ liệu**. Đường mới (`utils/excel_import.py`) đã bỏ hẳn khối này |
 | **`sessionmaker.close()` không đóng pool** | `ConnectionPoolManager` lưu `sessionmaker`, và `sessionmaker` không có `close()` thật — engine bên dưới sống mãi cùng toàn bộ connection. Muốn giải phóng phải `engine.dispose()`. Cùng lớp lỗi với `get_engine_conn()` gọi xong không `dispose` |
 
 Đọc trạng thái hàng đợi khi cần chẩn đoán:
@@ -665,7 +644,7 @@ apps.api` **không** chữa được — nó chết cùng kiểu.
 Vòng import này cũng chi phối **code trong app**: module nào không nằm sẵn trong cụm datasource mà
 cần gọi hàm của `crud/datasource.py` thì phải import **lazy trong thân hàm**, không import ở mức
 module. Ví dụ đang có: handler `DATASOURCE_SYNC` gọi `resync_ds_metadata`
-([datasource_sync.py:57](../backend/apps/hooks/handlers/datasource_sync.py#L57)). Chạy bằng `main.py`
+([datasource_sync.py:57](../apps/hooks/handlers/datasource_sync.py#L57)). Chạy bằng `main.py`
 thì import ở mức module vẫn sống nhờ thứ tự nạp tình cờ đúng, nhưng test nạp riêng cụm `hooks` sẽ vỡ
 — tức là lỗi chỉ xuất hiện ở nơi khó liên hệ nhất với nguyên nhân.
 
@@ -674,13 +653,13 @@ thì import ở mức module vẫn sống nhờ thứ tự nạp tình cờ đú
 **Trả `JSONResponse` trong route KHÔNG giúp thoát envelope `{code, data, msg}`.**
 
 `ResponseMiddleware` có một nhánh `isinstance(response, JSONResponse)` trông như lối thoát
-([response_middleware.py:43](../backend/common/core/response_middleware.py#L43)), nhưng nhánh đó
+([response_middleware.py:43](../common/core/response_middleware.py#L43)), nhưng nhánh đó
 **không bao giờ đúng** trên app thật: mỗi `BaseHTTPMiddleware` gọi `call_next()` sẽ dựng lại response
 thành `_StreamingResponse` của Starlette, nên tới lượt `ResponseMiddleware` chạy thì kiểu gốc đã mất.
 App có 4 middleware xếp chồng nên điều này luôn xảy ra.
 
 Cách duy nhất trả JSON thô là khai path pattern của route vào `direct_paths`
-([response_middleware.py:30](../backend/common/core/response_middleware.py#L30)). Lưu ý so khớp bằng
+([response_middleware.py:30](../common/core/response_middleware.py#L30)). Lưu ý so khớp bằng
 `route.path_format`, tức phải ghi đúng dạng có tham số (`/foo/{id}`), không phải URL đã điền giá trị.
 
 Hai lý do bẫy này khó phát hiện:
@@ -694,11 +673,11 @@ Hai lý do bẫy này khó phát hiện:
 
 | Bẫy | Chi tiết |
 |---|---|
-| **`unique=True` trong model SQLModel không tới được DB** | `sys_user.account` và `sys_user.name` đều khai `unique=True` ([models/user.py:11-13](../backend/apps/system/models/user.py#L11)), nhưng bảng được tạo bằng DDL viết tay ở [001_ddl.py:23](../backend/alembic/versions/001_ddl.py#L23) và **không có ràng buộc duy nhất nào**. Đọc model rồi kết luận DB có ràng buộc là sai — đã sai một lần khi soạn spec |
-| `account` duy nhất chỉ nhờ kiểm ở tầng ứng dụng | `check_account_exists` ([crud/user.py:120](../backend/apps/system/crud/user.py#L120)) chạy lúc tạo, không có index duy nhất đỡ phía sau — một check-then-act kinh điển, hai request đồng thời vẫn tạo được hai `account` trùng. Hệ quả nặng hơn bình thường vì `resolve_uid_by_account` dùng `.first()`: có trùng thì nó **im lặng chọn một trong hai**. `name` thì không duy nhất, và không cần duy nhất |
+| **`unique=True` trong model SQLModel không tới được DB** | `sys_user.account` và `sys_user.name` đều khai `unique=True` ([models/user.py:11-13](../apps/system/models/user.py#L11)), nhưng bảng được tạo bằng DDL viết tay ở [001_ddl.py:23](../alembic/versions/001_ddl.py#L23) và **không có ràng buộc duy nhất nào**. Đọc model rồi kết luận DB có ràng buộc là sai — đã sai một lần khi soạn spec |
+| `account` duy nhất chỉ nhờ kiểm ở tầng ứng dụng | `check_account_exists` ([crud/user.py:120](../apps/system/crud/user.py#L120)) chạy lúc tạo, không có index duy nhất đỡ phía sau — một check-then-act kinh điển, hai request đồng thời vẫn tạo được hai `account` trùng. Hệ quả nặng hơn bình thường vì `resolve_uid_by_account` dùng `.first()`: có trùng thì nó **im lặng chọn một trong hai**. `name` thì không duy nhất, và không cần duy nhất |
 | Route `/user/by-account/*` phải đăng ký **trước** `/user/{id}` | Starlette khớp route theo thứ tự đăng ký, `{param}` ăn trọn một đoạn đường dẫn. Đặt sau thì `DELETE /user/by-account` rơi vào `DELETE /user/{id}` rồi chết ở bước ép kiểu int với thông báo không liên quan tới nguyên nhân. Thêm route `/user/...` mới thì kiểm lại vị trí |
-| `status = 0` giết luôn token **đang sống**, không chỉ chặn lần đăng nhập sau | `TokenMiddleware` đọc lại `status` ở **mỗi** request ([auth.py:155](../backend/apps/system/middleware/auth.py#L155), và 125 / 236 cho API key / token nhúng), còn handler đổi trạng thái xoá cache `USER_INFO` nên hiệu lực tức thì. Ngoại lệ duy nhất: luồng SSE đang chạy dở vẫn chạy tới hết, vì middleware chỉ chạy lúc mở request |
-| Thừa field trong body thì **bị bỏ qua im lặng**, không 422 | Mặc định `extra='ignore'` của pydantic; không schema nào trong repo bật `extra='forbid'`. Gửi kèm `id` vào `POST /user` cũng bị bỏ, hệ thống vẫn tự sinh id. Ngoại lệ cố ý: object `configuration` của datasource có kiểm tên key và trả 422 ([utils.py:26](../backend/apps/datasource/utils/utils.py#L26)) |
+| `status = 0` giết luôn token **đang sống**, không chỉ chặn lần đăng nhập sau | `TokenMiddleware` đọc lại `status` ở **mỗi** request ([auth.py:155](../apps/system/middleware/auth.py#L155), và 125 / 236 cho API key / token nhúng), còn handler đổi trạng thái xoá cache `USER_INFO` nên hiệu lực tức thì. Ngoại lệ duy nhất: luồng SSE đang chạy dở vẫn chạy tới hết, vì middleware chỉ chạy lúc mở request |
+| Thừa field trong body thì **bị bỏ qua im lặng**, không 422 | Mặc định `extra='ignore'` của pydantic; không schema nào trong repo bật `extra='forbid'`. Gửi kèm `id` vào `POST /user` cũng bị bỏ, hệ thống vẫn tự sinh id. Ngoại lệ cố ý: object `configuration` của datasource có kiểm tên key và trả 422 ([utils.py:26](../apps/datasource/utils/utils.py#L26)) |
 
 ### 7.10. Quyền dữ liệu theo user (đồng bộ từ SW)
 
@@ -725,7 +704,7 @@ session bị đánh dấu hết hạn, và lần chạm thuộc tính kế tiế
 
 | Bẫy | Chi tiết |
 |---|---|
-| **Commit trong vòng lặp + đọc lại object = N+1 vô hình** | `sync_table` commit theo từng bảng/cột rồi vòng nào cũng đọc `ds.type`/`ds.configuration`, nên mỗi vòng kéo về cả cột `table_relation`. Với nguồn 537 bảng, cột đó ~1,5 MB → một lượt resync tải ~1,7 GB qua dây mà không ai dùng tới. Cách chữa là `snapshot_ds` ([datasource.py:568](../backend/apps/datasource/crud/datasource.py#L568)): bản sao transient, không gắn session nên không bao giờ hết hạn |
+| **Commit trong vòng lặp + đọc lại object = N+1 vô hình** | `sync_table` commit theo từng bảng/cột rồi vòng nào cũng đọc `ds.type`/`ds.configuration`, nên mỗi vòng kéo về cả cột `table_relation`. Với nguồn 537 bảng, cột đó ~1,5 MB → một lượt resync tải ~1,7 GB qua dây mà không ai dùng tới. Cách chữa là `snapshot_ds` ([datasource.py:568](../apps/datasource/crud/datasource.py#L568)): bản sao transient, không gắn session nên không bao giờ hết hạn |
 | **`model_dump()` trên object đã hết hạn trả về toàn `None`** | Thuộc tính hết hạn bị **gỡ khỏi `__dict__`**, mà `model_dump()` đọc thẳng `__dict__` — nên nó trả bản sao rỗng, không exception, không cảnh báo. `getattr` mới kích hoạt cơ chế nạp lại của ORM. Bẫy này có thật: `create_ds` và luồng nhập Excel đều commit ngay trước khi gọi `sync_table`, nên bản sao hỏng sẽ khiến mọi bảng được ghi với `ds_id=None` |
 | **`table_relation` nặng hơn nhiều so với tưởng tượng** | Nó **không phải** danh sách cạnh: nó là ảnh chụp canvas của sơ đồ ER (node, port, layout, style theo định dạng AntV/X6). Nguồn 537 bảng có 936 cell, trong đó riêng phần `ports` chiếm 86% dung lượng, còn cạnh chỉ 5%. Bảng không có quan hệ nào vẫn tốn node. `pg_column_size` báo số **đã nén** (TOAST) nên nhìn qua tưởng nhẹ, nhưng đọc ra là bản giải nén |
 
@@ -753,13 +732,13 @@ export SQLBOT_TEST_DB_URL="postgresql+psycopg://test:test@127.0.0.1:55432/sqlbot
 ```
 
 Chạy test không có DB (48 test skip): `set -a && . ./env.txt && set +a` rồi
-`backend/.venv/bin/python -m pytest tests/ -q`. Cần `env.txt` vì `sqlbot_xpack` `mkdir` `UPLOAD_DIR`
+`.venv/bin/python -m pytest tests/ -q`. Cần `env.txt` vì `sqlbot_xpack` `mkdir` `UPLOAD_DIR`
 ngay lúc import, mặc định là `/opt/sqlbot` — user thường không ghi được vào đó (§1).
 
 ### 7.13. `extraJdbc` — tham số driver nhận nhưng không giữ lời hứa
 
 Ô "tham số phụ" của datasource đi thẳng vào driver dưới dạng keyword argument, sau khi
-[extra_params.py](../backend/apps/db/extra_params.py) ép tên và ép kiểu. Các hành vi dưới đây **đã
+[extra_params.py](../apps/db/extra_params.py) ép tên và ép kiểu. Các hành vi dưới đây **đã
 đo trên server thật** (SQL Server 2019 + pymssql 2.3.13 gói FreeTDS 1.4.27; MySQL 8 + PyMySQL 2.2.8),
 không suy từ tài liệu driver.
 
@@ -780,12 +759,12 @@ luật cũ, rất dễ tưởng là sửa không ăn.
 
 ⚠ Nguồn dữ liệu đi theo đường **assistant nhúng** không qua endpoint lưu nguồn: `extraParams` trong
 cấu hình bên ngoài được gán thẳng vào `extraJdbc`
-([assistant.py:295](../backend/apps/system/crud/assistant.py#L295)), nên sai tên tham số không lộ ra
+([assistant.py:295](../apps/system/crud/assistant.py#L295)), nên sai tên tham số không lộ ra
 lúc cấu hình mà tới lúc người dùng hỏi mới báo 400.
 
 ### 7.14. `check_embedding_ctx_length=True` gửi token id tiktoken thay vì text
 
-`EmbeddingModelCache._new_instance` ([embedding.py:36](../backend/apps/ai_model/embedding.py#L36))
+`EmbeddingModelCache._new_instance` ([embedding.py:36](../apps/ai_model/embedding.py#L36))
 dựng `OpenAIEmbeddings` cho nhánh `EMBEDDING_PROVIDER='api'`. Cờ `check_embedding_ctx_length` của
 langchain mặc định `True`, và khi bật thì `embed_documents`/`embed_query` không gửi text — nó
 tokenize bằng **tiktoken** (`cl100k_base`, ~100k token, vocab của họ model OpenAI) rồi gửi thẳng
@@ -807,6 +786,6 @@ khi văn bản vượt trần ngữ cảnh của model — xem bẫy tiếp theo
 
 | Bẫy | Chi tiết |
 |---|---|
-| **Vector cũ trong DB không tự sửa khi đổi cờ** | Đổi cờ chỉ ảnh hưởng lần nhúng **tiếp theo**. Muốn sửa dữ liệu đã có phải nhúng lại: `UPDATE core_table/core_datasource SET embedding = NULL` cho phạm vi cần sửa rồi gọi `save_table_embedding`/`save_ds_embedding` (script sẵn có ở `backend/scripts/reembed_ds/run.py`, có chế độ xem trước và tự xếp hạng lại một bảng đích để kiểm chứng). Job tự động `run_fill_empty_table_and_ds_embedding` không phù hợp cho việc này — nó là hook chạy **một lần lúc khởi động backend**, quét NULL trên **toàn bộ** datasource chứ không giới hạn phạm vi, và không có tiến độ hay xác nhận |
-| **Tắt cờ làm mất bước tự cắt-khối khi văn bản dài** | `check_embedding_ctx_length=True` còn kèm một tác dụng phụ: tự cắt văn bản vượt trần thành nhiều khối, nhúng riêng rồi gộp lại bằng trung bình có trọng số. Tắt cờ là mất luôn bước đó — văn bản vượt trần bị server trả thẳng `BadRequestError` (400). Tài liệu cấp bảng (`save_table_embedding`) hiếm khi chạm trần, nhưng tài liệu cấp datasource (`save_ds_embedding`) nối **toàn bộ bảng kèm toàn bộ cột** thành một chuỗi — với nguồn hàng trăm bảng thì vượt trần gần như chắc chắn. Đã thêm nhánh dự phòng ở [table.py:159](../backend/apps/datasource/crud/table.py#L159): bắt riêng `BadRequestError` rồi thử lại bằng bản rút gọn (chỉ tên bảng + `custom_comment`, bỏ cột) — không bắt `Exception` chung vì lỗi mạng/lỗi khác vẫn phải lộ ra như cũ |
+| **Vector cũ trong DB không tự sửa khi đổi cờ** | Đổi cờ chỉ ảnh hưởng lần nhúng **tiếp theo**. Muốn sửa dữ liệu đã có phải nhúng lại: `UPDATE core_table/core_datasource SET embedding = NULL` cho phạm vi cần sửa rồi gọi `save_table_embedding`/`save_ds_embedding` (script sẵn có ở `scripts/reembed_ds/run.py`, có chế độ xem trước và tự xếp hạng lại một bảng đích để kiểm chứng). Job tự động `run_fill_empty_table_and_ds_embedding` không phù hợp cho việc này — nó là hook chạy **một lần lúc khởi động backend**, quét NULL trên **toàn bộ** datasource chứ không giới hạn phạm vi, và không có tiến độ hay xác nhận |
+| **Tắt cờ làm mất bước tự cắt-khối khi văn bản dài** | `check_embedding_ctx_length=True` còn kèm một tác dụng phụ: tự cắt văn bản vượt trần thành nhiều khối, nhúng riêng rồi gộp lại bằng trung bình có trọng số. Tắt cờ là mất luôn bước đó — văn bản vượt trần bị server trả thẳng `BadRequestError` (400). Tài liệu cấp bảng (`save_table_embedding`) hiếm khi chạm trần, nhưng tài liệu cấp datasource (`save_ds_embedding`) nối **toàn bộ bảng kèm toàn bộ cột** thành một chuỗi — với nguồn hàng trăm bảng thì vượt trần gần như chắc chắn. Đã thêm nhánh dự phòng ở [table.py:159](../apps/datasource/crud/table.py#L159): bắt riêng `BadRequestError` rồi thử lại bằng bản rút gọn (chỉ tên bảng + `custom_comment`, bỏ cột) — không bắt `Exception` chung vì lỗi mạng/lỗi khác vẫn phải lộ ra như cũ |
 | **Trung bình có trọng số của nhiều khối không phải là "an toàn hơn"** | Trước khi vá, ai coi cờ mặc định là lưới an toàn nên biết: trung bình vector của mười mấy khối rời rạc từ một tài liệu dài không tạo ra một điểm biểu diễn đúng nội dung — nó là điểm nằm lơ lửng giữa nhiều chủ đề không liên quan, gần như không truy hồi được. Lỗi 400 ồn ào tốt hơn một vector im lặng vô nghĩa |

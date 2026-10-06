@@ -22,7 +22,7 @@
 ### Task 1: Schema — `AuthorizationSyncBatch`, `find_duplicate_user_id`, `UserSyncResult`
 
 **Files:**
-- Modify: `backend/apps/hooks/schemas/ai_sync_schema.py`
+- Modify: `apps/hooks/schemas/ai_sync_schema.py`
 - Test: `tests/test_ai_sync_schema.py`
 
 **Interfaces:**
@@ -215,7 +215,7 @@ Expected: PASS toàn bộ.
 - [ ] **Step 6: Commit**
 
 ```bash
-git add backend/apps/hooks/schemas/ai_sync_schema.py tests/test_ai_sync_schema.py
+git add apps/hooks/schemas/ai_sync_schema.py tests/test_ai_sync_schema.py
 git commit -m "feat: thêm schema batch nhiều user cho AI Sync Hook"
 ```
 
@@ -224,7 +224,7 @@ git commit -m "feat: thêm schema batch nhiều user cho AI Sync Hook"
 ### Task 2: Bỏ commit nội bộ trong `replace_user_permissions`
 
 **Files:**
-- Modify: `backend/apps/hooks/crud/ai_user_permission.py`
+- Modify: `apps/hooks/crud/ai_user_permission.py`
 - Test: `tests/test_ai_sync_permission_crud.py`
 
 **Interfaces:**
@@ -293,7 +293,7 @@ Expected: FAIL tại `assert rows == []` — vì code hiện tại tự `commit(
 
 - [ ] **Step 3: Bỏ `session.commit()` khỏi `replace_user_permissions`**
 
-Trong `backend/apps/hooks/crud/ai_user_permission.py`, sửa:
+Trong `apps/hooks/crud/ai_user_permission.py`, sửa:
 
 ```python
         session.execute(statement)
@@ -327,7 +327,7 @@ Expected: PASS toàn bộ (hoặc SKIPPED nếu thiếu `SQLBOT_TEST_DB_URL`, kh
 - [ ] **Step 5: Commit**
 
 ```bash
-git add backend/apps/hooks/crud/ai_user_permission.py tests/test_ai_sync_permission_crud.py
+git add apps/hooks/crud/ai_user_permission.py tests/test_ai_sync_permission_crud.py
 git commit -m "refactor: bỏ commit nội bộ khỏi replace_user_permissions"
 ```
 
@@ -336,8 +336,8 @@ git commit -m "refactor: bỏ commit nội bộ khỏi replace_user_permissions"
 ### Task 3: Handler — xử lý batch, all-or-nothing cấu trúc, STALE theo từng user
 
 **Files:**
-- Modify: `backend/apps/hooks/constants.py`
-- Modify: `backend/apps/hooks/handlers/authorization.py`
+- Modify: `apps/hooks/constants.py`
+- Modify: `apps/hooks/handlers/authorization.py`
 - Test: `tests/test_ai_sync_handler.py`
 
 **Interfaces:**
@@ -347,7 +347,7 @@ git commit -m "refactor: bỏ commit nội bộ khỏi replace_user_permissions"
 
 - [ ] **Step 1: Thêm 2 mã lỗi mới vào `constants.py`**
 
-Trong `backend/apps/hooks/constants.py`, sửa:
+Trong `apps/hooks/constants.py`, sửa:
 
 ```python
     INVALID_PAYLOAD = "INVALID_PAYLOAD"
@@ -541,7 +541,7 @@ Expected: FAIL — `TypeError` khi gọi `AuthorizationSyncData.model_validate(e
 
 - [ ] **Step 4: Viết lại `handle_authorization_sync` và `HandlerResult`**
 
-Thay toàn bộ nội dung `backend/apps/hooks/handlers/authorization.py` bằng:
+Thay toàn bộ nội dung `apps/hooks/handlers/authorization.py` bằng:
 
 ```python
 """Handler cho `actionType = 1` (AUTHORIZATION_SYNC).
@@ -655,7 +655,7 @@ Expected: PASS toàn bộ (hoặc SKIPPED nếu thiếu `SQLBOT_TEST_DB_URL`).
 - [ ] **Step 6: Commit**
 
 ```bash
-git add backend/apps/hooks/constants.py backend/apps/hooks/handlers/authorization.py tests/test_ai_sync_handler.py
+git add apps/hooks/constants.py apps/hooks/handlers/authorization.py tests/test_ai_sync_handler.py
 git commit -m "feat: handler AI Sync Hook xử lý batch nhiều user, STALE theo từng user"
 ```
 
@@ -664,7 +664,7 @@ git commit -m "feat: handler AI Sync Hook xử lý batch nhiều user, STALE the
 ### Task 4: Route — trả `results[]`, cập nhật audit log cho batch
 
 **Files:**
-- Modify: `backend/apps/hooks/api/ai_sync.py`
+- Modify: `apps/hooks/api/ai_sync.py`
 - Test: `tests/test_ai_sync_api.py`
 
 **Interfaces:**
@@ -869,7 +869,7 @@ def test_users_rong_tra_400(client, crud_patches):
 Run: `pytest tests/test_ai_sync_api.py -v`
 Expected: FAIL — `TypeError: HandlerResult.__init__() got an unexpected keyword argument 'user_id'` (từ `_patch_handler` gọi `HandlerResult` với field cũ khi route/handler đã đổi shape ở Task 3) hoặc `KeyError`/`AssertionError` trên `body["results"]` (route chưa trả field này).
 
-- [ ] **Step 3: Sửa `backend/apps/hooks/api/ai_sync.py`**
+- [ ] **Step 3: Sửa `apps/hooks/api/ai_sync.py`**
 
 Sửa khối import:
 
@@ -1132,7 +1132,7 @@ Expected: PASS toàn bộ.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add backend/apps/hooks/api/ai_sync.py tests/test_ai_sync_api.py
+git add apps/hooks/api/ai_sync.py tests/test_ai_sync_api.py
 git commit -m "feat: route AI Sync Hook trả results theo từng user trong batch"
 ```
 
@@ -1351,7 +1351,7 @@ git commit -m "test: e2e batch nhiều user cho AI Sync Hook"
 ### Task 6: Chạy toàn bộ test suite của hook + cập nhật tài liệu API spec
 
 **Files:**
-- Modify: `backend/scripts/ai_sync_hook/AI_SYNC_HOOK_API_SPEC.md`
+- Modify: `scripts/ai_sync_hook/AI_SYNC_HOOK_API_SPEC.md`
 
 - [ ] **Step 1: Chạy toàn bộ test liên quan hook để xác nhận không có hồi quy**
 
@@ -1670,7 +1670,7 @@ thành:
 - [ ] **Step 7: Commit**
 
 ```bash
-git add backend/scripts/ai_sync_hook/AI_SYNC_HOOK_API_SPEC.md
+git add scripts/ai_sync_hook/AI_SYNC_HOOK_API_SPEC.md
 git commit -m "docs: cập nhật API spec AI Sync Hook cho batch nhiều user"
 ```
 

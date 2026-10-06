@@ -153,7 +153,7 @@ def _cap_history_answer(text: str) -> str:
     nhánh: khi không tìm được JSON (model chưa xuất ra khối nào thì đã chết giữa stream) thì phải
     còn đường lùi, và bản thân câu SQL cũng có thể dài bất thường.
 
-    Đừng chọn nhánh nào dựa trên cảm giác: đây là biến phải đo bằng `backend/scripts/eval_text2sql`.
+    Đừng chọn nhánh nào dựa trên cảm giác: đây là biến phải đo bằng `scripts/eval_text2sql`.
     Từng thử đo tay 6 lượt hỏi và kết luận sai — khác biệt không có ý nghĩa thống kê (Fisher p≈0.5),
     chạy lại đúng cấu hình đó còn cho kết quả khác.
     """

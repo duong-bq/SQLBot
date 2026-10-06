@@ -24,11 +24,11 @@ mạng) sẽ dẫn bạn đi sai ở đúng sáu chỗ này:
 | Khi pha SQL hỏng | Trả event `error`, hết lượt | Sinh lại SQL (`LLM_SQL_MAX_RETRY`), vẫn hỏng thì **hạ cấp** sang trả lời dựa trên lịch sử hội thoại |
 | Đối tượng dùng | Web UI là chính | **API-first**: đối tác tích hợp gọi thẳng `POST /chat/question` qua SSE. Một lời gọi trả đủ `sql`, số liệu, `answer`, `chart` và **gợi ý câu hỏi tiếp theo** — không phải gọi thêm API nào |
 | Gợi ý câu hỏi tiếp theo | Endpoint rời `POST /chat/recommend_questions`, client phải gọi thêm một lượt | Sinh sẵn **trong chính lượt hỏi**, về ở event `recommended_question`. Endpoint rời vẫn còn nhưng là đường khác, và câu hỏi cũ nạp vào prompt chỉ lấy của **chính user đang hỏi** |
-| Ngôn ngữ prompt | Tiếng Trung | Tiếng Việt (`backend/templates/template.yaml` đã dịch và viết lại) |
+| Ngôn ngữ prompt | Tiếng Trung | Tiếng Việt (`templates/template.yaml` đã dịch và viết lại) |
 | Phân quyền dữ liệu | Row/column permission cấu hình tay trên UI, nhờ LLM viết lại điều kiện lọc | Thêm một lớp **độc lập**: quyền bảng/cột/hàng đồng bộ từ hệ SW, cưỡng chế **tất định** bằng `sqlglot` |
 
 Hệ quả cụ thể: `ChatFinishStep` đã bị **đánh số lại** để chèn `GENERATE_ANSWER` vào giữa
-`QUERY_DATA` và `GENERATE_CHART`. Xem [chat_model.py:57](../backend/apps/chat/models/chat_model.py#L57).
+`QUERY_DATA` và `GENERATE_CHART`. Xem [chat_model.py:57](../apps/chat/models/chat_model.py#L57).
 
 ## 3. Trạng thái hiện tại
 
@@ -36,8 +36,8 @@ Hệ quả cụ thể: `ChatFinishStep` đã bị **đánh số lại** để ch
 - Đối tác tích hợp: HĐND TP Hà Nội. Họ gọi API, không dùng web UI.
 - `finish_step` mặc định của `POST /chat/question` là `GENERATE_CHART`, do `GENERATE_CHART_ENABLED`
   quyết định (mặc định bật) qua `default_finish_step`
-  ([chat.py:465](../backend/apps/chat/api/chat.py#L465)); nhánh MCP truyền `QUERY_DATA`
-  ([mcp.py:258](../backend/apps/mcp/mcp.py#L258)).
+  ([chat.py:465](../apps/chat/api/chat.py#L465)); nhánh MCP truyền `QUERY_DATA`
+  ([mcp.py:258](../apps/mcp/mcp.py#L258)).
 - Số lần gọi LLM cho một lượt hỏi bình thường: **4** (sinh SQL + answer + chart + gợi ý câu hỏi
   tiếp theo; ba lần sau chạy song song). Tắt chart còn 3, tắt cả gợi ý
   (`CHAT_INLINE_RECOMMEND_ENABLED=false`) còn 2.
@@ -55,7 +55,7 @@ Hệ quả cụ thể: `ChatFinishStep` đã bị **đánh số lại** để ch
   dùng **không có dòng quyền nào thì không bị siết**, nên tài khoản nội bộ và harness eval chạy như
   trước. Chi tiết ở [TEXT2SQL_PIPELINE.md](TEXT2SQL_PIPELINE.md) §13.
 - Nhóm endpoint quản trị tài khoản định danh bằng **`account`** thay vì `id`: `/user/by-account/*`
-  ([user.py:215](../backend/apps/system/api/user.py#L215)). Tồn tại vì SW đặt `account` bằng đúng
+  ([user.py:215](../apps/system/api/user.py#L215)). Tồn tại vì SW đặt `account` bằng đúng
   `userId` bên họ nên không giữ id snowflake của SQLBot — cùng một định danh dùng cho cả API quản
   trị lẫn `POST /hooks/ai-sync`. Sáu route chỉ phân giải `account` → `id` rồi gọi lại handler cũ.
 - Nạp nguồn dữ liệu từ file Excel/CSV có đường **bất đồng bộ**: `POST
@@ -78,7 +78,7 @@ Hệ quả cụ thể: `ChatFinishStep` đã bị **đánh số lại** để ch
   trước khi có nó. Bật lần đầu là vào **chế độ chỉ đo** (`LLM_ROUTE_SHADOW=True`): cổng chạy và ghi
   log nhưng quyết định bị ép về `sql`, dùng để lấy phân bố thật trước khi đổi hành vi. Đọc số bằng
   `scripts/route_stats/report.py`. Chi tiết ở [TEXT2SQL_PIPELINE.md](TEXT2SQL_PIPELINE.md) §5.1.
-- Có thư mục test: `backend/tests/` (`uv run pytest tests/`, 164 ca), phủ phần trích `.docx`, toàn bộ
+- Có thư mục test: `tests/` (`uv run pytest tests/`, 164 ca), phủ phần trích `.docx`, toàn bộ
   logic phân quyền theo user (chuỗi sàng + phép viết lại SQL), và phần bóc khối `<think>` khỏi stream
   LLM (`process_stream`). Phần còn lại của backend vẫn **không có test tự động** — đo chất lượng
   pipeline bằng harness ở `scripts/eval_text2sql/`, không phải bằng unit test.
@@ -104,8 +104,8 @@ Hệ quả cụ thể: `ChatFinishStep` đã bị **đánh số lại** để ch
 | [AI_SYNC_HOOK_API_SPEC.md](api_spec/AI_SYNC_HOOK_API_SPEC.md) | Cổng `POST /hooks/ai-sync` nhận bản tin đồng bộ từ SW — actionType, full-snapshot quyền (type 1), mirror schema nguồn (type 4), idempotency, bảng lỗi |
 | [AI_PERMISSION_QUERY_API_SPEC.md](api_spec/AI_PERMISSION_QUERY_API_SPEC.md) | 2 endpoint GET đọc lại quyền đã đồng bộ (dev/test), tách khỏi spec ghi ở trên |
 | [TABLE_COMMENT_API_SPEC.md](api_spec/TABLE_COMMENT_API_SPEC.md) | 3 endpoint ghi chú thích bảng/cột và bật/tắt bảng theo **tên** (không cần tra id), chỉ cần giữ `ds_id` |
-| [backend/scripts/ai_sync_hook/USER_ADMIN_API_SPEC.md](../backend/scripts/ai_sync_hook/USER_ADMIN_API_SPEC.md) | Quản trị tài khoản cho SW: đăng nhập, tạo/sửa/khoá/xoá user, đổi mật khẩu. Mọi endpoint định danh bằng `account`. Bản `..._LITE.md` cạnh đó là bản rút gọn gửi đối tác — sửa cái nào thì sửa cả hai |
-| [backend/scripts/eval_text2sql/README.md](../backend/scripts/eval_text2sql/README.md) | Cách dùng harness đánh giá chất lượng |
+| [scripts/ai_sync_hook/USER_ADMIN_API_SPEC.md](../scripts/ai_sync_hook/USER_ADMIN_API_SPEC.md) | Quản trị tài khoản cho SW: đăng nhập, tạo/sửa/khoá/xoá user, đổi mật khẩu. Mọi endpoint định danh bằng `account`. Bản `..._LITE.md` cạnh đó là bản rút gọn gửi đối tác — sửa cái nào thì sửa cả hai |
+| [scripts/eval_text2sql/README.md](../scripts/eval_text2sql/README.md) | Cách dùng harness đánh giá chất lượng |
 
 ### Tài liệu ở repo root — biết để **khỏi mở nhầm**
 
@@ -124,23 +124,23 @@ Hệ quả cụ thể: `ChatFinishStep` đã bị **đánh số lại** để ch
 
 **1. Đừng đổi biến `LLM_*` trong `config.py` theo cảm giác.**
 Các giá trị mặc định (`LLM_SQL_MAX_RETRY`, `LLM_ANSWER_HISTORY_*`, `LLM_SQL_HISTORY_JSON_ONLY`…)
-là kết quả đo bằng `backend/scripts/eval_text2sql`, không phải giá trị đặt bừa. Đổi thì phải chạy
+là kết quả đo bằng `scripts/eval_text2sql`, không phải giá trị đặt bừa. Đổi thì phải chạy
 lại harness và kèm số liệu. Chi tiết trong [OPERATIONS.md](OPERATIONS.md) §2.
 
 **2. Chú thích trong code là nguồn sự thật về "tại sao".**
-[llm.py](../backend/apps/chat/task/llm.py) và [config.py](../backend/common/core/config.py) có
+[llm.py](../apps/chat/task/llm.py) và [config.py](../common/core/config.py) có
 chú thích rất dày, nhiều chỗ ghi cả kết quả đo được và cảnh báo *"cố ý giữ nhánh này khi merge từ
-upstream"* (ví dụ [llm.py:107](../backend/apps/chat/task/llm.py#L107)). Trước khi "dọn dẹp" một
+upstream"* (ví dụ [llm.py:107](../apps/chat/task/llm.py#L107)). Trước khi "dọn dẹp" một
 đoạn trông thừa, đọc chú thích của nó — phần lớn là vá lỗi đã đo được.
 
 **3. Mọi chỗ cắt bớt dữ liệu đưa vào prompt đều phải nói cho LLM biết đã cắt.**
 Cắt im lặng thì LLM đếm số dòng nó nhận được rồi báo đó là tổng. Ca đo thật: SQL trả 136 dòng,
 câu trả lời khẳng định "tổng cộng 72 nghị quyết". Cặp `ANSWER_MAX_ROWS` +
-`build_data_scope_note` ([llm.py:79-82](../backend/apps/chat/task/llm.py#L79)) tồn tại vì lý do
+`build_data_scope_note` ([llm.py:79-82](../apps/chat/task/llm.py#L79)) tồn tại vì lý do
 đó và **phải luôn đi cùng nhau**.
 
 ## 6. Đi tiếp
 
 Muốn sửa pha answer → [TEXT2SQL_PIPELINE.md](TEXT2SQL_PIPELINE.md) §5, rồi mở
-[llm.py:708](../backend/apps/chat/task/llm.py#L708) và khối `answer` trong
-[templates/template.yaml:630](../backend/templates/template.yaml#L630).
+[llm.py:708](../apps/chat/task/llm.py#L708) và khối `answer` trong
+[templates/template.yaml:630](../templates/template.yaml#L630).

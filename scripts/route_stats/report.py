@@ -16,7 +16,7 @@ Cách đọc kết quả:
   bật: nó chỉ cộng thêm một lượt gọi LLM cho mọi câu hỏi.
 - Cột thời gian và token cho biết cái giá của cổng, để so với cái nó tiết kiệm được ở pha SQL.
 
-Chạy từ thư mục ``backend/``::
+Chạy từ gốc repo::
 
     .venv/bin/python scripts/route_stats/report.py --days 7
 """

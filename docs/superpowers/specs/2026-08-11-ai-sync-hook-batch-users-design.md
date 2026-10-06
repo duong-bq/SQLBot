@@ -55,7 +55,7 @@ mọi cơ chế khác của hook (idempotency, chống bản tin lùi, audit log
 
 - `data.users`: mảng bắt buộc, **không được rỗng** (rỗng → lỗi `EMPTY_USER_LIST`).
 - Mỗi phần tử giữ nguyên cấu trúc `userId`/`fullName`/`isAdmin`/`formQueries` như payload đơn-user
-  cũ (xem [AI_SYNC_HOOK_API_SPEC.md §4](../../../backend/scripts/ai_sync_hook/AI_SYNC_HOOK_API_SPEC.md)
+  cũ (xem [AI_SYNC_HOOK_API_SPEC.md §4](../../../scripts/ai_sync_hook/AI_SYNC_HOOK_API_SPEC.md)
   cho chi tiết `formQueries`/`tableInfo`/`fields` — phần này không đổi).
 - `userId` không được trùng giữa các phần tử trong cùng `data.users` (lỗi `DUPLICATE_USER_ID`).
 - `formUuid` không được trùng **trong `formQueries` của cùng một user** — không liên quan tới user
@@ -151,7 +151,7 @@ không đổi cấu trúc — batch chỉ là nhiều lần ghi độc lập the
 
 Theo bảng ánh xạ trong `CLAUDE.md` (đổi payload hook) — **đề xuất, chưa tự sửa**:
 
-- `backend/scripts/ai_sync_hook/AI_SYNC_HOOK_API_SPEC.md`: sửa §1 (ví dụ response), §4 (payload
+- `scripts/ai_sync_hook/AI_SYNC_HOOK_API_SPEC.md`: sửa §1 (ví dụ response), §4 (payload
   batch), §7 (thêm `EMPTY_USER_LIST`, `DUPLICATE_USER_ID`), §8 (ví dụ curl).
 - `docs/OPERATIONS.md`, `docs/BACKEND_ARCHITECTURE.md`: rà nếu có mô tả payload/luồng hook.
 - `docs/superpowers/specs/2026-08-10-ai-sync-hook-design.md`: **giữ nguyên**, đây là lịch sử quyết

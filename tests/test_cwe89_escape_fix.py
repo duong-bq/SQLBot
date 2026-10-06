@@ -16,7 +16,7 @@ import pytest
 
 _SRC_PATH = os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-    "backend", "apps", "datasource", "crud", "row_permission.py",
+    "apps", "datasource", "crud", "row_permission.py",
 )
 
 # Parse the source and extract _escape_sql_value function body

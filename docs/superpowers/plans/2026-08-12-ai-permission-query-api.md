@@ -22,7 +22,7 @@
 ### Task 1: CRUD — tóm tắt quyền theo user
 
 **Files:**
-- Modify: `backend/apps/hooks/crud/ai_user_permission.py`
+- Modify: `apps/hooks/crud/ai_user_permission.py`
 - Test: `tests/test_ai_permission_query_crud.py` (mới, cần Postgres — skip nếu thiếu `SQLBOT_TEST_DB_URL`)
 
 **Đầu ra:** Hàm `list_users_with_permission_summary(session) -> list[dict]`, mỗi phần tử gồm `user_id`, `full_name`, `is_admin`, `form_count`, `sync_version`, `synced_at` — 1 dòng cho mỗi `user_id` phân biệt đang có ≥1 dòng trong `ai_user_permissions`, sắp theo `user_id`. Dùng `GROUP BY user_id`, `COUNT(*)`, `MAX(sync_version)`, `MAX(synced_at)`.
@@ -39,7 +39,7 @@
 ### Task 2: Schema output cho phía đọc
 
 **Files:**
-- Create: `backend/apps/hooks/schemas/permission_query_schema.py`
+- Create: `apps/hooks/schemas/permission_query_schema.py`
 - Test: `tests/test_ai_permission_query_schema.py` (mới, không cần DB)
 
 **Interfaces:**
@@ -62,8 +62,8 @@
 ### Task 3: Router 2 endpoint + đăng ký vào app
 
 **Files:**
-- Create: `backend/apps/hooks/api/permission_query.py`
-- Modify: `backend/apps/api.py` (thêm import + `include_router`)
+- Create: `apps/hooks/api/permission_query.py`
+- Modify: `apps/api.py` (thêm import + `include_router`)
 - Test: `tests/test_ai_permission_query_api.py` (mới, không cần DB — patch tầng crud giống `test_ai_sync_api.py`)
 
 **Interfaces:**
@@ -86,7 +86,7 @@
 ### Task 4: Chạy toàn bộ test + rà tài liệu
 
 **Files:**
-- Modify (đề xuất, chờ duyệt trước khi sửa): `backend/scripts/ai_sync_hook/AI_SYNC_HOOK_API_SPEC.md`, `docs/BACKEND_ARCHITECTURE.md`
+- Modify (đề xuất, chờ duyệt trước khi sửa): `scripts/ai_sync_hook/AI_SYNC_HOOK_API_SPEC.md`, `docs/BACKEND_ARCHITECTURE.md`
 
 **Đầu ra:**
 - Chạy toàn bộ `tests/` (không riêng domain hook) để xác nhận không hồi quy.

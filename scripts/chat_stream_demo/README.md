@@ -15,13 +15,11 @@ Datasource dùng làm demo: **DataLaoCai** (`core_datasource.id = 5`) — thu/ch
 
 ## Chuẩn bị
 
-Backend phải đang chạy ở `localhost:8001` (kèm Postgres 5434 + Redis 6380 qua
-`docker-compose.service.yml`).
+Backend phải đang chạy ở `localhost:8001` (kèm Postgres bên ngoài và Redis 6380).
 
 ## Chạy
 
 ```bash
-cd backend
 .venv/bin/python scripts/chat_stream_demo/01_chat_standard.py
 .venv/bin/python scripts/chat_stream_demo/02_chat_mcp.py
 ```

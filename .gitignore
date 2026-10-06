@@ -196,3 +196,14 @@ sqlbot-xpack
 data/
 output*/
 .claude
+
+# Từ backend/.gitignore cũ
+__pycache__
+app.egg-info
+*.pyc
+.mypy_cache
+htmlcov
+# uv.lock phải được commit: Dockerfile chạy `uv sync --frozen`, thiếu file này thì
+# build trên server chết ngay ở bước COPY. Đây cũng là thứ duy nhất giữ cho image build ra
+# cùng bộ phiên bản với máy dev.
+!uv.lock

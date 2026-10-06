@@ -31,9 +31,9 @@ qua fixture `db_session`, không cần DB cho test schema/model/API nhờ patch)
 ## Task 1: Thêm cột domain vào model + migration DB
 
 **Files:**
-- Modify: `backend/apps/hooks/models/ai_sync_model.py` (class `AiUserPermission`, sau field
+- Modify: `apps/hooks/models/ai_sync_model.py` (class `AiUserPermission`, sau field
   `table_description` ở dòng 102; thêm index vào `__table_args__` ở dòng 84-88)
-- Create: `backend/alembic/versions/075_ai_user_permissions_domain_info.py`
+- Create: `alembic/versions/075_ai_user_permissions_domain_info.py`
 - Test: `tests/test_ai_sync_models.py`
 
 **Interfaces:**
@@ -74,7 +74,7 @@ qua fixture `db_session`, không cần DB cho test schema/model/API nhờ patch)
 
 - [ ] **Step 5: Viết migration Alembic**
 
-  Tạo `backend/alembic/versions/075_ai_user_permissions_domain_info.py` theo đúng khuôn của
+  Tạo `alembic/versions/075_ai_user_permissions_domain_info.py` theo đúng khuôn của
   `074_ai_sync_hook.py` (đọc file đó để lấy đúng format `revision`/`down_revision`/`branch_labels`).
   `down_revision` trỏ về revision id của `074_ai_sync_hook.py`. Trong `upgrade()`:
   `op.add_column("ai_user_permissions", ...)` cho cả 4 cột (kiểu khớp Step 3, nullable, không
@@ -83,13 +83,13 @@ qua fixture `db_session`, không cần DB cho test schema/model/API nhờ patch)
 
 - [ ] **Step 6: Chạy migration trên DB test, xác nhận không lỗi**
 
-  Run: `cd backend && alembic upgrade head`
+  Run: `alembic upgrade head`
   Expected: chạy thành công, không lỗi; kiểm tra bằng `alembic current` thấy revision 075.
 
 - [ ] **Step 7: Commit**
 
   ```bash
-  git add backend/apps/hooks/models/ai_sync_model.py backend/alembic/versions/075_ai_user_permissions_domain_info.py tests/test_ai_sync_models.py
+  git add apps/hooks/models/ai_sync_model.py alembic/versions/075_ai_user_permissions_domain_info.py tests/test_ai_sync_models.py
   git commit -m "feat: thêm cột lưu thông tin lĩnh vực vào ai_user_permissions"
   ```
 
@@ -98,7 +98,7 @@ qua fixture `db_session`, không cần DB cho test schema/model/API nhờ patch)
 ## Task 2: Parse 4 field domain trong input schema (`TableInfo`)
 
 **Files:**
-- Modify: `backend/apps/hooks/schemas/ai_sync_schema.py` (class `TableInfo`, dòng 41-56)
+- Modify: `apps/hooks/schemas/ai_sync_schema.py` (class `TableInfo`, dòng 41-56)
 - Test: `tests/test_ai_sync_schema.py`
 
 **Interfaces:**
@@ -143,7 +143,7 @@ qua fixture `db_session`, không cần DB cho test schema/model/API nhờ patch)
 - [ ] **Step 5: Commit**
 
   ```bash
-  git add backend/apps/hooks/schemas/ai_sync_schema.py tests/test_ai_sync_schema.py
+  git add apps/hooks/schemas/ai_sync_schema.py tests/test_ai_sync_schema.py
   git commit -m "feat: parse thông tin lĩnh vực trong payload AUTHORIZATION_SYNC"
   ```
 
@@ -152,7 +152,7 @@ qua fixture `db_session`, không cần DB cho test schema/model/API nhờ patch)
 ## Task 3: Ghi domain fields khi upsert quyền (`replace_user_permissions`)
 
 **Files:**
-- Modify: `backend/apps/hooks/crud/ai_user_permission.py` (hàm `replace_user_permissions`, dict
+- Modify: `apps/hooks/crud/ai_user_permission.py` (hàm `replace_user_permissions`, dict
   `values` dòng 52-65)
 - Test: `tests/test_ai_sync_crud.py`
 
@@ -203,7 +203,7 @@ qua fixture `db_session`, không cần DB cho test schema/model/API nhờ patch)
 - [ ] **Step 5: Commit**
 
   ```bash
-  git add backend/apps/hooks/crud/ai_user_permission.py tests/test_ai_sync_crud.py
+  git add apps/hooks/crud/ai_user_permission.py tests/test_ai_sync_crud.py
   git commit -m "feat: ghi thông tin lĩnh vực khi upsert quyền user"
   ```
 
@@ -212,7 +212,7 @@ qua fixture `db_session`, không cần DB cho test schema/model/API nhờ patch)
 ## Task 4: Phơi domain fields qua API đọc quyền (`permission_query_schema.py`)
 
 **Files:**
-- Modify: `backend/apps/hooks/schemas/permission_query_schema.py` (class
+- Modify: `apps/hooks/schemas/permission_query_schema.py` (class
   `PermissionTableInfoOut` dòng 16-24; hàm `to_permission_detail` dòng 64-96)
 - Test: `tests/test_ai_permission_query_schema.py`, `tests/test_ai_permission_query_api.py`
 
@@ -271,7 +271,7 @@ qua fixture `db_session`, không cần DB cho test schema/model/API nhờ patch)
 - [ ] **Step 7: Commit**
 
   ```bash
-  git add backend/apps/hooks/schemas/permission_query_schema.py tests/test_ai_permission_query_schema.py tests/test_ai_permission_query_api.py
+  git add apps/hooks/schemas/permission_query_schema.py tests/test_ai_permission_query_schema.py tests/test_ai_permission_query_api.py
   git commit -m "feat: phơi thông tin lĩnh vực qua API đọc quyền user"
   ```
 
@@ -295,7 +295,7 @@ qua fixture `db_session`, không cần DB cho test schema/model/API nhờ patch)
 - [ ] **Step 2: Nêu đề xuất cập nhật tài liệu cho user duyệt (không tự sửa)**
 
   Theo `CLAUDE.md` và spec §7: đề xuất thêm 4 field domain vào bảng mô tả payload `tableInfo` trong
-  `backend/scripts/ai_sync_hook/AI_SYNC_HOOK_API_SPEC.md` §4, kèm ví dụ JSON; và thêm 4 field domain
+  `scripts/ai_sync_hook/AI_SYNC_HOOK_API_SPEC.md` §4, kèm ví dụ JSON; và thêm 4 field domain
   vào ví dụ response + bảng mô tả `tableInfo` output trong
-  `backend/scripts/ai_sync_hook/AI_PERMISSION_QUERY_API_SPEC.md`. Trình bày rõ "sửa mục nào, thành
+  `scripts/ai_sync_hook/AI_PERMISSION_QUERY_API_SPEC.md`. Trình bày rõ "sửa mục nào, thành
   gì" rồi chờ user quyết định trước khi đụng vào các file này.

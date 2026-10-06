@@ -33,7 +33,7 @@ so sánh chống lùi.
 ## Task 1: Schema — bỏ version/timestamp, đổi `data` → `payload`
 
 **Files:**
-- Modify: `backend/apps/hooks/schemas/ai_sync_schema.py:1-38` (class `SyncEnvelope` + import)
+- Modify: `apps/hooks/schemas/ai_sync_schema.py:1-38` (class `SyncEnvelope` + import)
 - Test: `tests/test_ai_sync_schema.py:1-77`
 
 **Interfaces:**
@@ -93,7 +93,7 @@ hành vi hiện tại.
 
 - [ ] **Step 3: Sửa `SyncEnvelope`**
 
-Trong `backend/apps/hooks/schemas/ai_sync_schema.py`, thay toàn bộ class `SyncEnvelope` (dòng 13-37)
+Trong `apps/hooks/schemas/ai_sync_schema.py`, thay toàn bộ class `SyncEnvelope` (dòng 13-37)
 bằng:
 
 ```python
@@ -136,7 +136,7 @@ Ghi chú: `to_sync_version()` không đổi ở task này (vẫn nhận `datetim
 - [ ] **Step 5: Commit**
 
 ```bash
-git add backend/apps/hooks/schemas/ai_sync_schema.py tests/test_ai_sync_schema.py
+git add apps/hooks/schemas/ai_sync_schema.py tests/test_ai_sync_schema.py
 git commit -m "refactor: envelope AI Sync Hook chỉ còn actionType + payload"
 ```
 
@@ -145,7 +145,7 @@ git commit -m "refactor: envelope AI Sync Hook chỉ còn actionType + payload"
 ## Task 2: Bỏ `SyncStatus.STALE` khỏi constants
 
 **Files:**
-- Modify: `backend/apps/hooks/constants.py:29-45` (class `SyncStatus`)
+- Modify: `apps/hooks/constants.py:29-45` (class `SyncStatus`)
 
 **Interfaces:**
 - Consumes: không phụ thuộc task nào.
@@ -158,7 +158,7 @@ sửa nguồn, chưa cần chạy full suite (sẽ đỏ tạm thời ở các f
 
 - [ ] **Step 1: Sửa `SyncStatus`**
 
-Trong `backend/apps/hooks/constants.py`, thay class `SyncStatus` (dòng 29-45) bằng:
+Trong `apps/hooks/constants.py`, thay class `SyncStatus` (dòng 29-45) bằng:
 
 ```python
 class SyncStatus(str, Enum):
@@ -184,7 +184,7 @@ Expected: In ra danh sách 5 member, không có `STALE`.
 - [ ] **Step 3: Commit**
 
 ```bash
-git add backend/apps/hooks/constants.py
+git add apps/hooks/constants.py
 git commit -m "refactor: bỏ SyncStatus.STALE — không còn cơ chế chống bản tin lùi"
 ```
 
@@ -193,7 +193,7 @@ git commit -m "refactor: bỏ SyncStatus.STALE — không còn cơ chế chống
 ## Task 3: crud/ai_sync_log.py — bỏ `get_last_applied_version`
 
 **Files:**
-- Modify: `backend/apps/hooks/crud/ai_sync_log.py:57-94` (`finish_log` docstring + xoá
+- Modify: `apps/hooks/crud/ai_sync_log.py:57-94` (`finish_log` docstring + xoá
   `get_last_applied_version`)
 - Test: `tests/test_ai_sync_crud.py:1-97`
 
@@ -241,7 +241,7 @@ PASS. Coi Step 2 là bước xác nhận diff test đã đúng, không phải RE
 
 - [ ] **Step 3: Xoá `get_last_applied_version` và sửa docstring `finish_log`**
 
-Trong `backend/apps/hooks/crud/ai_sync_log.py`, sửa docstring `finish_log` (dòng 66-69) thành:
+Trong `apps/hooks/crud/ai_sync_log.py`, sửa docstring `finish_log` (dòng 66-69) thành:
 
 ```python
     """Chốt kết quả xử lý vào dòng audit và commit.
@@ -262,7 +262,7 @@ không bắt buộc phải sẵn có trong môi trường chạy plan này).
 - [ ] **Step 5: Commit**
 
 ```bash
-git add backend/apps/hooks/crud/ai_sync_log.py tests/test_ai_sync_crud.py
+git add apps/hooks/crud/ai_sync_log.py tests/test_ai_sync_crud.py
 git commit -m "refactor: bỏ get_last_applied_version — hết chỗ dùng sau khi bỏ STALE"
 ```
 
@@ -271,7 +271,7 @@ git commit -m "refactor: bỏ get_last_applied_version — hết chỗ dùng sau
 ## Task 4: handlers/authorization.py — bỏ nhánh STALE, dùng `envelope.payload`
 
 **Files:**
-- Modify: `backend/apps/hooks/handlers/authorization.py` (toàn file)
+- Modify: `apps/hooks/handlers/authorization.py` (toàn file)
 - Test: `tests/test_ai_sync_handler.py` (toàn file)
 
 **Interfaces:**
@@ -456,7 +456,7 @@ module.
 
 - [ ] **Step 3: Sửa `handlers/authorization.py`**
 
-Thay toàn bộ nội dung file `backend/apps/hooks/handlers/authorization.py` bằng:
+Thay toàn bộ nội dung file `apps/hooks/handlers/authorization.py` bằng:
 
 ```python
 """Handler cho `actionType = 1` (AUTHORIZATION_SYNC).
@@ -576,7 +576,7 @@ Expected: PASS toàn bộ (hoặc SKIP nếu không có `SQLBOT_TEST_DB_URL`).
 - [ ] **Step 5: Commit**
 
 ```bash
-git add backend/apps/hooks/handlers/authorization.py tests/test_ai_sync_handler.py
+git add apps/hooks/handlers/authorization.py tests/test_ai_sync_handler.py
 git commit -m "refactor: authorization handler bỏ nhánh STALE, dùng envelope.payload"
 ```
 
@@ -585,7 +585,7 @@ git commit -m "refactor: authorization handler bỏ nhánh STALE, dùng envelope
 ## Task 5: handlers/datasource_sync.py — dùng `envelope.payload`
 
 **Files:**
-- Modify: `backend/apps/hooks/handlers/datasource_sync.py:1-67`
+- Modify: `apps/hooks/handlers/datasource_sync.py:1-67`
 
 **Interfaces:**
 - Consumes: `SyncEnvelope.payload` (Task 1).
@@ -596,7 +596,7 @@ Không có test file riêng ở mức handler cho DATASOURCE_SYNC (chỉ đượ
 
 - [ ] **Step 1: Sửa nguồn**
 
-Trong `backend/apps/hooks/handlers/datasource_sync.py`:
+Trong `apps/hooks/handlers/datasource_sync.py`:
 
 Dòng 45 (trong docstring `handle_datasource_sync`), đổi `` `data.datasourceIds` `` →
 `` `payload.datasourceIds` ``.
@@ -624,7 +624,7 @@ Expected: In `ok`, không lỗi import.
 - [ ] **Step 3: Commit**
 
 ```bash
-git add backend/apps/hooks/handlers/datasource_sync.py
+git add apps/hooks/handlers/datasource_sync.py
 git commit -m "refactor: datasource_sync handler dùng envelope.payload"
 ```
 
@@ -633,7 +633,7 @@ git commit -m "refactor: datasource_sync handler dùng envelope.payload"
 ## Task 6: api/ai_sync.py — payload extraction, bỏ yêu cầu version/timestamp, sync_version server-side
 
 **Files:**
-- Modify: `backend/apps/hooks/api/ai_sync.py` (toàn file)
+- Modify: `apps/hooks/api/ai_sync.py` (toàn file)
 - Test: `tests/test_ai_sync_api.py` (toàn file)
 
 **Interfaces:**
@@ -1111,7 +1111,7 @@ Expected: PASS toàn bộ.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add backend/apps/hooks/api/ai_sync.py tests/test_ai_sync_api.py
+git add apps/hooks/api/ai_sync.py tests/test_ai_sync_api.py
 git commit -m "feat: hook AI Sync chỉ nhận actionType + payload, bỏ chống bản tin lùi"
 ```
 
@@ -1387,7 +1387,7 @@ Expected: PASS toàn bộ.
 
 - [ ] **Step 3: Grep xác nhận không còn sót tham chiếu STALE/version/timestamp/`.data` cũ**
 
-Run: `grep -rn "SyncStatus.STALE\|get_last_applied_version\|envelope\.data\b" backend/apps/hooks tests`
+Run: `grep -rn "SyncStatus.STALE\|get_last_applied_version\|envelope\.data\b" apps/hooks tests`
 Expected: Không có kết quả nào (empty output).
 
 - [ ] **Step 4: Không commit gì ở bước này** — nếu Step 1-3 đều xanh, plan coi như hoàn tất. Nếu có
@@ -1400,7 +1400,7 @@ Expected: Không có kết quả nào (empty output).
 Theo quy ước `CLAUDE.md` của repo ("Quy ước giữ tài liệu sống"): sau khi merge xong thay đổi này,
 **đề xuất với user** (không tự sửa) rà soát các tài liệu sau vì hợp đồng bản tin đã đổi:
 
-- `backend/scripts/ai_sync_hook/AI_SYNC_HOOK_API_SPEC.md` — mô tả shape envelope
+- `scripts/ai_sync_hook/AI_SYNC_HOOK_API_SPEC.md` — mô tả shape envelope
   (`version`/`timestamp`/`data`) cần cập nhật thành `{actionType, payload}`, và mục nói về STALE cần
   bỏ hoặc đánh dấu đã ngừng dùng.
 - `docs/superpowers/specs/2026-08-10-ai-sync-hook-design.md` và

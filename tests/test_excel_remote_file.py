@@ -18,8 +18,8 @@ from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-BACKEND_DIR = Path(__file__).resolve().parents[1] / "backend"
-sys.path.insert(0, str(BACKEND_DIR))
+ROOT_DIR = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT_DIR))
 
 from apps.datasource.utils import remote_file  # noqa: E402
 from apps.datasource.utils.excel_import import ExcelImportError  # noqa: E402

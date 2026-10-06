@@ -116,7 +116,7 @@ Mảng rỗng nếu chưa có user nào từng được đồng bộ.
 
 Theo bảng ánh xạ trong `CLAUDE.md` (thêm endpoint mới) — **đề xuất, chưa tự sửa**:
 
-- `backend/scripts/ai_sync_hook/AI_SYNC_HOOK_API_SPEC.md`: cân nhắc thêm mục mô tả 2 endpoint đọc
+- `scripts/ai_sync_hook/AI_SYNC_HOOK_API_SPEC.md`: cân nhắc thêm mục mô tả 2 endpoint đọc
   này (tài liệu hiện tại chỉ nói về hook ghi `/hooks/ai-sync`), hoặc tách file spec riêng nếu tài
   liệu ghi/đọc lẫn lộn sẽ khó đọc — để user quyết định khi rà.
 - `docs/BACKEND_ARCHITECTURE.md`: dòng mô tả `apps/hooks/` (hiện liệt kê `api/ai_sync.py`,

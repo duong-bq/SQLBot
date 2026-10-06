@@ -34,7 +34,7 @@ qua fixture `db_session`, không cần DB cho test schema/model/API nhờ patch)
 ## Task 1: Input schema — `QueryItem`, `TableInfo.queries`, xoá field cũ ở `FormQuery`
 
 **Files:**
-- Modify: `backend/apps/hooks/schemas/ai_sync_schema.py` (class `FieldItem` dòng 31-38 — thêm
+- Modify: `apps/hooks/schemas/ai_sync_schema.py` (class `FieldItem` dòng 31-38 — thêm
   `QueryItem` ngay sau; class `TableInfo` dòng 41-63; class `FormQuery` dòng 66-74; thêm hàm
   `normalize_queries` cạnh `normalize_fields` dòng 148-154; thêm hàm `find_duplicate_datasource_id`
   cạnh `find_duplicate_form_uuid` dòng 157-168)
@@ -139,7 +139,7 @@ qua fixture `db_session`, không cần DB cho test schema/model/API nhờ patch)
 - [ ] **Step 5: Commit**
 
   ```bash
-  git add backend/apps/hooks/schemas/ai_sync_schema.py tests/test_ai_sync_schema.py
+  git add apps/hooks/schemas/ai_sync_schema.py tests/test_ai_sync_schema.py
   git commit -m "feat: thay postgresQuery/clickHouseQuery bằng mảng queries tổng quát trong input schema"
   ```
 
@@ -148,8 +148,8 @@ qua fixture `db_session`, không cần DB cho test schema/model/API nhờ patch)
 ## Task 2: Mã lỗi `DUPLICATE_DATASOURCE_ID` + kiểm trùng ở handler
 
 **Files:**
-- Modify: `backend/apps/hooks/constants.py` (class `SyncErrorCode` dòng 48-60)
-- Modify: `backend/apps/hooks/handlers/authorization.py` (import dòng 19-26; vòng lặp validate cấu
+- Modify: `apps/hooks/constants.py` (class `SyncErrorCode` dòng 48-60)
+- Modify: `apps/hooks/handlers/authorization.py` (import dòng 19-26; vòng lặp validate cấu
   trúc dòng 69-76)
 - Test: `tests/test_ai_sync_handler.py`
 
@@ -204,7 +204,7 @@ qua fixture `db_session`, không cần DB cho test schema/model/API nhờ patch)
 - [ ] **Step 5: Commit**
 
   ```bash
-  git add backend/apps/hooks/constants.py backend/apps/hooks/handlers/authorization.py tests/test_ai_sync_handler.py
+  git add apps/hooks/constants.py apps/hooks/handlers/authorization.py tests/test_ai_sync_handler.py
   git commit -m "feat: thêm kiểm trùng datasourceId trong cùng 1 form"
   ```
 
@@ -213,8 +213,8 @@ qua fixture `db_session`, không cần DB cho test schema/model/API nhờ patch)
 ## Task 3: DB model + migration — cột `queries` thay `postgres_query`/`clickhouse_query`
 
 **Files:**
-- Modify: `backend/apps/hooks/models/ai_sync_model.py` (class `AiUserPermission` dòng 76-126)
-- Create: `backend/alembic/versions/076_ai_user_permissions_queries.py`
+- Modify: `apps/hooks/models/ai_sync_model.py` (class `AiUserPermission` dòng 76-126)
+- Create: `alembic/versions/076_ai_user_permissions_queries.py`
 - Test: `tests/test_ai_sync_models.py`
 
 **Interfaces:**
@@ -256,7 +256,7 @@ qua fixture `db_session`, không cần DB cho test schema/model/API nhờ patch)
 
 - [ ] **Step 5: Viết migration Alembic**
 
-  Tạo `backend/alembic/versions/076_ai_user_permissions_queries.py` theo đúng khuôn
+  Tạo `alembic/versions/076_ai_user_permissions_queries.py` theo đúng khuôn
   `075_ai_user_permissions_domain_info.py` (đọc file đó lấy format `revision`/`down_revision`).
   `down_revision = '075a1b2c3d4e'`. `upgrade()`: `op.add_column('ai_user_permissions',
   sa.Column('queries', postgresql.JSONB(astext_type=sa.Text()), server_default=sa.text("'[]'::jsonb"),
@@ -271,7 +271,7 @@ qua fixture `db_session`, không cần DB cho test schema/model/API nhờ patch)
   trước khi chạy nếu chưa có `SQLBOT_TEST_DB_URL`/biến `POSTGRES_*` sẵn trong session, vì lần trước
   từng phát hiện lệch `alembic_version` phải xử lý thủ công.
 
-  Run: `cd backend && alembic upgrade head`
+  Run: `alembic upgrade head`
   Expected: chạy thành công, `alembic current` cho thấy revision `076a1b2c3d4e` (hoặc id đã đặt ở
   Step 5).
 
@@ -281,7 +281,7 @@ qua fixture `db_session`, không cần DB cho test schema/model/API nhờ patch)
 - [ ] **Step 7: Commit**
 
   ```bash
-  git add backend/apps/hooks/models/ai_sync_model.py backend/alembic/versions/076_ai_user_permissions_queries.py tests/test_ai_sync_models.py
+  git add apps/hooks/models/ai_sync_model.py alembic/versions/076_ai_user_permissions_queries.py tests/test_ai_sync_models.py
   git commit -m "feat: thay postgres_query/clickhouse_query bằng cột queries trên ai_user_permissions"
   ```
 
@@ -290,7 +290,7 @@ qua fixture `db_session`, không cần DB cho test schema/model/API nhờ patch)
 ## Task 4: Ghi `queries` khi upsert quyền (`replace_user_permissions`)
 
 **Files:**
-- Modify: `backend/apps/hooks/crud/ai_user_permission.py` (import dòng 11; dict `values` dòng 52-70)
+- Modify: `apps/hooks/crud/ai_user_permission.py` (import dòng 11; dict `values` dòng 52-70)
 - Test: `tests/test_ai_sync_permission_crud.py`
 
 **Interfaces:**
@@ -345,7 +345,7 @@ hiệu lực trước khi chạy `pytest` với `SQLBOT_TEST_DB_URL` trỏ vào 
 - [ ] **Step 5: Commit**
 
   ```bash
-  git add backend/apps/hooks/crud/ai_user_permission.py tests/test_ai_sync_permission_crud.py
+  git add apps/hooks/crud/ai_user_permission.py tests/test_ai_sync_permission_crud.py
   git commit -m "feat: ghi mảng queries khi upsert quyền user"
   ```
 
@@ -354,7 +354,7 @@ hiệu lực trước khi chạy `pytest` với `SQLBOT_TEST_DB_URL` trỏ vào 
 ## Task 5: Output API — `permission_query_schema.py`
 
 **Files:**
-- Modify: `backend/apps/hooks/schemas/permission_query_schema.py` (class `PermissionTableInfoOut`
+- Modify: `apps/hooks/schemas/permission_query_schema.py` (class `PermissionTableInfoOut`
   dòng 16-28; class `PermissionFormQueryOut` dòng 31-39; hàm `to_permission_detail` dòng 68-104)
 - Test: `tests/test_ai_permission_query_schema.py`, `tests/test_ai_permission_query_api.py`
 
@@ -422,7 +422,7 @@ hiệu lực trước khi chạy `pytest` với `SQLBOT_TEST_DB_URL` trỏ vào 
 - [ ] **Step 7: Commit**
 
   ```bash
-  git add backend/apps/hooks/schemas/permission_query_schema.py tests/test_ai_permission_query_schema.py tests/test_ai_permission_query_api.py
+  git add apps/hooks/schemas/permission_query_schema.py tests/test_ai_permission_query_schema.py tests/test_ai_permission_query_api.py
   git commit -m "feat: phơi mảng queries qua API đọc quyền user"
   ```
 
@@ -474,10 +474,10 @@ hiệu lực trước khi chạy `pytest` với `SQLBOT_TEST_DB_URL` trỏ vào 
 
 - [ ] **Step 5: Nêu đề xuất cập nhật tài liệu cho user duyệt (không tự sửa)**
 
-  Theo `CLAUDE.md` và spec §11: đề xuất sửa `backend/scripts/ai_sync_hook/AI_SYNC_HOOK_API_SPEC.md`
+  Theo `CLAUDE.md` và spec §11: đề xuất sửa `scripts/ai_sync_hook/AI_SYNC_HOOK_API_SPEC.md`
   §4 — thay ví dụ JSON và bảng mô tả field: bỏ `formQueries[].postgresQuery`/
   `formQueries[].clickHouseQuery`, thêm `tableInfo.queries[]` và 3 field con
   `datasourceId`/`datasourceType`/`query`; §7 thêm dòng `DUPLICATE_DATASOURCE_ID` vào bảng lỗi. Và
-  `backend/scripts/ai_sync_hook/AI_PERMISSION_QUERY_API_SPEC.md` — cập nhật ví dụ response, bỏ
+  `scripts/ai_sync_hook/AI_PERMISSION_QUERY_API_SPEC.md` — cập nhật ví dụ response, bỏ
   `postgresQuery`/`clickHouseQuery` ở cấp `formQueries[]`, thêm `queries[]` trong `tableInfo`. Trình
   bày rõ "sửa mục nào, thành gì" rồi chờ user quyết định trước khi đụng vào các file này.
