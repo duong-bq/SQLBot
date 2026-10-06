@@ -9,7 +9,8 @@ from pydantic import (
     Field,
     PostgresDsn,
     computed_field,
-    field_validator
+    field_validator,
+    model_validator
 )
 from pydantic_core import MultiHostUrl
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -59,11 +60,11 @@ class Settings(BaseSettings):
     def API_V1_STR(self) -> str:
         return self.CONTEXT_PATH + "/api/v1"
 
-    POSTGRES_SERVER: str = 'localhost'
-    POSTGRES_PORT: int = 5432
-    POSTGRES_USER: str = 'root'
-    POSTGRES_PASSWORD: str = "Password123@pg"
-    POSTGRES_DB: str = "sqlbot"
+    DB_HOST: str = 'localhost'
+    DB_PORT: int = 5432
+    DB_USERNAME: str = 'root'
+    DB_PASSWORD: str = "Password123@pg"
+    DB_NAME: str = "sqlbot"
     SQLBOT_DB_URL: str = ''
     # SQLBOT_DB_URL: str = 'mysql+pymysql://root:Password123%40mysql@127.0.0.1:3306/sqlbot'
 
@@ -72,7 +73,14 @@ class Settings(BaseSettings):
     ASSISTANT_TOKEN_KEY: str = "X-SQLBOT-ASSISTANT-TOKEN"
 
     CACHE_TYPE: Literal["redis", "memory", "None"] = "memory"
-    CACHE_REDIS_URL: str | None = None  # Redis URL, e.g., "redis://[[username]:[password]]@localhost:6379/0"
+    # Danh sách "host:port" cách nhau bằng dấu phẩy, ý nghĩa tùy REDIS_MODE: standalone là một Redis duy
+    # nhất (bỏ trống thì dùng localhost:6379), sentinel là các Sentinel, cluster là vài node của cluster.
+    REDIS_CONNECTION_STRING: str = ""
+    REDIS_MODE: Literal["standalone", "sentinel", "cluster"] = "standalone"
+    REDIS_SENTINEL_MASTER: str = ""  # tên master mà Sentinel theo dõi
+    REDIS_PASSWORD: str = ""  # bỏ trống là không dùng mật khẩu
+    REDIS_SENTINEL_PASSWORD: str = ""  # mật khẩu của chính các Sentinel; bỏ trống là không dùng
+    REDIS_DATABASE_ID: int = 0  # standalone và sentinel; cluster luôn dùng db 0
 
     LOG_LEVEL: str = "INFO"  # DEBUG, INFO, WARNING, ERROR
     LOG_DIR: str = "logs"
@@ -92,13 +100,13 @@ class Settings(BaseSettings):
             return self.SQLBOT_DB_URL
         # return MultiHostUrl.build(
         #     scheme="postgresql+psycopg",
-        #     username=urllib.parse.quote(self.POSTGRES_USER),
-        #     password=urllib.parse.quote(self.POSTGRES_PASSWORD),
-        #     host=self.POSTGRES_SERVER,
-        #     port=self.POSTGRES_PORT,
-        #     path=self.POSTGRES_DB,
+        #     username=urllib.parse.quote(self.DB_USERNAME),
+        #     password=urllib.parse.quote(self.DB_PASSWORD),
+        #     host=self.DB_HOST,
+        #     port=self.DB_PORT,
+        #     path=self.DB_NAME,
         # )
-        return f"postgresql+psycopg://{urllib.parse.quote(self.POSTGRES_USER)}:{urllib.parse.quote(self.POSTGRES_PASSWORD)}@{self.POSTGRES_SERVER}:{self.POSTGRES_PORT}/{self.POSTGRES_DB}"
+        return f"postgresql+psycopg://{urllib.parse.quote(self.DB_USERNAME)}:{urllib.parse.quote(self.DB_PASSWORD)}@{self.DB_HOST}:{self.DB_PORT}/{self.DB_NAME}"
 
     MCP_IMAGE_PATH: str = '/opt/sqlbot/images'
     EXCEL_PATH: str = '/opt/sqlbot/data/excel'
@@ -362,6 +370,21 @@ class Settings(BaseSettings):
     # sau. Cũng là trần TỔNG, tính cho MỖI LƯỢT trong cửa sổ lịch sử. Chặt hơn trần trên vì lịch sử
     # nhiều lượt còn phải nhường chỗ cho <data> của lượt hiện tại.
     CHAT_DOC_HISTORY_MAX_CHARS: int = 10_000
+
+    @model_validator(mode='after')
+    def _check_cache_redis(self):
+        """Báo lỗi ngay lúc khởi động nếu chế độ sentinel/cluster thiếu cấu hình.
+
+        Thiếu node hay tên master thì client vẫn dựng được, rồi chỉ chết ở lần đọc cache đầu
+        tiên với thông báo khó đoán nguyên nhân.
+        """
+        if self.CACHE_TYPE != "redis" or self.REDIS_MODE == "standalone":
+            return self
+        if not self.REDIS_CONNECTION_STRING.strip():
+            raise ValueError(f"REDIS_MODE={self.REDIS_MODE} cần REDIS_CONNECTION_STRING")
+        if self.REDIS_MODE == "sentinel" and not self.REDIS_SENTINEL_MASTER:
+            raise ValueError("REDIS_MODE=sentinel cần REDIS_SENTINEL_MASTER")
+        return self
 
     @field_validator('SQL_DEBUG',
                      'EMBEDDING_ENABLED',

@@ -22,7 +22,7 @@
 Lưu ý về **hai database khác nhau**, rất dễ nhầm:
 
 - **DB metadata của SQLBot** — Postgres, chứa `chat`, `core_datasource`, `terminology`… Cấu hình qua
-  `POSTGRES_*` / `SQLBOT_DB_URL`.
+  `DB_*` / `SQLBOT_DB_URL`.
 - **DB nghiệp vụ** — cái mà người dùng hỏi. Người dùng khai báo qua UI/API datasource, có thể là 12
   loại DB khác nhau, SQLBot chỉ đọc.
 

@@ -27,7 +27,7 @@ Ba nhóm giá trị **bắt buộc sửa khi chạy local**:
 |---|---|
 | `BASE_DIR`, `UPLOAD_DIR`, `EXCEL_PATH`, `MCP_IMAGE_PATH`, `LOCAL_MODEL_PATH` | Mặc định là `/opt/sqlbot/...` (dành cho container chạy root). User thường không ghi được, và `sqlbot_xpack` gọi `mkdir(UPLOAD_DIR)` **ngay lúc import** → `PermissionError` trước cả khi app chạy |
 | `EMBEDDING_PROVIDER=api` + `EMBEDDING_API_*` | Mặc định `local` nạp `shibing624/text2vec-base-chinese` từ `LOCAL_MODEL_PATH`; model đó chỉ có trong image Docker. Chạy local mà để `local` thì mỗi lần lưu/sync datasource ném `FileNotFoundError` |
-| `POSTGRES_PASSWORD` | Ghi mật khẩu **thô, không URL-encode sẵn**: `config.py` đã bọc `urllib.parse.quote()`. Điền sẵn `%40` là mã hóa hai lần và Postgres từ chối đăng nhập |
+| `DB_PASSWORD` | Ghi mật khẩu **thô, không URL-encode sẵn**: `config.py` đã bọc `urllib.parse.quote()`. Điền sẵn `%40` là mã hóa hai lần và Postgres từ chối đăng nhập |
 
 ### Lệnh
 
@@ -269,7 +269,7 @@ cũ, kể cả phần đọc câu hỏi của user khác (§7.2).
 
 ### 2.12. Khác
 
-`CACHE_TYPE` (`memory`/`redis`/`None`), `CACHE_REDIS_URL`, `LOG_LEVEL`, `LOG_DIR`, `SQL_DEBUG`,
+`CACHE_TYPE` (`memory`/`redis`/`None`), `REDIS_CONNECTION_STRING`, `REDIS_MODE` và các biến `REDIS_*` (§3.4), `LOG_LEVEL`, `LOG_DIR`, `SQL_DEBUG`,
 `PG_POOL_SIZE`/`PG_MAX_OVERFLOW`/`PG_POOL_RECYCLE`/`PG_POOL_PRE_PING` (pool của **DB metadata**),
 `ORACLE_CLIENT_PATH`, `CONTEXT_PATH` (prefix URL, mặc định rỗng).
 
@@ -324,7 +324,7 @@ Migration đặt các dòng đó thành `Success`. Trên máy dev con số là 0
 kiểm chứng với dữ liệu thật; production trả về số lớn thì phải xem qua danh sách trước — nguồn dữ
 liệu nào thực sự hỏng mà bị đánh dấu `Success` sẽ quay lại danh sách hỏi đáp.
 
-`docker/backend-entrypoint.sh` chờ Postgres (và Redis nếu `CACHE_TYPE=redis`) mở cổng trước khi gọi
+`docker/backend-entrypoint.sh` chờ Postgres (và Redis nếu `CACHE_TYPE=redis`; với Sentinel hoặc cluster chỉ cần một node trả lời) mở cổng trước khi gọi
 uvicorn — vì `lifespan` chạy `alembic upgrade head` ngay lúc start, DB chưa sẵn sàng thì process
 chết luôn. Timeout `SQLBOT_WAIT_TIMEOUT` (mặc định 120s). Uvicorn chạy với `--proxy-headers
 --forwarded-allow-ips='*'` để sau reverse proxy vẫn lấy đúng IP client và scheme.
@@ -337,6 +337,19 @@ chết luôn. Timeout `SQLBOT_WAIT_TIMEOUT` (mặc định 120s). Uvicorn chạy
 ### 3.3. Dev
 
 Redis (tùy chọn) + Postgres bên ngoài + chạy uvicorn trên host — xem §1.
+
+
+### 3.4. Redis: standalone, Sentinel hoặc Cluster
+
+Redis chỉ làm **cache** (thông tin đăng nhập, API key, dữ liệu tra cứu); khóa phân tán không đi qua Redis. Mọi chế độ dùng chung một biến địa chỉ, `REDIS_CONNECTION_STRING`: danh sách `host:port` cách nhau bằng dấu phẩy. `REDIS_MODE` quyết định danh sách đó là gì:
+
+| Chế độ | `REDIS_CONNECTION_STRING` | Biến khác | Ghi chú |
+|---|---|---|---|
+| `standalone` (mặc định) | Một Redis duy nhất (bỏ trống là `localhost:6379`) | `REDIS_PASSWORD`, `REDIS_DATABASE_ID` | Địa chỉ cố định, không tự theo failover |
+| `sentinel` | Các Sentinel | `REDIS_SENTINEL_MASTER` (bắt buộc), `REDIS_PASSWORD`, `REDIS_SENTINEL_PASSWORD`, `REDIS_DATABASE_ID` | Client hỏi Sentinel địa chỉ master và hỏi lại khi mất kết nối, nên failover không cần restart backend |
+| `cluster` | Vài node của cluster | `REDIS_PASSWORD` | Client tự dò ra các node còn lại; luôn dùng db 0 |
+
+Mật khẩu để trống (hoặc không khai) là không dùng mật khẩu, không gửi lệnh AUTH. Sentinel và cluster thiếu `REDIS_CONNECTION_STRING` (hoặc sentinel thiếu `REDIS_SENTINEL_MASTER`) thì backend không khởi động và báo đúng biến thiếu. Giới hạn: không còn chuỗi `redis://` (mật khẩu, db, TLS nằm trong URL) như bản upstream, và chưa có biến bật TLS; kết nối `rediss://` không dùng được.
 
 ---
 
@@ -553,7 +566,7 @@ kỳ tài liệu, log hay issue nào; nếu cần xoay vòng mật khẩu thì p
 | Bẫy | Chi tiết |
 |---|---|
 | `.env` đặt nhầm chỗ | Phải ở thư mục làm việc (gốc repo). Chạy từ thư mục khác thì bị bỏ qua im lặng, app chạy bằng toàn giá trị mặc định |
-| `POSTGRES_PASSWORD` bị encode hai lần | Ghi thô, `config.py` tự `quote()` |
+| `DB_PASSWORD` bị encode hai lần | Ghi thô, `config.py` tự `quote()` |
 | `SECRET_KEY` không đặt | Mọi JWT chết sau mỗi lần restart |
 | `BACKEND_CORS_ORIGINS='*'` không dùng được | Kiểu là `AnyUrl`. Muốn mở hết thì đặt `CORS_ALLOW_ALL_ORIGINS=True` |
 | Biến khai trong `.env` mà **không** khai trong env của repo gitops | Pod chỉ nhận các biến liệt kê trong `products/h04-sqlbot/<môi trường>.yaml`; thiếu khóa thì app chạy bằng giá trị mặc định của `config.py`, **không có triệu chứng** |

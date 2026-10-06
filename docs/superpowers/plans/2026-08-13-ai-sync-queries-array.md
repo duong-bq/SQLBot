@@ -268,7 +268,7 @@ qua fixture `db_session`, không cần DB cho test schema/model/API nhờ patch)
 - [ ] **Step 6: Chạy migration trên DB dev, xác nhận không lỗi**
 
   DB dev dùng chung (`192.168.9.89:5434/sqlbot`) đã quen thuộc từ lần trước — hỏi user xác nhận
-  trước khi chạy nếu chưa có `SQLBOT_TEST_DB_URL`/biến `POSTGRES_*` sẵn trong session, vì lần trước
+  trước khi chạy nếu chưa có `SQLBOT_TEST_DB_URL`/biến `DB_*` sẵn trong session, vì lần trước
   từng phát hiện lệch `alembic_version` phải xử lý thủ công.
 
   Run: `alembic upgrade head`

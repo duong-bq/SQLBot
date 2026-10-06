@@ -31,7 +31,7 @@ Build cần ra mạng tới `mirrors.aliyun.com`, `test.pypi.org` và `download.
 ## Chạy local
 
 ```bash
-cp .env.example .env     # điền POSTGRES_SERVER, POSTGRES_PASSWORD, SECRET_KEY, EMBEDDING_API_BASE_URL
+cp .env.example .env     # điền DB_HOST, DB_PASSWORD, SECRET_KEY, EMBEDDING_API_BASE_URL
 docker run --rm -p 8001:8000 --env-file .env sqlbot-backend:test
 ```
 
@@ -41,10 +41,11 @@ PostgreSQL phải có sẵn bên ngoài và có extension pgvector; Redis chỉ 
 
 | Biến | Ý nghĩa |
 |------|---------|
-| `POSTGRES_SERVER`, `POSTGRES_PORT`, `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_DB` | Kết nối Postgres (cần extension pgvector) |
+| `DB_HOST`, `DB_PORT`, `DB_USERNAME`, `DB_PASSWORD`, `DB_NAME` | Kết nối Postgres (cần extension pgvector) |
 | `SECRET_KEY` | Khóa ký JWT, sinh bằng `openssl rand -base64 32` |
 | `EMBEDDING_PROVIDER`, `EMBEDDING_API_BASE_URL`, `EMBEDDING_API_MODEL` | Embedding qua server riêng (`EMBEDDING_PROVIDER=api`) |
-| `CACHE_TYPE`, `CACHE_REDIS_URL` | Cache; dùng `redis` khi chạy nhiều pod |
+| `CACHE_TYPE` | Cache: `memory`, `redis` hoặc `None`; dùng `redis` khi chạy nhiều pod |
+| `REDIS_CONNECTION_STRING`, `REDIS_MODE`, `REDIS_SENTINEL_MASTER`, `REDIS_PASSWORD`, `REDIS_DATABASE_ID` | Redis `standalone` (mặc định), `sentinel` hoặc `cluster`; xem `docs/OPERATIONS.md` §3.4 |
 | `BASE_DIR`, `UPLOAD_DIR`, `EXCEL_PATH`, `MCP_IMAGE_PATH` | Thư mục ghi file, mặc định dưới `/opt/sqlbot` |
 | `AI_CALLBACK_URL`, `AI_CALLBACK_ACTION_TYPE` | Callback khi nạp Excel bất đồng bộ xong |
 | `CORS_ALLOW_ALL_ORIGINS`, `BACKEND_CORS_ORIGINS`, `FILE_DOWNLOAD_ALLOWED_HOSTS` | CORS và danh sách host được phép tải file |

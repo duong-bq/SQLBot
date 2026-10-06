@@ -124,6 +124,45 @@ def clear_cache(
     return decorator
 
 
+def parse_redis_nodes(nodes: str) -> list[tuple[str, int]]:
+    """Tách chuỗi "host1:26379,host2:26379" thành danh sách (host, port); thiếu cổng thì dùng 6379."""
+    result = []
+    for item in nodes.split(","):
+        item = item.strip()
+        if not item:
+            continue
+        host, _, port = item.rpartition(":")
+        result.append((host, int(port)) if host else (item, 6379))
+    return result
+
+
+def build_redis_client():
+    """Dựng client Redis async theo REDIS_MODE (chưa mở kết nối nào).
+
+    Mật khẩu để trống thì không gửi AUTH. ``fastapi-cache`` nhận cả ``Redis`` lẫn ``RedisCluster`` và tự đổi cách dùng pipeline cho cluster.
+    Với sentinel, ``master_for`` trả về client luôn hỏi lại Sentinel địa chỉ master khi mất kết nối,
+    nên failover không cần khởi động lại backend.
+    """
+    mode = settings.REDIS_MODE
+    password = settings.REDIS_PASSWORD or None
+    if mode == "sentinel":
+        from redis.asyncio.sentinel import Sentinel
+        sentinel = Sentinel(
+            parse_redis_nodes(settings.REDIS_CONNECTION_STRING),
+            sentinel_kwargs={"password": settings.REDIS_SENTINEL_PASSWORD or None},
+            password=password,
+            db=settings.REDIS_DATABASE_ID,
+        )
+        return sentinel.master_for(settings.REDIS_SENTINEL_MASTER)
+    if mode == "cluster":
+        from redis.asyncio.cluster import ClusterNode, RedisCluster
+        nodes = [ClusterNode(host, port) for host, port in parse_redis_nodes(settings.REDIS_CONNECTION_STRING)]
+        return RedisCluster(startup_nodes=nodes, password=password)
+    from redis.asyncio import Redis
+    host, port = (parse_redis_nodes(settings.REDIS_CONNECTION_STRING) or [("localhost", 6379)])[0]
+    return Redis(host=host, port=port, db=settings.REDIS_DATABASE_ID, password=password)
+
+
 def init_sqlbot_cache():
     cache_type: str = settings.CACHE_TYPE
     if cache_type == "memory":
@@ -131,13 +170,8 @@ def init_sqlbot_cache():
         SQLBotLogUtil.info("SQLBot 使用内存缓存, 仅支持单进程模式")
     elif cache_type == "redis":
         from fastapi_cache.backends.redis import RedisBackend
-        import redis.asyncio as redis
-        from redis.asyncio.connection import ConnectionPool
-        redis_url = settings.CACHE_REDIS_URL or "redis://localhost:6379/0"
-        pool = ConnectionPool.from_url(url=redis_url)
-        redis_client = redis.Redis(connection_pool=pool)
-        FastAPICache.init(RedisBackend(redis_client), prefix="sqlbot-cache")
-        SQLBotLogUtil.info(f"SQLBot 使用Redis缓存, 可使用多进程模式")
+        FastAPICache.init(RedisBackend(build_redis_client()), prefix="sqlbot-cache")
+        SQLBotLogUtil.info(f"SQLBot 使用Redis缓存({settings.REDIS_MODE}), 可使用多进程模式")
     else:
         SQLBotLogUtil.warning("SQLBot 未启用缓存, 可使用多进程模式")
     

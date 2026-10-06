@@ -15,33 +15,41 @@ import sys
 import time
 
 # Redis chỉ chờ khi thực sự dùng (CACHE_TYPE=redis); mặc định của app là cache in-memory.
-targets = [("Postgres", os.environ.get("POSTGRES_SERVER", "localhost"),
-            int(os.environ.get("POSTGRES_PORT", "5432")))]
+# Mỗi mục là (tên, danh sách địa chỉ); chỉ cần MỘT địa chỉ trong danh sách trả lời là đủ, vì Sentinel
+# và cluster có nhiều node mà không node nào bắt buộc phải sống riêng lẻ.
+targets = [("Postgres", [(os.environ.get("DB_HOST", "localhost"),
+                          int(os.environ.get("DB_PORT", "5432")))])]
 
 if os.environ.get("CACHE_TYPE", "").lower() == "redis":
-    url = os.environ.get("CACHE_REDIS_URL", "redis://localhost:6379/0")
-    # Parse thủ công cho cả dạng redis:// và rediss://, có hoặc không có user:pass@
-    netloc = url.split("://", 1)[-1].split("/", 1)[0]
-    if "@" in netloc:
-        netloc = netloc.rsplit("@", 1)[1]
-    host, _, port = netloc.partition(":")
-    targets.append(("Redis", host or "localhost", int(port or 6379)))
+    nodes = []
+    for item in os.environ.get("REDIS_CONNECTION_STRING", "localhost:6379").split(","):
+        host, _, port = item.strip().rpartition(":")
+        if host:
+            nodes.append((host, int(port)))
+    if nodes:
+        targets.append(("Redis", nodes))
 
 timeout = int(os.environ.get("SQLBOT_WAIT_TIMEOUT", "120"))
 
-for name, host, port in targets:
+for name, candidates in targets:
     deadline = time.time() + timeout
-    while True:
-        try:
-            with socket.create_connection((host, port), timeout=3):
-                print(f"[entrypoint] {name} {host}:{port} san sang", flush=True)
-                break
-        except OSError as exc:
+    ready = None
+    while ready is None:
+        for host, port in candidates:
+            try:
+                with socket.create_connection((host, port), timeout=3):
+                    ready = (host, port)
+                    break
+            except OSError as exc:
+                last_error = exc
+        if ready is None:
             if time.time() >= deadline:
-                print(f"[entrypoint] LOI: {name} {host}:{port} khong phan hoi sau "
-                      f"{timeout}s ({exc})", file=sys.stderr, flush=True)
+                addrs = ",".join(f"{h}:{p}" for h, p in candidates)
+                print(f"[entrypoint] LOI: {name} {addrs} khong phan hoi sau "
+                      f"{timeout}s ({last_error})", file=sys.stderr, flush=True)
                 sys.exit(1)
             time.sleep(2)
+    print(f"[entrypoint] {name} {ready[0]}:{ready[1]} san sang", flush=True)
 PY
 
 # --proxy-headers + --forwarded-allow-ips: để sau reverse proxy vẫn lấy đúng IP client và
