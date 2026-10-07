@@ -335,6 +335,10 @@ class Settings(BaseSettings):
     # tại và file vượt trần mà không phải truyền cả file. Tắt đi thì các lỗi đó lùi xuống callback.
     EXCEL_DOWNLOAD_PROBE_ENABLED: bool = True
     EXCEL_DOWNLOAD_PROBE_TIMEOUT: int = 3
+    # Trần tổng thời gian tải của /createFromExcel ĐỒNG BỘ (tải thẳng vào RAM, không thử lại), đồng
+    # thời là hạn ký còn lại tối thiểu để nhận URL. Phải nhỏ hơn hẳn timeout chờ của bên gọi (AI
+    # Gateway chờ 300 giây) để còn thời gian nạp. Trần dung lượng dùng chung EXCEL_DOWNLOAD_MAX_MB.
+    EXCEL_SYNC_DOWNLOAD_TIMEOUT: int = 120
 
     # --- Tài liệu .docx đính kèm lượt hỏi chat (`fileUrls` của POST /chat/question) ---
     # Allowlist host và hai timeout kết nối/đọc lấy từ nhóm FILE_DOWNLOAD_* phía trên (cùng một

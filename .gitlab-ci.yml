@@ -73,7 +73,7 @@ test:
         -e MCP_IMAGE_PATH=/tmp/sqlbot/images -e LOCAL_MODEL_PATH=/tmp/sqlbot/models \
         dockerhub.elcomlab.com/wolfi/python:v3.11.17@sha256:fdf85f09b2ccf0d5cb8d68549ddbf615adf0129019f69546bcbc9e8ee73a523c sh -c '
         cp -r /src /home/appuser/work && cd /home/appuser/work &&
-        uv sync -q --frozen --extra cpu --python /usr/bin/python3 &&
+        uv sync -q --frozen --python /usr/bin/python3 &&
         .venv/bin/python -m pytest tests -q -p no:cacheprovider'
 
 build:

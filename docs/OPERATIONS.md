@@ -36,20 +36,18 @@ Ba nhóm giá trị **bắt buộc sửa khi chạy local**:
 docker run -d --name sqlbot-redis -p 6380:6379 redis:7-alpine
 
 # backend
-uv sync --extra cpu          # KHÔNG chạy `uv sync` trần — xem ghi chú dưới
+uv sync
 uv run uvicorn main:app --host 0.0.0.0 --port 8000 --reload
 ```
 
-### `--extra cpu` là **bắt buộc**
+### `torch` luôn là bản CPU
 
-Upstream đã chuyển `torch` sang `[project.optional-dependencies]`
-([pyproject.toml:62](../pyproject.toml#L62)), chia thành hai extra `cpu` và `cu128` — và khai
-chúng là **conflicting** trong `[tool.uv]`, nên `uv` không tự chọn hộ. `uv sync` trần **không cài
-torch**, mà `apps/ai_model/embedding.py` import `langchain_huggingface` ngay đầu file và chính lệnh
-import đó nạp torch → chết lúc khởi động, **bất kể `EMBEDDING_PROVIDER` đặt là gì**.
-
-Dùng `--extra cu128` thay cho `cpu` nếu thật sự cần chạy embedding trên GPU — wheel CUDA nặng thêm
-vài GB. Không dùng cả hai cùng lúc.
+`torch` nằm trong `dependencies` chính ([pyproject.toml:28](../pyproject.toml#L28)) và được ghim về
+index `pytorch-cpu` ở `[tool.uv.sources]` ([pyproject.toml:81](../pyproject.toml#L81)), nên `uv sync`
+trần đã cài bản CPU. Không còn extra `cpu`/`cu128`: truyền `--extra cpu` bây giờ là lỗi
+`Extra cpu is not defined`. Torch là bắt buộc vì `apps/ai_model/embedding.py` import
+`langchain_huggingface` ngay đầu file và lệnh import đó nạp torch, **bất kể `EMBEDDING_PROVIDER`**.
+Muốn chạy embedding trên GPU thì phải sửa `pyproject.toml` sang index CUDA rồi `uv lock` lại.
 
 `torch` cũng là lý do `uv sync` lần đầu tải ~1,7GB. `Dockerfile` vì thế tách làm hai lần sync
 để layer dependency chỉ rebuild khi `pyproject.toml`/`uv.lock` đổi.
@@ -172,8 +170,10 @@ vector cũ và mới không cùng không gian.
 
 ### 2.9. Nạp Excel bất đồng bộ và callback
 
-Chỉ ảnh hưởng `POST /datasource/createFromExcelAsync` và ba vòng nền đi kèm (worker nạp, vòng gửi
-callback, vòng quét phục hồi) — xem [BACKEND_ARCHITECTURE.md §5](BACKEND_ARCHITECTURE.md).
+Chủ yếu ảnh hưởng `POST /datasource/createFromExcelAsync` và ba vòng nền đi kèm (worker nạp, vòng
+gửi callback, vòng quét phục hồi) — xem [BACKEND_ARCHITECTURE.md §5](BACKEND_ARCHITECTURE.md). Bản
+đồng bộ `POST /datasource/createFromExcel` chỉ dùng một phần các biến dưới đây — xem đoạn "Bản đồng
+bộ" ở cuối mục.
 
 | Biến | Mặc định | Tác dụng |
 |---|---|---|
@@ -222,7 +222,25 @@ repo gitops.
 không cần bắn lại tay, và không lần thử nào bị đốt trong lúc URL còn rỗng.
 
 Chỉ `AI_CALLBACK_URL` và `FILE_DOWNLOAD_ALLOWED_HOSTS` là bắt buộc; các biến còn lại có mặc định
-dùng được ngay.
+dùng được ngay. H04 khai thêm `EXCEL_DOWNLOAD_MAX_MB=25` trong env của repo gitops.
+
+**Bản đồng bộ `createFromExcel`.** Cùng body URL với bản async, nhưng tải và nạp ngay trong request
+rồi trả kết quả trong response — không callback, không ghi đĩa. File tải thẳng vào **RAM**
+(`download_bytes`, cùng hàm với luồng docx), nên mỗi request đang nạp tốn thêm tối đa
+`EXCEL_DOWNLOAD_MAX_MB`, cộng với dataframe pandas dựng ra từ file đó. Phần nạp chạy trong thread
+của request (`asyncio.to_thread`), không qua pool `EXCEL_IMPORT_WORKERS` — đi qua pool thì request
+thứ năm phải xếp hàng trong lúc bên gọi vẫn đếm giờ.
+
+| Biến | Mặc định | Tác dụng |
+|---|---|---|
+| `EXCEL_SYNC_DOWNLOAD_TIMEOUT` | `120` | Trần cho cả lượt tải, **không thử lại**; đồng thời là hạn chữ ký tối thiểu của `fileUrl`. Phải nhỏ hơn hẳn timeout chờ của bên gọi (Gateway chờ 300 giây) để còn thời gian nạp. Hết trần trả `502 DOWNLOAD_FAILED` |
+
+Bản đồng bộ dùng chung `FILE_DOWNLOAD_*` và `EXCEL_DOWNLOAD_MAX_MB`, cùng
+`EXCEL_IMPORT_LOCK_TIMEOUT_MS` cho khoá chống trùng tên. Nó **không** dùng `EXCEL_DOWNLOAD_RETRIES`,
+`_MIN_TTL_SECONDS`, `_TOTAL_TIMEOUT`, `_PROBE_*`, cũng không dùng `EXCEL_PATH` hay nhóm
+`AI_CALLBACK_*`. Nó vẫn ghi một dòng `excel_import_jobs` với `delivery = 'response'`, tạo thẳng ở
+`running` và không lưu `file_url`: dòng này chỉ để vòng phục hồi dọn bảng khi pod chết giữa chừng —
+xem bẫy ở §7.6.
 
 ### 2.10. Tài liệu `.docx` đính kèm câu hỏi
 
@@ -274,7 +292,7 @@ cũ, kể cả phần đọc câu hỏi của user khác (§7.2).
 `ORACLE_CLIENT_PATH`, `CONTEXT_PATH` (prefix URL, mặc định rỗng).
 
 Biến bool nhận cả `"true"`/`"True"`/`"false"` nhờ validator `lowercase_bool`
-([config.py:323](../common/core/config.py#L323)).
+([config.py:386](../common/core/config.py#L386)).
 
 ---
 
@@ -622,10 +640,13 @@ kỳ tài liệu, log hay issue nào; nếu cần xoay vòng mật khẩu thì p
 | **Callback là "ít nhất một lần"** | Bên nhận trả 2xx chậm hơn timeout thì lá thư đó vẫn được gửi lại. Không có cách nào biến thành "đúng một lần" — bên nhận phải idempotent theo `Id` |
 | **Nguồn dữ liệu `Failed` tồn đọng, và tự nhân lên** | Nạp hỏng để lại một dòng `core_datasource` trạng thái `Failed`. Nó **không** chiếm tên (`find_conflicting_ds` loại trừ `FAILED`), nên gọi lại cùng tên vẫn ra `202` — chính vì thế mỗi lần thử lại đẻ thêm một dòng nữa, và không có lỗi nào báo cho ai biết. Chúng vẫn hiện trong `GET /datasource/list` vì hàm đó không lọc theo status. Kiểm tra tồn đọng: `SELECT id, name FROM core_datasource WHERE status = 'Failed'` |
 | **`FILE_DOWNLOAD_ALLOWED_HOSTS` rỗng chặn sạch, không phải mở sạch** | Hỏng theo hướng đóng là cố ý — đây là allowlist chống SSRF, mà mặc định "mở" của một biến chưa ai điền thì nguy hiểm hơn hẳn một endpoint chết. Triệu chứng khi quên điền: **mọi** lời gọi `createFromExcelAsync` trả `400 URL_HOST_NOT_ALLOWED` với thông điệp nói thẳng là chưa cấu hình |
-| **URL ký sẵn là credential, không phải đường dẫn** | Chữ ký nằm trong query string và nó được ghi nguyên văn xuống cột `excel_import_jobs.file_url`. Không bao giờ log cả URL, không dán vào issue hay chat: dùng `RemoteSource.safe_label` (host + object key). Hệ quả vận hành: ai đọc được bảng đó là đọc được file nguồn cho tới khi chữ ký hết hạn |
+| **URL ký sẵn là credential, không phải đường dẫn** | Chữ ký nằm trong query string và bản async ghi nó nguyên văn xuống cột `excel_import_jobs.file_url` (bản đồng bộ thì không). Không bao giờ log cả URL, không dán vào issue hay chat: dùng `RemoteSource.safe_label` (host + object key). Hệ quả vận hành: ai đọc được bảng đó là đọc được file nguồn cho tới khi chữ ký hết hạn |
+| **httpx tự log nguyên URL, kể cả chữ ký** | Logger `httpx` ghi `HTTP Request: GET <url> ...` ở mức INFO cho **mọi** request, ngoài tầm kiểm soát của code gọi — `safe_label` không cứu được. Đã chặn bằng filter cắt query string gắn vào logger `httpx` trong `setup_logging` ([utils.py](../common/utils/utils.py)); log còn lại dạng `...a.xlsx?<redacted>`. Thêm thư viện HTTP khác (requests, aiohttp) hoặc tự cấu hình lại logging mà bỏ qua `setup_logging` là lỗ này mở lại |
+| **Đọc file trong RAM phải dùng buffer mới cho mỗi lần đọc** | Bản đồng bộ đọc file nhiều lần (đối chiếu sheet, rồi nạp). Bộ đọc Excel của pandas tự tua về đầu, nhưng `read_csv` đọc từ vị trí con trỏ hiện tại: dùng chung một `BytesIO` thì lần đọc CSV thứ hai ném `EmptyDataError`. `open_source` trong `utils/excel.py` luôn bọc bytes vào `BytesIO` mới |
+| **Job `delivery = 'response'` không bao giờ sinh callback** | Dòng job của bản đồng bộ tạo thẳng `running`, nên vòng phục hồi không bao giờ chạy lại nó (chỉ nhặt `pending`). Pod chết giữa chừng thì vòng phục hồi kết liễu nó như job async — drop bảng, nguồn thành `Failed` kèm `JOB_ABANDONED` — nhưng **không gửi callback**. Bên gọi đã nhận lỗi kết nối, nên nguồn `Failed` đó phải tự dọn. Mọi lỗi khác của bản đồng bộ đều xoá nguồn giữ chỗ trước khi trả về |
 | **Hạn chữ ký tính từ lúc ký, không phải từ lúc worker chạy** | Job xếp hàng sau các job khác, hoặc được vòng phục hồi nhặt lại sau khi tiến trình chết, đều có thể tới lượt tải hàng chục phút sau khi nhận việc. Vì vậy URL được kiểm hạn **lại lần nữa** ngay trước khi tải, và đối tác được yêu cầu ký ≥ 1 giờ. Triệu chứng khi ký quá ngắn: `400 URL_EXPIRED` ở pha đồng bộ, hoặc `DOWNLOAD_FORBIDDEN` trong callback |
 | **`status` thành `Failed` trước khi `error_code` được ghi** | `fail_import_job` đổi trạng thái nguồn dữ liệu rồi mới ghi dòng job. Hệ ngoài hỏi `excelImportStatus` đúng khe giữa hai bước sẽ thấy `Failed` kèm `errorCode: null`. Khe này rất hẹp và tự khỏi ở lần hỏi sau, nhưng đủ để một client hỏi liên tục gặp phải |
-| **Khối `COPY` chết ở `uploadExcel`** | [datasource.py:563](../apps/datasource/api/datasource.py#L563) có một khối `COPY FROM STDIN` chạy sau `to_sql` nhưng thiếu `seek(0)`, nên nó đọc chuỗi rỗng và nạp 0 dòng. Vô hại đúng vì lỗi đó — ai "sửa" bằng cách thêm `seek(0)` sẽ làm **mọi bảng nhân đôi dữ liệu**. Đường mới (`utils/excel_import.py`) đã bỏ hẳn khối này |
+| **Khối `COPY` chết ở `uploadExcel`** | [datasource.py:619](../apps/datasource/api/datasource.py#L619) có một khối `COPY FROM STDIN` chạy sau `to_sql` nhưng thiếu `seek(0)`, nên nó đọc chuỗi rỗng và nạp 0 dòng. Vô hại đúng vì lỗi đó — ai "sửa" bằng cách thêm `seek(0)` sẽ làm **mọi bảng nhân đôi dữ liệu**. Đường mới (`utils/excel_import.py`) đã bỏ hẳn khối này |
 | **`sessionmaker.close()` không đóng pool** | `ConnectionPoolManager` lưu `sessionmaker`, và `sessionmaker` không có `close()` thật — engine bên dưới sống mãi cùng toàn bộ connection. Muốn giải phóng phải `engine.dispose()`. Cùng lớp lỗi với `get_engine_conn()` gọi xong không `dispose` |
 
 Đọc trạng thái hàng đợi khi cần chẩn đoán:
@@ -717,7 +738,7 @@ session bị đánh dấu hết hạn, và lần chạm thuộc tính kế tiế
 
 | Bẫy | Chi tiết |
 |---|---|
-| **Commit trong vòng lặp + đọc lại object = N+1 vô hình** | `sync_table` commit theo từng bảng/cột rồi vòng nào cũng đọc `ds.type`/`ds.configuration`, nên mỗi vòng kéo về cả cột `table_relation`. Với nguồn 537 bảng, cột đó ~1,5 MB → một lượt resync tải ~1,7 GB qua dây mà không ai dùng tới. Cách chữa là `snapshot_ds` ([datasource.py:568](../apps/datasource/crud/datasource.py#L568)): bản sao transient, không gắn session nên không bao giờ hết hạn |
+| **Commit trong vòng lặp + đọc lại object = N+1 vô hình** | `sync_table` commit theo từng bảng/cột rồi vòng nào cũng đọc `ds.type`/`ds.configuration`, nên mỗi vòng kéo về cả cột `table_relation`. Với nguồn 537 bảng, cột đó ~1,5 MB → một lượt resync tải ~1,7 GB qua dây mà không ai dùng tới. Cách chữa là `snapshot_ds` ([datasource.py:591](../apps/datasource/crud/datasource.py#L591)): bản sao transient, không gắn session nên không bao giờ hết hạn |
 | **`model_dump()` trên object đã hết hạn trả về toàn `None`** | Thuộc tính hết hạn bị **gỡ khỏi `__dict__`**, mà `model_dump()` đọc thẳng `__dict__` — nên nó trả bản sao rỗng, không exception, không cảnh báo. `getattr` mới kích hoạt cơ chế nạp lại của ORM. Bẫy này có thật: `create_ds` và luồng nhập Excel đều commit ngay trước khi gọi `sync_table`, nên bản sao hỏng sẽ khiến mọi bảng được ghi với `ds_id=None` |
 | **`table_relation` nặng hơn nhiều so với tưởng tượng** | Nó **không phải** danh sách cạnh: nó là ảnh chụp canvas của sơ đồ ER (node, port, layout, style theo định dạng AntV/X6). Nguồn 537 bảng có 936 cell, trong đó riêng phần `ports` chiếm 86% dung lượng, còn cạnh chỉ 5%. Bảng không có quan hệ nào vẫn tốn node. `pg_column_size` báo số **đã nén** (TOAST) nên nhìn qua tưởng nhẹ, nhưng đọc ra là bản giải nén |
 

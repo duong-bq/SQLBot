@@ -139,6 +139,28 @@ def string_to_numeric_hash(text: str, bits: Optional[int] = 64) -> int:
     return hash_num % max_bigint
 
 
+class _StripUrlQueryFilter(logging.Filter):
+    """Cắt query string khỏi URL trong dòng log ``HTTP Request: GET <url>`` của httpx.
+
+    httpx tự log nguyên URL ở mức INFO. Với presigned URL (import excel, tài liệu docx), chữ ký nằm
+    trong query string và là credential, nên không được ghi ra log. Chỉ cắt query, giữ host và path
+    để log vẫn dùng được khi gỡ lỗi.
+    """
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        if isinstance(record.args, tuple):
+            record.args = tuple(_strip_url_query(arg) for arg in record.args)
+        return True
+
+
+def _strip_url_query(arg):
+    """Trả về URL đã bỏ phần sau ``?``; tham số không phải URL thì giữ nguyên."""
+    text = str(arg)
+    if "://" in text and "?" in text:
+        return text.split("?", 1)[0] + "?<redacted>"
+    return arg
+
+
 def setup_logging():
     # 确保日志目录存在
     log_dir = Path(settings.LOG_DIR)
@@ -192,7 +214,9 @@ def setup_logging():
             handler.addFilter(lambda record: record.levelno >= logging.ERROR)
         
         root_logger.addHandler(handler)
-    
+
+    logging.getLogger("httpx").addFilter(_StripUrlQueryFilter())
+
     # SQL日志特殊处理
     if settings.LOG_LEVEL == "DEBUG" and settings.SQL_DEBUG:
         sql_logger = logging.getLogger('sqlalchemy.engine')

@@ -1,3 +1,5 @@
+import io
+from dataclasses import dataclass
 from typing import List, Optional
 
 import pandas as pd
@@ -27,7 +29,49 @@ def infer_field_type(dtype) -> str:
     return FIELD_TYPE_MAP.get(dtype_str, 'string')
 
 
-def list_sheet_names(save_path: str) -> List[str]:
+@dataclass(frozen=True)
+class InMemoryWorkbook:
+    """File Excel/CSV nằm trong RAM, kèm tên file để biết định dạng.
+
+    Dùng cho ``/createFromExcel`` đồng bộ: file tải từ presigned URL không
+    được ghi xuống đĩa. Tên file đi kèm bytes để cờ CSV không thể bị quên
+    hay truyền lệch ở một trong ba hàm đọc.
+    """
+
+    data: bytes
+    filename: str
+
+    @property
+    def is_csv(self) -> bool:
+        """File là CSV, suy từ đuôi tên file."""
+        return self.filename.lower().endswith(".csv")
+
+
+WorkbookSource = str | InMemoryWorkbook
+
+
+def is_csv_source(source: WorkbookSource) -> bool:
+    """Nguồn là CSV: đường dẫn theo đuôi ``.csv``, bytes theo tên file đi kèm."""
+    if isinstance(source, InMemoryWorkbook):
+        return source.is_csv
+    return source.endswith(".csv")
+
+
+def open_source(source: WorkbookSource):
+    """Trả về thứ pandas đọc được: đường dẫn giữ nguyên, bytes bọc ``BytesIO`` MỚI.
+
+    Mỗi lần đọc phải gọi lại hàm này, không dùng chung một buffer. Bộ đọc
+    Excel của pandas tự tua về đầu, nhưng ``read_csv`` đọc từ vị trí con trỏ
+    hiện tại: luồng nạp đọc CSV hai lần (xem trước rồi nạp), nên lần hai sẽ
+    ném ``EmptyDataError``. Buffer mới cho mỗi lần đọc thì không phụ thuộc
+    vào hành vi riêng của từng bộ đọc.
+    """
+    if isinstance(source, InMemoryWorkbook):
+        return io.BytesIO(source.data)
+    return source
+
+
+def list_sheet_names(save_path: WorkbookSource) -> List[str]:
     """Đọc DANH SÁCH TÊN sheet của file, không chạm vào dữ liệu trong ô.
 
     Tách riêng khỏi ``parse_excel_preview`` để pha đồng bộ của luồng import bất đồng bộ kiểm tra
@@ -37,13 +81,15 @@ def list_sheet_names(save_path: str) -> List[str]:
 
     CSV không có khái niệm sheet; trả về ``["Sheet1"]`` cho khớp quy ước đặt tên của
     ``parse_excel_preview``.
+
+    ``save_path`` là đường dẫn hoặc ``InMemoryWorkbook`` (file trong RAM).
     """
-    if save_path.endswith(".csv"):
+    if is_csv_source(save_path):
         return ["Sheet1"]
-    return list(pd.ExcelFile(save_path).sheet_names)
+    return list(pd.ExcelFile(open_source(save_path)).sheet_names)
 
 
-def parse_excel_preview(save_path: str, max_rows: int = 10, sheet_names: Optional[List[str]] = None):
+def parse_excel_preview(save_path: WorkbookSource, max_rows: int = 10, sheet_names: Optional[List[str]] = None):
     """Đọc cấu trúc và vài dòng mẫu của từng sheet trong file Excel/CSV.
 
     ``sheet_names`` lọc sheet cần đọc; để trống là đọc tất cả (giữ nguyên hành vi cũ). Việc lọc
@@ -52,10 +98,13 @@ def parse_excel_preview(save_path: str, max_rows: int = 10, sheet_names: Optiona
 
     Tên sheet không tồn tại thì bị bỏ qua im lặng; người gọi tự đối chiếu bằng ``list_sheet_names``
     nếu cần báo lỗi.
+
+    ``save_path`` là đường dẫn hoặc ``InMemoryWorkbook``; mỗi lần đọc mở nguồn mới qua
+    ``open_source``.
     """
     sheets_data = []
-    if save_path.endswith(".csv"):
-        df = pd.read_csv(save_path, engine='c')
+    if is_csv_source(save_path):
+        df = pd.read_csv(open_source(save_path), engine='c')
         fields = []
         for col in df.columns:
             fields.append({
@@ -71,12 +120,12 @@ def parse_excel_preview(save_path: str, max_rows: int = 10, sheet_names: Optiona
             "rows": len(df)
         })
     else:
-        all_sheet_names = pd.ExcelFile(save_path).sheet_names
+        all_sheet_names = pd.ExcelFile(open_source(save_path)).sheet_names
         if sheet_names:
             wanted = set(sheet_names)
             all_sheet_names = [name for name in all_sheet_names if name in wanted]
         for sheet_name in all_sheet_names:
-            df = pd.read_excel(save_path, sheet_name=sheet_name, engine='calamine')
+            df = pd.read_excel(open_source(save_path), sheet_name=sheet_name, engine='calamine')
             fields = []
             for col in df.columns:
                 fields.append({

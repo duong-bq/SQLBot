@@ -10,6 +10,7 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy import and_, select
 from starlette.responses import JSONResponse
 
+from apps.ai_model_config.errors import attach_model_error_code, sanitize_secret
 from apps.chat.curd.attachment import save_chat_attachments
 from apps.chat.curd.chat import delete_chat_with_user, get_chart_data_with_user, get_chat_predict_data_with_user, \
     list_chats, get_chat_with_records, create_chat, get_chat_chart_data, get_chat_predict_data, \
@@ -856,7 +857,7 @@ async def question_answer_inner(
             return StreamingResponse(_err(e), media_type="text/event-stream")
         else:
             return JSONResponse(
-                content={"message": str(e)},
+                content=attach_model_error_code({"message": sanitize_secret(str(e))}, e),
                 status_code=500,
             )
 
@@ -950,7 +951,7 @@ async def stream_sql(
             return StreamingResponse(_err(e), media_type="text/event-stream")
         else:
             return JSONResponse(
-                content={"message": str(e)},
+                content=attach_model_error_code({"message": sanitize_secret(str(e))}, e),
                 status_code=500,
             )
     if stream:
@@ -1006,6 +1007,7 @@ async def analysis_or_predict(
     in_chat: bool = True,
     stream: bool = True,
 ):
+    """Chạy phân tích hoặc dự đoán trên một record đã có; lỗi JSON có ``code`` khi do gọi model."""
     try:
         if action_type != "analysis" and action_type != "predict":
             raise Exception(f"Type {action_type} Not Found")
@@ -1080,7 +1082,7 @@ async def analysis_or_predict(
             return StreamingResponse(_err(e), media_type="text/event-stream")
         else:
             return JSONResponse(
-                content={"message": str(e)},
+                content=attach_model_error_code({"message": sanitize_secret(str(e))}, e),
                 status_code=500,
             )
     if stream:

@@ -18,7 +18,12 @@ from sqlmodel import Session, select
 
 from common.core.db import engine
 
-from ..models.excel_job import CallbackStatus, ExcelImportJob, ExcelImportJobStatus
+from ..models.excel_job import (
+    CallbackStatus,
+    ExcelImportDelivery,
+    ExcelImportJob,
+    ExcelImportJobStatus,
+)
 
 
 def _now() -> datetime.datetime:
@@ -53,15 +58,22 @@ def current_worker_id() -> str:
 
 def create_job(session: Session, *, ds_id: int, oid: int, create_by: int, ds_name: str,
                file_path: str, sheet_names: list[str],
-               file_url: str | None = None) -> ExcelImportJob:
-    """Ghi dòng job ở trạng thái chờ. KHÔNG commit — người gọi quyết định thời điểm.
+               file_url: str | None = None,
+               delivery: str = ExcelImportDelivery.CALLBACK) -> ExcelImportJob:
+    """Ghi dòng job. KHÔNG commit — người gọi quyết định thời điểm.
 
     Pha đồng bộ cần gộp dòng này chung transaction với dòng ``core_datasource``, để hai thứ hoặc
     cùng tồn tại hoặc cùng không.
 
     ``file_url`` để rỗng nghĩa là file đã nằm sẵn ở ``file_path`` (đường multipart cũ); có giá trị
     nghĩa là worker phải tự tải về đúng ``file_path`` trước khi làm gì khác.
+
+    Job ``delivery = response`` (``/createFromExcel`` đồng bộ) được tạo thẳng ở ``running`` kèm
+    heartbeat, không qua ``pending``: vòng phục hồi chỉ nhặt lại job ``pending``, nên job này không
+    bao giờ bị chạy lại ở nền sau khi client đã nhận lỗi. Chết giữa chừng thì nó bị kết liễu như
+    job ``running`` mất heartbeat.
     """
+    now = _now() if delivery == ExcelImportDelivery.RESPONSE else None
     job = ExcelImportJob(
         ds_id=ds_id,
         oid=oid,
@@ -71,7 +83,11 @@ def create_job(session: Session, *, ds_id: int, oid: int, create_by: int, ds_nam
         file_url=file_url,
         sheet_names=list(sheet_names),
         created_tables=[],
-        status=ExcelImportJobStatus.PENDING,
+        delivery=delivery,
+        status=ExcelImportJobStatus.RUNNING if now else ExcelImportJobStatus.PENDING,
+        worker_id=current_worker_id() if now else None,
+        started_at=now,
+        heartbeat_at=now,
         callback_status=CallbackStatus.NONE,
     )
     session.add(job)
@@ -143,22 +159,31 @@ def finish_job(job_id: int, *, success: bool, error_code: str | None = None,
 
     ``next_attempt_at`` đặt bằng hiện tại để vòng gửi nhặt ở chu kỳ kế tiếp. Bản thân worker không
     bao giờ chạm tới mạng.
+
+    Job ``delivery = response`` chỉ ghi trạng thái, không vào outbox: kết quả đã đi theo HTTP
+    response. ``delivery`` đọc ngay trong transaction này chứ không nhận qua tham số, vì vòng phục
+    hồi kết liễu job chết qua ``fail_import_job`` mà không biết loại job.
     """
     now = _now()
     with Session(engine) as session:
+        delivery = session.exec(
+            select(ExcelImportJob.delivery).where(ExcelImportJob.id == job_id)
+        ).first()
+        values = {
+            "status": ExcelImportJobStatus.SUCCESS if success else ExcelImportJobStatus.FAILED,
+            "finished_at": now,
+            "heartbeat_at": now,
+            "error_code": error_code,
+            "error_message": error_message,
+        }
+        if delivery != ExcelImportDelivery.RESPONSE:
+            values.update({
+                "callback_status": CallbackStatus.PENDING,
+                "callback_payload": callback_payload,
+                "next_attempt_at": now,
+            })
         session.execute(
-            update(ExcelImportJob)
-            .where(ExcelImportJob.id == job_id)
-            .values(
-                status=ExcelImportJobStatus.SUCCESS if success else ExcelImportJobStatus.FAILED,
-                finished_at=now,
-                heartbeat_at=now,
-                error_code=error_code,
-                error_message=error_message,
-                callback_status=CallbackStatus.PENDING,
-                callback_payload=callback_payload,
-                next_attempt_at=now,
-            )
+            update(ExcelImportJob).where(ExcelImportJob.id == job_id).values(**values)
         )
         session.commit()
 

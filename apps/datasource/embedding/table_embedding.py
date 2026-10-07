@@ -5,6 +5,7 @@ import time
 import traceback
 
 from apps.ai_model.embedding import EmbeddingModelCache
+from apps.ai_model_config.embedding import get_embedding_for_ds
 from apps.datasource.embedding.utils import cosine_similarity
 from common.core.config import settings
 from common.utils.utils import SQLBotLogUtil
@@ -40,7 +41,12 @@ def get_table_embedding(tables: list[dict], question: str):
     return _list
 
 
-def calc_table_embedding(tables: list[dict], question: str):
+def calc_table_embedding(tables: list[dict], question: str, ds_id: int = None):
+    """Xếp hạng bảng theo độ gần với câu hỏi, dùng vector đã lưu của từng bảng.
+
+    ``ds_id`` để embed câu hỏi bằng đúng model đã embed các bảng của datasource đó. Lỗi (kể cả lệch
+    số chiều) thì trả nguyên danh sách bảng, không lọc — như hành vi gốc.
+    """
     _list = []
     for table in tables:
         _list.append(
@@ -51,7 +57,7 @@ def calc_table_embedding(tables: list[dict], question: str):
         try:
             # text = [s.get('schema_table') for s in _list]
             #
-            model = EmbeddingModelCache.get_model()
+            model = get_embedding_for_ds(ds_id)
             start_time = time.time()
             # results = model.embed_documents(text)
             # end_time = time.time()

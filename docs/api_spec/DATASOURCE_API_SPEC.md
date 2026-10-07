@@ -64,7 +64,7 @@ FastAPI bắt). Client phải xử lý được cả hai.
 
 | | Endpoint | |
 |---|---|---|
-| 9.1 | `POST /datasource/createFromExcel` | đồng bộ, chờ nạp xong mới trả về |
+| 9.1 | `POST /datasource/createFromExcel` | nhận URL của file, tải và nạp ngay trong request, trả kết quả trong response |
 | 9.2 | `POST /datasource/createFromExcelAsync` | nhận URL của file, trả `202` ngay, tải và nạp ở nền, báo kết quả bằng callback |
 | 9.4 | `GET /datasource/excelImportStatus/{ds_id}` | tra trạng thái một lần nạp |
 
@@ -107,7 +107,8 @@ FastAPI bắt). Client phải xử lý được cả hai.
 
 Thứ tự tích hợp tối thiểu để chatbot trả lời được:
 
-- nguồn là database: **3.2 → 3.3 → 3.4 → 3.5 → 6.2**
+- nguồn là database: **3.2 → 3.3 → 3.4 → 3.5**. Quan hệ JOIN từ khóa ngoại của DB nguồn được server
+  tự sinh; chỉ gọi 6.2 khi cần khai thêm quan hệ mà DB nguồn không khai bằng khóa ngoại
 - nguồn là file Excel/CSV: **9.2** (một lời gọi), hoặc **8.1 → 8.2 → 8.3** nếu cần can thiệp kiểu cột
 
 ---
@@ -880,10 +881,15 @@ Khuyến nghị dùng UUID, hoặc một chuỗi sinh theo công thức từ ch�
   giao diện SQLBot sẽ trống — xem 6.3 nếu điều đó là vấn đề.
 - Chỉ khai những quan hệ thật sự dùng để JOIN. Mỗi quan hệ khai thừa đều làm giảm chất lượng câu trả
   lời, vì bảng ở đầu kia bị kéo theo vào ngữ cảnh xử lý câu hỏi.
-- Khi tạo nguồn ở 3.5 và khi đổi danh sách bảng ở 7.3, nếu cấu hình quan hệ đang rỗng thì server tự
-  sinh sẵn quan hệ từ khóa ngoại khai báo trong DB nguồn. Cấu hình đã có sẵn thì không bị đụng tới.
-  Vì vậy mảng chỉ có `er-rect` mà không có `edge` nào nghĩa là **nguồn này không khai quan hệ nào**,
-  chứ không phải "chưa từng cấu hình".
+- Mỗi lần tạo nguồn ở 3.5 và đổi danh sách bảng ở 7.3, server **đối soát** cấu hình quan hệ với tập
+  bảng/cột hiện hành: dọn cell trỏ vào bảng/cột đã bị gỡ, thêm `er-rect` cho bảng mới, bổ sung `edge`
+  từ khóa ngoại khai báo trong DB nguồn mà cấu hình còn thiếu. Cấu hình đang rỗng thì sinh mới toàn bộ
+  từ khóa ngoại. `edge` khai tay qua 6.2 còn hợp lệ được giữ nguyên.
+- ⚠ `edge` sinh từ khóa ngoại mà bị xóa bằng 6.2 sẽ **quay lại** ở lần 7.3 kế tiếp. Muốn bỏ hẳn một
+  quan hệ khóa ngoại thì gỡ khóa ngoại ở DB nguồn.
+- ⚠ Gọi 6.2 với mảng rỗng là **xóa mất** cả quan hệ server đã tự sinh; không cần gọi 6.2 sau 3.5/7.3.
+- Mảng chỉ có `er-rect` mà không có `edge` nào nghĩa là **nguồn này không có quan hệ nào**, chứ không
+  phải "chưa từng cấu hình".
 
 ### 6.3. Cell `er-rect` — chỉ phục vụ sơ đồ trên giao diện
 
@@ -977,13 +983,13 @@ một nguồn đang chạy: DB nguồn có 26 cột trong khi SQLBot đang lưu 
   của nó. Thêm một bảng vẫn phải gửi lại cả những bảng đang có. Mảng rỗng xóa sạch.
 - ⚠ Bảng bị xóa rồi thêm lại sẽ mang `table_id` mới và **mất toàn bộ chú thích** của bảng lẫn các
   cột. Gọi lại với cùng danh sách thì an toàn — chú thích được giữ.
-- ⚠ Quan hệ giữa các bảng **không** được cập nhật theo, phải khai lại bằng 6.2. Nặng hơn "không cập
-  nhật": sơ đồ quan hệ vẫn giữ nguyên các bảng/cột vừa bị gỡ, và những mẩu trỏ vào chỗ trống đó đi
-  thẳng vào ngữ cảnh sinh SQL. Đổi tập bảng xong thì **luôn** gọi 6.2 để khai lại quan hệ theo tập
-  bảng mới — kể cả khi không có quan hệ nào (gửi mảng rỗng).
-- Nếu chỉ cần cập nhật cấu trúc cho khớp DB nguồn (chứ không phải tự chọn tập bảng), dùng bản tin
-  `actionType 4` của `AI_SYNC_HOOK_API_SPEC.md` §6: nó tự đọc lại catalog nguồn và tự dọn sơ đồ quan
-  hệ, không cần gọi 6.2 sau đó.
+- Quan hệ giữa các bảng được server tự đối soát theo tập bảng mới (xem lưu ý cuối 6.2): quan hệ trỏ
+  vào bảng/cột vừa bị gỡ bị dọn, quan hệ khóa ngoại của bảng mới được bổ sung. Không cần gọi 6.2 sau
+  endpoint này.
+- Gọi lại với cùng danh sách là cách cập nhật cấu trúc cột theo DB nguồn cho các bảng đang chọn: cột
+  mới được thêm và bật sẵn, cột đã mất bị xóa. Bảng mới ở nguồn **không** tự vào danh sách.
+- Nếu muốn chép lại toàn bộ bảng của DB nguồn (chứ không phải tự chọn tập bảng), dùng bản tin
+  `actionType 4` của `AI_SYNC_HOOK_API_SPEC.md` §6.
 - ⚠ Không có transaction bao trùm: hỏng giữa chừng để lại trạng thái dở dang. Xử lý bằng cách đọc
   4.4 rồi gọi lại — thao tác này lặp lại được.
 - Khác 3.5: endpoint này **có** kiểm tra kết nối, hỏng thì 500 và không thay đổi gì.
@@ -1342,52 +1348,62 @@ liệu và đăng ký các bảng đó.
 Đánh đổi so với §8: không xem trước được cấu trúc và **không sửa được kiểu cột** — kiểu do server tự
 đoán. Cần can thiệp kiểu thì phải quay lại đường ba bước.
 
-Hai biến thể, khác nhau ở *cách file tới tay server* và ở *khi nào* response trả về:
+Hai biến thể **cùng một body JSON** — đều nhận URL ký sẵn (presigned URL) trỏ tới file trên object
+storage của bên tích hợp, không nhận bytes. Chúng chỉ khác nhau ở *khi nào* và *bằng đường nào* kết
+quả quay về:
 
 | | 9.1 `createFromExcel` | 9.2 `createFromExcelAsync` |
 |---|---|---|
-| File tới bằng | Bytes trong request (`multipart/form-data`) | **URL** trỏ tới file, server tự tải (`application/json`) |
-| Trả về khi | Đã nạp xong toàn bộ | Đã nhận việc, **chưa** tải, chưa nạp |
+| File tới bằng | **URL**, server tự tải (`application/json`) | **URL**, server tự tải (`application/json`) |
+| Trả về khi | Đã tải và nạp xong toàn bộ | Đã nhận việc, **chưa** tải, chưa nạp |
 | HTTP | `200` | `202` |
-| Thời gian giữ kết nối | Bằng thời gian tải lên **cộng** thời gian nạp — file lớn có thể vài phút | Cỡ vài chục ms |
+| Thời gian giữ kết nối | Thời gian tải (tối đa 120 giây) **cộng** thời gian nạp | Cỡ vài chục ms |
 | Biết kết quả bằng cách | Đọc luôn response | Nhận [callback](#93-callback-báo-kết-quả) hoặc gọi [9.4](#94-get-datasourceexcelimportstatusds_id) |
+| Hỏng thì để lại | Không gì cả — nguồn giữ chỗ bị xoá trước khi trả lỗi | Một nguồn dữ liệu `Failed` phải dọn |
+| Tải hỏng thì | Trả lỗi ngay, không thử lại | SQLBot tự thử lại ở nền |
+| File tạm trên đĩa của SQLBot | Không — file chỉ nằm trong RAM | Có, xoá sau khi nạp |
 | Nguồn dữ liệu dùng được ngay sau khi trả về | ✔ | ✘ — đang ở trạng thái `Importing` |
 
-**Nên dùng 9.2.** 9.1 giữ lại cho tích hợp cũ, và nó có hai chỗ hỏng độc lập nhau. Thứ nhất, nó
-buộc client chờ suốt quá trình nạp, mà mọi reverse proxy đứng giữa đều có timeout riêng — file đủ
-lớn thì client nhận `504` trong khi server vẫn đang nạp và cuối cùng vẫn tạo ra nguồn dữ liệu, tức
-là client không còn suy ra được trạng thái thật từ lỗi mình nhận. Thứ hai, bytes của file phải đi
-qua đúng cái kết nối HTTP đang chờ đó; đường truyền giữa hai bên chậm hay chập chờn thì cả request
-hỏng và phải tải lại từ đầu.
-
-9.2 gỡ cả hai bằng cách **không nhận bytes nữa**: bên tích hợp đẩy file lên object storage của mình
-rồi đưa cho SQLBot một URL ký sẵn (presigned URL). Việc tải nằm ở tiến trình nền, chậm bao lâu cũng
-không có ai ngồi chờ, và tải hỏng thì SQLBot tự thử lại.
+**Chọn bản nào.** 9.1 đơn giản hơn hẳn cho bên tích hợp: một request, một kết quả, không callback,
+không nguồn rác phải dọn. Cái giá là client phải giữ kết nối suốt lúc tải và nạp — đặt timeout chờ
+**ít nhất 300 giây**, và mọi reverse proxy đứng giữa cũng phải cho phép chừng đó. Dùng 9.2 khi file
+lớn tới mức thời gian nạp vượt quá khả năng chờ của client, hoặc khi đường tới object storage chập
+chờn và cần SQLBot tự thử lại.
 
 Cả hai endpoint đều cần quyền **`ws_admin`**.
 
 ### 9.1. `POST /datasource/createFromExcel`
 
-**Request** — `multipart/form-data`.
+**Request** — `application/json`, **cùng body với [9.2](#92-post-datasourcecreatefromexcelasync)**.
+Bản cũ nhận `multipart/form-data` kèm bytes của file; dạng đó đã bỏ.
 
 | Field | Kiểu | Bắt buộc | Ghi chú |
 |---|---|---|---|
-| `file` | file | ✔ | `.xlsx`, `.xls`, `.csv` |
+| `fileUrl` | string | ✔ | URL ký sẵn trỏ tới file. Điều kiện như 9.2, trừ hạn chữ ký — xem bên dưới |
 | `name` | string | ✔ | Tên nguồn dữ liệu, phải chưa tồn tại trong workspace |
-| `sheetNames` | string (lặp lại) | | Chỉ nạp các sheet này. Bỏ trống = nạp tất cả. File CSV bỏ qua trường này |
+| `sheetNames` | string[] | | Mảng JSON. Chỉ nạp các sheet này, bỏ trống = nạp tất cả. File CSV bỏ qua trường này |
 | `description` | string | | ≤512 ký tự |
-
-`sheetNames` lặp lại tên field cho mỗi giá trị, không phải mảng JSON:
 
 ```bash
 curl -X POST 'https://<host>/api/v1/datasource/createFromExcel' \
   -H 'X-SQLBOT-TOKEN: Bearer <jwt>' \
-  -F 'file=@thu_ngan_sach_2024.xlsx' \
-  -F 'name=Thu ngân sách 2024' \
-  -F 'sheetNames=Quy1' \
-  -F 'sheetNames=Quy2' \
-  -F 'description=Số liệu thu ngân sách theo quý'
+  -H 'Content-Type: application/json' \
+  -d '{
+        "fileUrl": "https://minio.example.com/bucket/thu_ngan_sach_2024.xlsx?X-Amz-Algorithm=...&X-Amz-Signature=...",
+        "name": "Thu ngân sách 2024",
+        "sheetNames": ["Quy1", "Quy2"],
+        "description": "Số liệu thu ngân sách theo quý"
+      }'
 ```
+
+**Điều kiện của `fileUrl`** giống [9.2](#92-post-datasourcecreatefromexcelasync) — host trong danh
+sách cho phép, đuôi `.xlsx`/`.xls`/`.csv`, không quá trần dung lượng, không redirect — chỉ khác ở
+hạn chữ ký: **còn ít nhất 120 giây** lúc gọi là đủ, vì file được tải ngay trong request chứ không
+xếp hàng chờ.
+
+SQLBot tải **một lần, không thử lại**, với trần tổng thời gian 120 giây. Tải xong nó đối chiếu
+`sheetNames` với file **trước** khi tạo bất cứ thứ gì, nên các lỗi hay gặp (URL sai, hết hạn, file
+không có, sai tên sheet, file hỏng) trả về ngay và không để lại dấu vết nào.
 
 **Response `200`:**
 
@@ -1405,6 +1421,37 @@ curl -X POST 'https://<host>/api/v1/datasource/createFromExcel' \
   "msg": null
 }
 ```
+
+**Lỗi.** Thân lỗi là object `{code, message}`, cùng bộ mã với 9.2 và [9.4](#94-get-datasourceexcelimportstatusds_id):
+
+| HTTP | `code` | Khi nào |
+|---|---|---|
+| `400` | `URL_INVALID`, `URL_HOST_NOT_ALLOWED`, `URL_BAD_EXTENSION`, `URL_EXPIRED` | Kiểm chuỗi URL, chưa chạm mạng |
+| `400` | `DOWNLOAD_FORBIDDEN`, `DOWNLOAD_NOT_FOUND` | Object storage trả `403` / `404` |
+| `400` | `FILE_TOO_LARGE` | File vượt trần dung lượng |
+| `502` | `DOWNLOAD_FAILED` | Mạng đứt, object storage trả `5xx`, hoặc tải quá 120 giây. Lỗi tạm thời — gọi lại |
+| `400` | `CANNOT_READ_WORKBOOK`, `NO_SHEET_PARSED`, `EXCEL_READ_FAILED` | Tải được nhưng không đọc được: file hỏng, sai định dạng so với đuôi, sheet không có dữ liệu |
+| `400` | `SHEET_NOT_FOUND` | `sheetNames` có tên không tồn tại; kèm `availableSheets` |
+| `400` | — | `name` rỗng; `models` sai |
+| `409` | `DATASOURCE_NAME_EXISTS` | Tên đã tồn tại; kèm `dsId`, `status` — như 9.2 |
+| `409` | `DATASOURCE_NAME_LOCKED` | Request khác cùng tên đang giữ chỗ — như 9.2 |
+| `499` | `CLIENT_DISCONNECTED` | Client ngắt kết nối trong lúc SQLBot đang tải; không tạo gì |
+| `500` | `TABLE_WRITE_FAILED`, `DATASOURCE_DELETED`, `INTERNAL_ERROR` | Lỗi phía hệ thống. `DATASOURCE_DELETED`: nguồn giữ chỗ bị xoá trong lúc đang nạp |
+
+```json
+{"code": "SHEET_NOT_FOUND", "message": "Sheet not found: Quy3. Available: Quy1, Quy2",
+ "availableSheets": ["Quy1", "Quy2"]}
+```
+
+**Mọi lỗi đều không để lại nguồn dữ liệu.** Lỗi xảy ra sau khi đã giữ chỗ thì SQLBot xoá nguồn
+giữ chỗ cùng các bảng đã tạo trước khi trả về, nên gọi lại đúng tên đó không bị `409`. Ngoại lệ duy
+nhất là tiến trình SQLBot chết giữa lúc nạp: client nhận lỗi kết nối, còn nguồn đó chuyển sang
+`Failed` (`JOB_ABANDONED`) vài phút sau và phải dọn bằng [7.6](#76-post-datasourcedeleteds_idname).
+
+**Client hết giờ chờ trước SQLBot** thì không biết nguồn đã được tạo hay chưa. Cách dọn an toàn: tra
+[`GET /datasource/list`](#41-get-datasourcelist) theo tên rồi xoá bằng 7.6. Nếu SQLBot vẫn đang nạp
+lúc bị xoá, bước chốt phát hiện ra, drop các bảng đã tạo và kết thúc với `DATASOURCE_DELETED` —
+không có nguồn nào sống lại sau khi đã xoá.
 
 ### 9.2. `POST /datasource/createFromExcelAsync`
 
@@ -1619,8 +1666,9 @@ lẫn ở đây — cùng một tên cho cùng một chuyện, chỉ khác thờ
 Mọi trường hợp `Failed` đều để lại một nguồn dữ liệu rác phải dọn bằng
 [7.6](#76-post-datasourcedeleteds_idname), kể cả các lỗi chỉ liên quan tới việc tải file.
 
-`404` nếu `ds_id` không tồn tại. Nguồn dữ liệu tạo bằng đường 9.1 hoặc §8 cũng tra được ở đây, khi
-đó `errorCode`/`errorMessage` luôn `null`.
+`404` nếu `ds_id` không tồn tại. Nguồn dữ liệu tạo bằng đường 9.1 hoặc §8 cũng tra được ở đây. Với
+§8, `errorCode`/`errorMessage` luôn `null`; với 9.1, nạp hỏng thì nguồn đã bị xoá (`404`), chỉ còn
+trường hợp tiến trình chết giữa chừng để lại `Failed` kèm `JOB_ABANDONED`.
 
 Không có giới hạn tần suất, nhưng thời gian xử lý giờ gồm cả việc tải file về từ object storage nên
 nó phụ thuộc đường truyền giữa SQLBot và object storage, không chỉ phụ thuộc kích thước file. Hỏi
