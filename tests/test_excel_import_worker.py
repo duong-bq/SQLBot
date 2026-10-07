@@ -1,6 +1,6 @@
 """Test cho hai bước mới ở đầu worker import: tải file nguồn và đối chiếu tên sheet.
 
-Chỉ nhắm vào hai hàm thuần ``_fetch_source_file`` và ``_resolve_sheets``. Phần còn lại của
+Chỉ nhắm vào hai hàm thuần ``_fetch_source_file`` và ``resolve_sheets``. Phần còn lại của
 ``_run_import_job`` cần Postgres thật (mark_running, finish_job, outbox) nên không đụng tới ở đây.
 
 Hai bước này là chỗ ranh giới giữa pha đồng bộ và pha nền vừa DỊCH sang. Trước kia pha đồng bộ cầm
@@ -29,7 +29,7 @@ from apps.datasource.task.excel_import_task import (  # noqa: E402
     ERR_CANNOT_READ,
     ERR_SHEET_NOT_FOUND,
     _fetch_source_file,
-    _resolve_sheets,
+    resolve_sheets,
 )
 from apps.datasource.utils import remote_file  # noqa: E402
 from apps.datasource.utils.excel_import import ExcelImportError  # noqa: E402
@@ -58,16 +58,16 @@ class ResolveSheetsTest(unittest.TestCase):
 
     def test_empty_selection_takes_every_sheet(self):
         p = make_workbook(self.path("a.xlsx"), ["Thu", "Chi", "DauTu"])
-        self.assertEqual(_resolve_sheets(p, []), ["Thu", "Chi", "DauTu"])
+        self.assertEqual(resolve_sheets(p, []), ["Thu", "Chi", "DauTu"])
 
     def test_selection_is_filtered(self):
         p = make_workbook(self.path("a.xlsx"), ["Thu", "Chi", "DauTu"])
-        self.assertEqual(_resolve_sheets(p, ["Chi"]), ["Chi"])
+        self.assertEqual(resolve_sheets(p, ["Chi"]), ["Chi"])
 
     def test_result_follows_file_order_not_client_order(self):
         """Thứ tự lấy từ file: nó quyết định thứ tự tạo bảng, phải tái lập được giữa các lần chạy."""
         p = make_workbook(self.path("a.xlsx"), ["Thu", "Chi", "DauTu"])
-        self.assertEqual(_resolve_sheets(p, ["DauTu", "Thu"]), ["Thu", "DauTu"])
+        self.assertEqual(resolve_sheets(p, ["DauTu", "Thu"]), ["Thu", "DauTu"])
 
     def test_unknown_sheet_raises_instead_of_being_dropped(self):
         """Bẫy chính: ``parse_excel_preview`` bỏ qua im lặng tên lạ, nên phải chặn TRƯỚC nó.
@@ -77,7 +77,7 @@ class ResolveSheetsTest(unittest.TestCase):
         """
         p = make_workbook(self.path("a.xlsx"), ["Thu", "Chi"])
         with self.assertRaises(ExcelImportError) as ctx:
-            _resolve_sheets(p, ["Thu", "ChiTieu"])
+            resolve_sheets(p, ["Thu", "ChiTieu"])
         self.assertEqual(ctx.exception.error_code, ERR_SHEET_NOT_FOUND)
         # Thông điệp phải kèm danh sách sheet có thật, nếu không đối tác không tự sửa được.
         self.assertIn("ChiTieu", ctx.exception.message)
@@ -87,7 +87,7 @@ class ResolveSheetsTest(unittest.TestCase):
         p = self.path("a.csv")
         with open(p, "w", encoding="utf-8") as f:
             f.write("a,b\n1,2\n")
-        self.assertEqual(_resolve_sheets(p, []), ["Sheet1"])
+        self.assertEqual(resolve_sheets(p, []), ["Sheet1"])
 
     def test_corrupt_workbook_becomes_a_typed_error(self):
         """File hỏng phải ra mã lỗi phân loại được, không phải một traceback của pandas."""
@@ -95,7 +95,7 @@ class ResolveSheetsTest(unittest.TestCase):
         with open(p, "wb") as f:
             f.write(b"this is definitely not a zip archive")
         with self.assertRaises(ExcelImportError) as ctx:
-            _resolve_sheets(p, [])
+            resolve_sheets(p, [])
         self.assertEqual(ctx.exception.error_code, ERR_CANNOT_READ)
 
 
