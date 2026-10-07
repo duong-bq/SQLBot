@@ -372,19 +372,19 @@ class CreateFromExcelResponse(BaseModel):
 
 
 class CreateFromExcelUrlRequest(BaseModel):
-    """Body của luồng import bất đồng bộ: hệ ngoài đưa ĐƯỜNG DẪN tới file, không đưa bytes.
+    """Body của ``/createFromExcel`` và ``/createFromExcelAsync``: ĐƯỜNG DẪN tới file, không bytes.
 
     Vì sao không còn multipart: file nguồn nằm ở object storage của hệ ngoài, đẩy bytes qua đường
-    HTTP giữa hai bên là khoảng thời gian dài nhất và dễ đứt nhất của cả luồng — mà nó lại nằm
-    trong pha đồng bộ, nơi client đang giữ kết nối chờ. Chuyển sang URL ký sẵn thì pha đồng bộ chỉ
-    còn vài phép kiểm chuỗi, còn việc tải nằm ở worker nền, nơi chậm bao lâu cũng không ai chờ.
+    HTTP giữa hai bên là khoảng thời gian dài nhất và dễ đứt nhất của cả luồng. Với URL ký sẵn thì
+    SQLBot tự tải: bản async tải ở worker nền, bản đồng bộ tải thẳng vào RAM trong request.
 
-    ``fileUrl`` là URL ký sẵn (presigned) — tức là một CREDENTIAL có hạn. Nó bị ghi xuống DB để
-    worker dùng lại, nên tuyệt đối không đưa nguyên văn vào log hay vào thông điệp lỗi.
+    ``fileUrl`` là URL ký sẵn (presigned) — tức là một CREDENTIAL có hạn. Bản async ghi nó xuống DB
+    để worker dùng lại (bản đồng bộ thì không), nên tuyệt đối không đưa nguyên văn vào log hay vào
+    thông điệp lỗi.
 
-    ``sheetNames`` để trống nghĩa là lấy toàn bộ sheet. Khác bản multipart ở một điểm quan trọng:
-    tên sheet KHÔNG còn được đối chiếu ở pha đồng bộ (lúc đó chưa có file trong tay), nên gõ sai
-    tên sheet giờ về bằng callback thất bại chứ không phải 400.
+    ``sheetNames`` để trống nghĩa là lấy toàn bộ sheet; file CSV bỏ qua trường này. Bản đồng bộ đối
+    chiếu tên sheet ngay sau khi tải và trả 400 ``SHEET_NOT_FOUND``; bản async chưa có file ở pha
+    nhận việc nên gõ sai tên sheet về bằng callback thất bại.
     """
 
     fileUrl: str = Field(..., description=f"{PLACEHOLDER_PREFIX}ds_file_url")

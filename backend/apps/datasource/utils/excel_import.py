@@ -20,7 +20,7 @@ from sqlalchemy import text
 from apps.db.engine import get_engine_conn
 
 from ..models.datasource import SheetFields
-from .excel import USER_TYPE_TO_PANDAS
+from .excel import USER_TYPE_TO_PANDAS, WorkbookSource, is_csv_source, open_source
 
 # Mã lỗi gửi kèm callback cho hệ ngoài. Chuỗi ổn định, KHÔNG đổi khi sửa câu thông báo.
 ERR_READ_FILE = "EXCEL_READ_FAILED"
@@ -33,12 +33,18 @@ class ExcelImportError(Exception):
     Không dùng ``HTTPException``: exception đó ném từ thread nền thì không tầng nào của FastAPI bắt
     được, chỉ tạo traceback lạ trong log. Ngoài ra callback về hệ ngoài cần một ``error_code`` phân
     loại được bằng máy, mà ``HTTPException`` chỉ có ``detail`` là chuỗi tiếng người.
+
+    ``details`` là các trường máy đọc thêm, được gộp vào body lỗi HTTP của
+    ``/createFromExcel`` đồng bộ (vd ``availableSheets`` của ``SHEET_NOT_FOUND``).
+    Payload callback không mang chúng.
     """
 
-    def __init__(self, error_code: str, message: str):
+    def __init__(self, error_code: str, message: str, details: dict | None = None):
+        """Ghi mã lỗi, câu thông báo và các trường bổ sung tuỳ chọn."""
         super().__init__(message)
         self.error_code = error_code
         self.message = message
+        self.details = details
 
 
 def filter_string(sheet_name: str) -> str:
@@ -61,7 +67,7 @@ def build_table_name(sheet_name: str) -> str:
 
 
 def import_sheets_to_db(
-    save_path: str,
+    save_path: WorkbookSource,
     sheets: list[SheetFields],
     on_table_created: Callable[[str], None] | None = None,
 ) -> list[dict]:
@@ -78,6 +84,9 @@ def import_sheets_to_db(
     Lưu ý về cách ghi dữ liệu: ``to_sql`` đã nạp trọn dataframe. Bản cũ còn một khối ``COPY`` chạy
     sau đó nhưng quên ``seek(0)`` nên COPY đọc chuỗi rỗng và nạp 0 dòng — vô hại nhưng là mìn: ai
     "sửa" bằng cách thêm ``seek(0)`` sẽ làm mọi bảng nhân đôi dữ liệu. Khối đó đã bỏ.
+
+    ``save_path`` là đường dẫn hoặc ``InMemoryWorkbook``. Với bytes, mỗi lần đọc dùng một
+    ``BytesIO`` mới (xem ``open_source``).
     """
     engine = get_engine_conn()
     results = []
@@ -93,11 +102,12 @@ def import_sheets_to_db(
             }
 
             try:
-                if save_path.endswith(".csv"):
-                    df = pd.read_csv(save_path, engine='c', dtype=dtype_dict)
+                if is_csv_source(save_path):
+                    df = pd.read_csv(open_source(save_path), engine='c', dtype=dtype_dict)
                     sheet_name = "Sheet1"
                 else:
-                    df = pd.read_excel(save_path, sheet_name=sheet_name, engine='calamine', dtype=dtype_dict)
+                    df = pd.read_excel(open_source(save_path), sheet_name=sheet_name, engine='calamine',
+                                       dtype=dtype_dict)
             except Exception as e:
                 raise ExcelImportError(ERR_READ_FILE, f"Read sheet '{sheet_name}' failed: {e}") from e
 

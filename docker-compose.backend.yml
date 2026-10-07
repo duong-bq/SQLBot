@@ -49,11 +49,15 @@ services:
       # --- Tải file nguồn về và báo kết quả cho hệ ngoài ---
       # Danh sách host được phép tải file về, ngăn cách bằng dấu phẩy, có thể kèm cổng.
       # ĐỂ TRỐNG LÀ CHẶN SẠCH, không phải cho phép tất cả: đây là allowlist chống SSRF nên nó hỏng
-      # theo hướng đóng. Một biến này chi phối HAI tính năng — nạp excel bất đồng bộ
-      # (POST /datasource/createFromExcelAsync) và file .docx đính kèm câu hỏi (`fileUrl` của
-      # POST /chat/question) — nên quên điền là cả hai cùng trả 400 URL_HOST_NOT_ALLOWED, thông
-      # điệp trông như lỗi của bên gửi URL chứ không giống lỗi cấu hình.
+      # theo hướng đóng. Một biến này chi phối HAI tính năng — nạp excel từ URL
+      # (POST /datasource/createFromExcel và createFromExcelAsync) và file .docx đính kèm câu hỏi
+      # (`fileUrl` của POST /chat/question) — nên quên điền là cả hai cùng trả
+      # 400 URL_HOST_NOT_ALLOWED, thông điệp trông như lỗi của bên gửi URL chứ không giống lỗi
+      # cấu hình.
       FILE_DOWNLOAD_ALLOWED_HOSTS: ${FILE_DOWNLOAD_ALLOWED_HOSTS:-}
+      # Trần dung lượng file excel tải từ URL (MB), áp cho cả hai bản. Bản đồng bộ giữ cả file
+      # trong RAM, nên RAM cần thêm tối đa bằng trần này cho mỗi request đang nạp.
+      EXCEL_DOWNLOAD_MAX_MB: ${EXCEL_DOWNLOAD_MAX_MB:-100}
 
       # ĐỂ TRỐNG LÀ TẮT HẲN VIỆC GỬI. Không phải "gửi rồi lỗi": vòng gửi thoát ngay khi thấy URL
       # rỗng, nên thư nằm nguyên trong hàng đợi (bảng excel_import_jobs) và không đốt lần thử nào.

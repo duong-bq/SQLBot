@@ -7,6 +7,10 @@ việc nặng phải nằm ở các hàm thuần trong ``utils/excel_import.py``
 
 Mọi thứ worker cần đều đọc từ dòng job trong DB, không có gì được truyền qua bộ nhớ: worker có thể
 chạy ở lần khởi động khác của ứng dụng so với lúc request tạo job.
+
+Ngoại lệ duy nhất là ``/createFromExcel`` đồng bộ: nó gọi ``run_import_job`` ngay trong request và
+truyền file đang nằm trong RAM. Job đó không bao giờ được chạy lại ở nền (xem ``create_job``), nên
+không cần chép file xuống đâu cả.
 """
 
 import json
@@ -29,6 +33,8 @@ from ..crud.excel_job import (
     mark_running,
     touch_heartbeat,
 )
+from ..crud.field import delete_field_by_ds_id
+from ..crud.table import delete_table_by_ds_id
 from ..models.datasource import (
     CoreDatasource,
     CoreTable,
@@ -37,7 +43,13 @@ from ..models.datasource import (
     SheetFields,
 )
 from ..models.excel_job import ExcelImportJob
-from ..utils.excel import list_sheet_names, parse_excel_preview
+from ..utils.excel import (
+    InMemoryWorkbook,
+    WorkbookSource,
+    is_csv_source,
+    list_sheet_names,
+    parse_excel_preview,
+)
 from ..utils.excel_import import ExcelImportError, drop_tables, import_sheets_to_db
 from ..utils.remote_file import download_to, validate_source_url
 from ..utils.utils import aes_encrypt
@@ -58,6 +70,9 @@ ERR_JOB_STALE = "JOB_ABANDONED"
 # tới bằng đường tải từ URL thì chúng chỉ lộ ra sau khi worker tải xong, nên chúng đi đường callback.
 ERR_CANNOT_READ = "CANNOT_READ_WORKBOOK"
 ERR_SHEET_NOT_FOUND = "SHEET_NOT_FOUND"
+# Datasource bị xoá trong lúc đang nạp, thường do bên gọi /createFromExcel hết giờ chờ rồi dọn theo
+# tên. Bước chốt phát hiện ra và đi đường thất bại để drop các bảng đã tạo.
+ERR_DS_DELETED = "DATASOURCE_DELETED"
 
 
 class _Heartbeat:
@@ -125,7 +140,10 @@ def _run_import_job_safe(job_id: int) -> None:
     một callback.
     """
     try:
-        _run_import_job(job_id)
+        run_import_job(job_id)
+    except ExcelImportError:
+        # ``run_import_job`` đã log và ghi thất bại (kèm callback) trước khi ném lại.
+        pass
     except Exception as e:
         SQLBotLogUtil.exception(f"excel import job {job_id} crashed: {e}")
         try:
@@ -153,7 +171,7 @@ def _fetch_source_file(file_url: str, save_path: str) -> None:
     download_to(src, save_path)
 
 
-def _resolve_sheets(save_path: str, wanted: list[str]) -> list[str]:
+def resolve_sheets(save_path: WorkbookSource, wanted: list[str]) -> list[str]:
     """Đối chiếu tên sheet client gửi với mục lục thật của file, trả về danh sách sẽ nạp.
 
     Bước này BẮT BUỘC dù ``parse_excel_preview`` cũng nhận ``sheet_names``: hàm đó bỏ qua IM LẶNG
@@ -164,54 +182,79 @@ def _resolve_sheets(save_path: str, wanted: list[str]) -> list[str]:
     xuống worker và về bằng callback.
 
     Danh sách trả về theo THỨ TỰ TRONG FILE, không theo thứ tự client gửi.
+
+    CSV bỏ qua ``wanted``: CSV không có sheet, tên ``Sheet1`` chỉ là quy ước nội bộ nên đối chiếu
+    với tên client gửi là vô nghĩa. ``/createFromExcel`` đồng bộ cũng gọi hàm này trên bytes vừa
+    tải, trước khi tạo bất cứ dòng nào trong DB. Lỗi sai tên mang ``availableSheets`` trong
+    ``details`` để bên gọi khỏi phải tách chuỗi.
     """
     try:
         available = list_sheet_names(save_path)
     except Exception as e:
         raise ExcelImportError(ERR_CANNOT_READ, f"Cannot read workbook: {e}")
 
-    if not wanted:
+    if not wanted or is_csv_source(save_path):
         return available
 
     missing = [s for s in wanted if s not in available]
     if missing:
         raise ExcelImportError(
             ERR_SHEET_NOT_FOUND,
-            f"Sheet not found: {', '.join(missing)}. Available: {', '.join(available)}"
+            f"Sheet not found: {', '.join(missing)}. Available: {', '.join(available)}",
+            details={"availableSheets": available},
         )
     return [s for s in available if s in set(wanted)]
 
 
-def _run_import_job(job_id: int) -> None:
-    """Chạy trọn một job: tải file → đối chiếu sheet → tạo bảng → đồng bộ metadata → ghi outbox."""
+def run_import_job(job_id: int, workbook: InMemoryWorkbook | None = None) -> list[dict]:
+    """Chạy trọn một job: tải file → đối chiếu sheet → tạo bảng → đồng bộ metadata → chốt job.
+
+    Dùng chung cho hai đường:
+
+    - Worker nền (``workbook`` rỗng): tải file về ``file_path`` nếu job có URL, rồi đọc từ đĩa.
+    - ``/createFromExcel`` đồng bộ: request đã tải file vào RAM và truyền ``workbook``; không đụng
+      đĩa. Job loại này được tạo sẵn ở ``running`` nên không gọi ``mark_running``.
+
+    Thành công trả về mô tả các bảng đã tạo. Lỗi thì đi ``fail_import_job`` (drop bảng đã tạo,
+    datasource ``Failed``, chốt job) rồi NÉM LẠI ``ExcelImportError``; lỗi lạ được bọc thành
+    ``INTERNAL_ERROR``. Đường đồng bộ cần lỗi đó để dựng HTTP response; đường worker nuốt nó ở
+    ``_run_import_job_safe``.
+    """
     with Session(engine) as session:
         job = session.get(ExcelImportJob, job_id)
         if job is None:
             SQLBotLogUtil.error(f"excel import job {job_id} not found")
-            return
+            raise ExcelImportError(ERR_JOB_MISSING, f"Excel import job {job_id} not found")
         ds_id = job.ds_id
         save_path = job.file_path
         file_url = job.file_url
         sheet_names = list(job.sheet_names or [])
 
-    mark_running(job_id, current_worker_id())
+    if workbook is None:
+        mark_running(job_id, current_worker_id())
+        source: WorkbookSource = save_path
+        filename = os.path.basename(save_path)
+    else:
+        source = workbook
+        filename = workbook.filename
 
     created: list[str] = []
     try:
         # Tải NẰM TRONG khối heartbeat: một file lớn qua đường truyền chậm có thể mất hàng chục
         # phút, và nếu không có nhịp báo sống thì vòng quét phục hồi sẽ kết liễu đúng job đang khỏe.
         with _Heartbeat(job_id, settings.EXCEL_IMPORT_HEARTBEAT_SECONDS):
-            if file_url:
-                _fetch_source_file(file_url, save_path)
+            if workbook is None:
+                if file_url:
+                    _fetch_source_file(file_url, save_path)
 
-            if not os.path.exists(save_path):
-                raise ExcelImportError(ERR_FILE_MISSING, f"Source file is gone: {save_path}")
+                if not os.path.exists(save_path):
+                    raise ExcelImportError(ERR_FILE_MISSING, f"Source file is gone: {save_path}")
 
-            sheet_names = _resolve_sheets(save_path, sheet_names)
+            sheet_names = resolve_sheets(source, sheet_names)
             if not sheet_names:
                 raise ExcelImportError(ERR_NO_SHEET, "Workbook has no sheet to import")
 
-            sheets_meta = parse_excel_preview(save_path, sheet_names=sheet_names or None)
+            sheets_meta = parse_excel_preview(source, sheet_names=sheet_names or None)
             if not sheets_meta:
                 raise ExcelImportError(ERR_NO_SHEET, "No sheet could be parsed from the uploaded file")
 
@@ -224,22 +267,26 @@ def _run_import_job(job_id: int) -> None:
                 created.append(table_name)
                 append_created_table(job_id, table_name)
 
-            results = import_sheets_to_db(save_path, sheet_fields, on_table_created=on_created)
-            _finalize_datasource(ds_id, os.path.basename(save_path), results)
+            results = import_sheets_to_db(source, sheet_fields, on_table_created=on_created)
+            _finalize_datasource(ds_id, filename, results)
 
         finish_job(job_id, success=True, callback_payload=_payload(ds_id, True, "Import succeeded"))
         SQLBotLogUtil.info(f"excel import job {job_id} finished, ds={ds_id}, tables={len(results)}")
+        return results
 
     except ExcelImportError as e:
         fail_import_job(job_id, ds_id, created, e.error_code, e.message)
+        raise
     except Exception as e:
         fail_import_job(job_id, ds_id, created, ERR_INTERNAL, str(e))
+        raise ExcelImportError(ERR_INTERNAL, str(e)) from e
     finally:
         # Worker là bên duy nhất xóa file: từ khi file do chính worker tải về, không còn ai khác
         # đụng tới nó. Hai bên cùng xóa thì sinh lỗi lạ; không bên nào xóa thì rò đĩa.
         # Xóa cả file ``.part``: một lượt tải hỏng giữa chừng để lại nó, và nó không nằm trong tập
         # được vòng quét phục hồi bảo vệ nên cứ nằm đó chiếm đĩa cho tới lần dọn theo tuổi file.
-        for leftover in (save_path, f"{save_path}.part"):
+        # Job đồng bộ có ``file_path`` rỗng: không có file nào để xoá.
+        for leftover in (save_path, f"{save_path}.part") if save_path else ():
             try:
                 if os.path.exists(leftover):
                     os.remove(leftover)
@@ -299,6 +346,12 @@ def _finalize_datasource(ds_id: int, filename: str, results: list[dict]) -> None
 
     ``status`` đặt CUỐI CÙNG, sau khi mọi thứ đã sẵn sàng: đó là công tắc duy nhất cho phép nguồn
     dữ liệu lọt vào hỏi đáp.
+
+    Datasource có thể đã bị xoá trong lúc nạp (bên gọi bản đồng bộ hết giờ chờ rồi dọn theo tên).
+    Khi đó ném ``DATASOURCE_DELETED`` để đường thất bại drop các bảng vừa tạo, thay vì báo thành
+    công cho một datasource không còn tồn tại. Kiểm hai lần: trước ``sync_table``, và qua số dòng
+    của lệnh chốt ``status`` cho trường hợp bị xoá đúng lúc ``sync_table`` đang chạy; lần sau phải
+    xoá thêm metadata bảng/cột mà ``sync_table`` vừa ghi cho datasource đã mất.
     """
     configuration = aes_encrypt(json.dumps({"filename": filename, "sheets": results}, default=str)).decode()
 
@@ -309,13 +362,19 @@ def _finalize_datasource(ds_id: int, filename: str, results: list[dict]) -> None
         session.commit()
 
         ds = session.get(CoreDatasource, ds_id)
+        if ds is None:
+            raise ExcelImportError(ERR_DS_DELETED, f"Datasource {ds_id} was deleted during import")
         tables = [CoreTable(table_name=s["tableName"], table_comment=s["tableComment"]) for s in results]
         sync_table(session, ds, tables)
 
-        session.execute(
+        result = session.execute(
             update(CoreDatasource)
             .where(CoreDatasource.id == ds_id)
             .values(status=DatasourceStatus.SUCCESS,
                     num=f"{len(results)}/{len(results)}")
         )
         session.commit()
+        if not result.rowcount:
+            delete_table_by_ds_id(session, ds_id)
+            delete_field_by_ds_id(session, ds_id)
+            raise ExcelImportError(ERR_DS_DELETED, f"Datasource {ds_id} was deleted during import")

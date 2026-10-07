@@ -27,6 +27,7 @@ from ..crud.table import delete_table_by_ds_id, update_table
 from ..models.datasource import CoreDatasource, CreateDatasource, CoreTable, CoreField, ColumnSchema, TableObj, \
     DatasourceConf, DatasourceStatus, TableAndFields
 from ..models.excel_job import ExcelImportJob
+from ..utils.excel_import import drop_tables
 from apps.db.db import pool_manager, driver_pool_manager
 
 
@@ -250,7 +251,14 @@ def update_ds_recommended_config(session: SessionDep, datasource_id: int, recomm
 
 
 async def delete_ds(session: SessionDep, id: int):
-    """Xoá datasource cùng bảng vật lý (nguồn Excel), dòng job import, cấu hình model, bảng và cột."""
+    """Xoá datasource cùng bảng vật lý (nguồn Excel), dòng job import, cấu hình model, bảng và cột.
+
+    Bảng vật lý của nguồn Excel lấy từ HAI chỗ: ``configuration.sheets`` (chỉ có nội dung khi nạp
+    xong) và ``created_tables`` của dòng job (ghi ngay sau mỗi bảng). Chỗ thứ hai cần cho datasource
+    còn ``Importing`` mà worker đã chết, vd bên gọi ``/createFromExcel`` mất kết nối vì pod SQLBot
+    chết rồi dọn theo tên trước khi vòng phục hồi kịp kết liễu job. Thiếu nó thì các bảng đã tạo
+    thành mồ côi, vì xoá datasource cũng xoá luôn dòng job.
+    """
     term = session.exec(select(CoreDatasource).where(CoreDatasource.id == id)).first()
     if term.type == "excel":
         # drop all tables for current datasource
@@ -264,6 +272,10 @@ async def delete_ds(session: SessionDep, id: int):
         finally:
             # get_engine_conn dựng hẳn một Engine kèm pool riêng mỗi lần gọi và không ai đóng hộ.
             engine.dispose()
+        job_tables = session.exec(
+            select(ExcelImportJob.created_tables).where(ExcelImportJob.ds_id == id)
+        ).first()
+        drop_tables(list(job_tables or []))
 
     # Xóa luôn dòng job của luồng import bất đồng bộ. Không có bước này thì mỗi lần hệ ngoài xóa
     # một nguồn dữ liệu nạp hỏng sẽ để lại một dòng job trỏ tới id không còn tồn tại, và bảng job

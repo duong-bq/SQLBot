@@ -41,6 +41,18 @@ class ExcelImportJobStatus:
     ACTIVE = (PENDING, RUNNING)
 
 
+class ExcelImportDelivery:
+    """Cách báo kết quả của một job import.
+
+    ``CALLBACK`` là luồng bất đồng bộ: kết quả đi qua outbox. ``RESPONSE`` là
+    ``/createFromExcel`` đồng bộ: kết quả trả ngay trong HTTP response nên job
+    không bao giờ sinh callback, kể cả khi vòng phục hồi kết liễu nó.
+    """
+
+    CALLBACK = "callback"
+    RESPONSE = "response"
+
+
 class CallbackStatus:
     """Trạng thái của lá thư callback trong outbox.
 
@@ -93,6 +105,8 @@ class ExcelImportJob(SQLModel, table=True):
     # này trỏ tới một file chưa tồn tại. Đặt tên sẵn thay vì để rỗng là cố ý: giữ được ràng buộc
     # NOT NULL, và mọi chỗ đang đọc cột này (nhất là nhánh dọn file của job chết trong
     # ``excel_recovery``) không phải rải thêm phép kiểm rỗng.
+    # Ngoại lệ: job ``delivery = response`` ghi chuỗi rỗng vì nó không có file nào; các chỗ dọn
+    # file (``_bury_dead_jobs``, ``active_job_files``, ``finally`` của worker) đều bỏ qua giá trị rỗng.
     file_path: str = Field(sa_column=Column(Text, nullable=False))
     # URL nguồn do hệ ngoài cung cấp. NULL nghĩa là job cũ theo đường multipart — nhánh đó vẫn phải
     # chạy được, vì lúc deploy có thể còn job đang ``pending`` tạo từ bản trước.
@@ -104,6 +118,12 @@ class ExcelImportJob(SQLModel, table=True):
     # file nên không kiểm được nữa. Việc đối chiếu là của worker, sau khi tải xong.
     sheet_names: list[str] = Field(default_factory=list, sa_column=Column(JSONB, nullable=False))
     ds_name: str = Field(sa_column=Column(String(128), nullable=False))
+    # Xem ``ExcelImportDelivery``. Job ``response`` có ``file_path`` rỗng và ``file_url`` NULL: file
+    # nằm trong RAM của request, không có gì để worker tải lại hay để vòng phục hồi xoá.
+    delivery: str = Field(
+        default=ExcelImportDelivery.CALLBACK,
+        sa_column=Column(String(20), nullable=False, server_default="callback"),
+    )
 
     # --- Vòng đời job.
     status: str = Field(

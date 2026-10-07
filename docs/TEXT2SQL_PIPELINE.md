@@ -403,7 +403,7 @@ lấy phân bố rồi quyết.
 ### Định dạng
 
 M-Schema là cách serialize schema dạng bán cấu trúc (nguồn: XiYan-SQL của Alibaba), token-hiệu quả
-hơn DDL thô. Sinh tại [datasource.py:1063](../backend/apps/datasource/crud/datasource.py#L1063)
+hơn DDL thô. Sinh tại [datasource.py:1180](../backend/apps/datasource/crud/datasource.py#L1180)
 `get_table_schema`:
 
 ```
@@ -587,7 +587,7 @@ cột gì.
 Hệ quả đã biết và chấp nhận: lượt đính kèm trôi khỏi cửa sổ thì mô hình mất tài liệu. Đổi lại, tài
 liệu không chiếm chỗ vĩnh viễn trong mọi prompt về sau.
 
-**Ba trần ký tự khác nhau, đừng gộp** ([config.py:305](../backend/common/core/config.py#L305)) —
+**Ba trần ký tự khác nhau, đừng gộp** ([config.py:358](../backend/common/core/config.py#L358)) —
 và chú ý cột cuối, chỉ trần đầu tiên tính theo từng file:
 
 | Trần | Mặc định | Chặn cái gì | Phạm vi |
