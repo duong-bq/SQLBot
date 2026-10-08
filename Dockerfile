@@ -15,12 +15,12 @@ ENV UV_COMPILE_BYTECODE=1 \
     UV_HTTP_TIMEOUT=600 \
     UV_CONCURRENT_DOWNLOADS=4
 
-# --extra cpu bắt buộc: import langchain_huggingface nạp torch ngay lúc khởi động, bất kể EMBEDDING_PROVIDER.
+# torch được ghim về index CPU trong pyproject.toml (tool.uv.sources), uv sync trần đã lấy bản CPU.
 RUN --mount=type=bind,source=pyproject.toml,target=/tmp/project/pyproject.toml \
     --mount=type=bind,source=uv.lock,target=/tmp/project/uv.lock \
     --mount=type=cache,target=/home/appuser/.cache/uv,uid=10001,gid=10001 \
     cd /tmp/project \
-    && uv sync --frozen --extra cpu --no-install-project --no-dev --python /usr/bin/python3
+    && uv sync --frozen --no-install-project --no-dev --python /usr/bin/python3
 
 FROM dockerhub.elcomlab.com/wolfi/python:v3.11.17@sha256:fdf85f09b2ccf0d5cb8d68549ddbf615adf0129019f69546bcbc9e8ee73a523c
 

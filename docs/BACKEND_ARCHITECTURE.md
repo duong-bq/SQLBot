@@ -104,8 +104,12 @@ một route trả **JSON thô** thì cách duy nhất là khai path pattern củ
 `shutdown_resources()` gọi `stop_datasource_background_tasks()` **trước** `SingleWorkerGuard.release()`
 — các vòng nền còn đang giữ session DB.
 
-Migration mới nhất: `083_core_field_lookup_index.py` (index `(table_id, field_name)` trên
-`core_field`). Index này **không thừa, đừng xoá**: vòng đồng bộ metadata tra từng cột một để quyết
+Migration mới nhất: `086_excel_import_jobs_delivery.py` (cột `excel_import_jobs.delivery`,
+`callback` | `response` — phân biệt job của bản async với job của `createFromExcel` đồng bộ, xem
+§5). Trước đó: `085_ai_model_config.py` (bảng `ai_model_config` — model của từng workspace và
+datasource do Gateway đẩy sang), `084_ai_user_permissions_table_key.py` (khoá dòng quyền đổi sang
+`(user_id, database_table_name)`), `083_core_field_lookup_index.py` (index `(table_id, field_name)`
+trên `core_field`). Index này **không thừa, đừng xoá**: vòng đồng bộ metadata tra từng cột một để quyết
 định INSERT hay UPDATE, nên không có index thì mỗi lần tra là seq scan toàn bảng — chi phí tỉ lệ với
 tổng số cột của **toàn hệ thống**, tức là càng thêm datasource thì đồng bộ nguồn nào cũng chậm đi.
 Cố ý không đặt UNIQUE vì dữ liệu cũ chưa chắc sạch. Trước đó: `082_chat_record_domain_code.py`
@@ -135,7 +139,7 @@ sinh khi merge nhánh), `072_add_chat_external_id.py`.
 | Sửa pha gợi ý câu hỏi tiếp theo (chạy trong lượt hỏi) | [llm.py:895](../apps/chat/task/llm.py#L895) `generate_inline_recommend` + [chat.py:1429](../apps/chat/curd/chat.py#L1429) `get_user_old_questions`. Endpoint rời `/chat/recommend_questions` là **đường khác**, đừng sửa nhầm |
 | Thêm/sửa event SSE | `run_task` ([llm.py:2113](../apps/chat/task/llm.py#L2113)) — **rồi cập nhật `API_SPEC.md` §6.3** |
 | Đổi điểm dừng pipeline | [chat_model.py:57](../apps/chat/models/chat_model.py#L57) `ChatFinishStep` |
-| Sửa M-Schema đưa vào prompt | [datasource.py:1063](../apps/datasource/crud/datasource.py#L1063) `get_table_schema` |
+| Sửa M-Schema đưa vào prompt | [datasource.py:1180](../apps/datasource/crud/datasource.py#L1180) `get_table_schema` |
 | Đổi cách chọn bảng theo embedding | [table_embedding.py:43](../apps/datasource/embedding/table_embedding.py#L43) |
 | Sửa kiểm tra an toàn SQL | [llm.py:107](../apps/chat/task/llm.py#L107) (whitelist bảng) + [db.py:1080](../apps/db/db.py#L1080) (`check_sql_read`) |
 | Sửa quyền dữ liệu theo user (bảng / cột / hàng) | [apps/chat/permission/sw_permission.py](../apps/chat/permission/sw_permission.py) — suy diễn quyền và viết lại SQL; hai điểm cưỡng chế nằm ở `choose_table_schema` và ngay trước `execute_sql` trong `llm.py`. **Rồi cập nhật `TEXT2SQL_PIPELINE.md` §13** |
@@ -145,6 +149,7 @@ sinh khi merge nhánh), `072_add_chat_external_id.py`.
 | Sửa quản trị datasource | [apps/datasource/api/datasource.py](../apps/datasource/api/datasource.py) |
 | Thêm/bỏ tham số phụ hợp lệ của một loại DB | [apps/db/extra_params.py](../apps/db/extra_params.py) — sửa `Spec` tương ứng. **Rồi cập nhật `DATASOURCE_API_SPEC.md` §3.1.1** và restart backend ([OPERATIONS.md §7.13](OPERATIONS.md)) |
 | Sửa luồng nạp Excel bất đồng bộ | `apps/datasource/task/` (3 vòng nền, §5) + `crud/excel_job.py` (mọi câu SQL của hàng đợi) + `utils/excel_import.py` (hàm thuần nạp file) + `utils/remote_file.py` (kiểm URL nguồn và tải file) |
+| Sửa `createFromExcel` đồng bộ | Handler `create_from_excel` trong `apps/datasource/api/datasource.py` + `run_import_job(job_id, workbook)` trong `task/excel_import_task.py` (dùng chung với worker) + `InMemoryWorkbook`/`open_source` trong `utils/excel.py` (đọc file từ RAM) |
 | Sửa hợp đồng callback với hệ ngoài | [callback_sender.py](../apps/datasource/task/callback_sender.py) `send_callback` — **rồi cập nhật `DATASOURCE_API_SPEC.md` §9.3** |
 | Sửa auth / token | [apps/system/middleware/auth.py](../apps/system/middleware/auth.py) + [apps/system/api/login.py](../apps/system/api/login.py) |
 | Sửa quản trị tài khoản người dùng | [apps/system/api/user.py](../apps/system/api/user.py) — nhóm `/user/by-account/*` ở đầu file, handler gốc theo `id` ở dưới. **Rồi cập nhật `USER_ADMIN_API_SPEC.md` và bản `_LITE`** |
@@ -221,6 +226,7 @@ hộp thư đi (outbox) của callback. Ràng buộc `UNIQUE(ds_id)` nên mỗi 
 | Nhóm cột | Dùng để |
 |---|---|
 | `ds_id`, `oid`, `create_by`, `ds_name`, `file_path`, `file_url`, `sheet_names` | Đủ để worker làm việc mà không cần request context |
+| `delivery` | `callback` (bản async, mặc định) hoặc `response` (bản đồng bộ) — quyết định job có sinh thư trong outbox hay không |
 | `status`, `worker_id`, `heartbeat_at`, `created_at`/`started_at`/`finished_at` | Vòng đời job và phát hiện worker chết |
 | `created_tables` | Danh sách bảng đã tạo, để dọn khi job hỏng giữa chừng |
 | `error_code`, `error_message` | Trả lại cho `GET /datasource/excelImportStatus/{ds_id}` |
@@ -237,13 +243,28 @@ lại), và không có transaction phân tán nào ở đây để cứu.
 `NOT NULL` và giữ cho nhánh dọn file của `excel_recovery` không phải thêm phép kiểm rỗng.
 `file_url` rỗng nghĩa là job cũ theo đường multipart — nhánh đó vẫn chạy được.
 
+**Job của bản đồng bộ** (`POST /datasource/createFromExcel`, `delivery = 'response'`) dùng chung
+bảng và chung hàm `run_import_job` nhưng đi đường khác: tạo thẳng ở `running` (vòng phục hồi chỉ
+nhặt `pending` nên không bao giờ chạy lại nó ở nền), `file_path` rỗng và `file_url` không lưu vì
+file nằm trong RAM của request (`InMemoryWorkbook`), nạp trong thread của request thay vì pool worker,
+và `finish_job` không xếp thư. Dòng job chỉ còn một vai trò: dấu vết bền để vòng phục hồi drop bảng
+dở khi pod chết giữa lúc nạp. Nạp hỏng vì lý do khác thì handler xoá luôn nguồn giữ chỗ cùng dòng
+job.
+
+Hai chốt chặn áp cho cả hai bản: bước chốt kiểm `rowcount` của câu chuyển trạng thái nguồn — bằng 0
+nghĩa là nguồn đã bị xoá trong lúc nạp, khi đó drop bảng và metadata vừa tạo, kết thúc với
+`DATASOURCE_DELETED`; và `delete_ds` drop thêm các bảng trong `created_tables` của job, vì
+`configuration.sheets` chỉ có nội dung khi nạp xong. Thiếu nó thì xoá một nguồn còn `Importing`
+mà worker đã chết (bên gọi dọn theo tên trước khi vòng phục hồi kịp kết liễu job) để lại bảng mồ
+côi, vì dòng job — nơi duy nhất còn tên bảng — bị xoá cùng nguồn.
+
 Ba vòng nền, mỗi vòng một file trong `apps/datasource/task/`:
 
 | Vòng | File | Việc |
 |---|---|---|
 | Worker nạp | `excel_import_task.py` | `ThreadPoolExecutor` riêng (`EXCEL_IMPORT_WORKERS`). Endpoint `submit` một job **sau khi commit**, worker mở session riêng, đập heartbeat theo chu kỳ, kết thúc bằng `finish_job` (ghi kết quả + xếp thư vào outbox trong cùng transaction). Hai bước đầu của worker là **tải file** từ `file_url` và **đối chiếu tên sheet** — cả hai nằm trong khối heartbeat vì tải một file lớn có thể lâu hơn ngưỡng phát hiện job chết |
 | Vòng gửi | `callback_sender.py` | Ba pha: nhặt thư bằng `FOR UPDATE SKIP LOCKED` (transaction ngắn) → gọi HTTP **ngoài mọi transaction** → ghi kết quả (transaction ngắn). Không giữ transaction mở trong lúc chờ mạng — đó là lý do tách ba pha |
-| Vòng phục hồi | `excel_recovery.py` | Bốn việc độc lập, mỗi việc try/except riêng: nhặt job mồ côi (`pending` quá lâu), chôn job chết (heartbeat hết hạn → drop bảng dở, ds `Failed`, xếp thư báo hỏng), gỡ thư kẹt ở `sending`, dọn file tạm quá hạn không ai dùng |
+| Vòng phục hồi | `excel_recovery.py` | Bốn việc độc lập, mỗi việc try/except riêng: nhặt job mồ côi (`pending` quá lâu), chôn job chết (heartbeat hết hạn → drop bảng dở, ds `Failed`, xếp thư báo hỏng — trừ job `response`), gỡ thư kẹt ở `sending`, dọn file tạm quá hạn không ai dùng |
 
 Giành việc giữa nhiều tiến trình dựa vào `SKIP LOCKED` và `UPDATE ... WHERE status = 'pending'` kiểm
 `rowcount` — không dùng khóa toàn cục, nên chạy bao nhiêu worker uvicorn cũng đúng.

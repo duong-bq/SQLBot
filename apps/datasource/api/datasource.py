@@ -10,11 +10,12 @@ from typing import List, Optional
 from urllib.parse import quote
 
 import pandas as pd
-from fastapi import APIRouter, File, Form, UploadFile, HTTPException, Path, Query
+from fastapi import APIRouter, File, UploadFile, HTTPException, Path, Query, Request
 from fastapi.responses import StreamingResponse
 from psycopg2 import sql
 from sqlalchemy import and_
 
+from apps.ai_model_config.hooks import pin_ds_models, validate_ds_models
 from apps.db.db import get_schema
 from apps.db.engine import get_engine_conn
 from apps.swagger.i18n import PLACEHOLDER_PREFIX
@@ -27,20 +28,21 @@ from common.utils.distributed_lock import try_acquire_xact_lock
 from common.utils.utils import SQLBotLogUtil
 from ..crud.datasource import get_datasource_list, check_status, create_ds, update_ds, delete_ds, getTables, getFields, \
     update_table_and_fields, getTablesByDs, chooseTables, preview, updateTable, updateField, get_ds, fieldEnum, \
-    check_status_by_id, sync_single_fields, check_name, create_ds_importing, find_conflicting_ds, \
+    check_status_by_id, sync_single_fields, create_ds_importing, find_conflicting_ds, \
     update_table_comments_by_name, update_field_comments_by_name, update_table_status_by_name
 from ..crud.excel_job import create_job, get_job_by_ds_id, resend_callback
 from ..crud.field import get_fields_by_table_id
 from ..crud.table import get_tables_by_ds_id
 from ..models.datasource import CoreDatasource, CreateDatasource, TableObj, CoreTable, CoreField, FieldObj, \
-    TableSchemaResponse, ColumnSchemaResponse, PreviewResponse, ImportRequest, SheetFields, FieldInfo, CreatedExcelTable, \
+    TableSchemaResponse, ColumnSchemaResponse, PreviewResponse, ImportRequest, CreatedExcelTable, \
     CreateFromExcelResponse, CreateFromExcelAcceptedResponse, CreateFromExcelUrlRequest, DatasourceStatus, \
     ExcelImportStatusResponse, EditTableCommentsByNameRequest, EditFieldCommentsByNameRequest, \
     EditTableStatusByNameRequest
-from ..task.excel_import_task import submit_import_job
-from ..utils.excel import parse_excel_preview
+from ..models.excel_job import ExcelImportDelivery
+from ..task.excel_import_task import resolve_sheets, run_import_job, submit_import_job
+from ..utils.excel import InMemoryWorkbook, parse_excel_preview
 from ..utils.excel_import import ExcelImportError, import_sheets_to_db
-from ..utils.remote_file import probe_source, safe_stem, validate_source_url
+from ..utils.remote_file import download_bytes, max_bytes, probe_source, safe_stem, validate_source_url
 from ..utils.utils import normalize_configuration
 
 router = APIRouter(tags=["Datasource"], prefix="/datasource")
@@ -858,69 +860,154 @@ async def import_to_db(session: SessionDep, trans: Trans, import_req: ImportRequ
 ))
 @require_permissions(permission=SqlbotPermission(role=['ws_admin']))
 async def create_from_excel(
+    request: Request,
     session: SessionDep,
-    trans: Trans,
     user: CurrentUser,
-    file: UploadFile = File(..., description=f"{PLACEHOLDER_PREFIX}ds_excel"),
-    name: str = Form(..., description=f"{PLACEHOLDER_PREFIX}ds_name"),
-    sheetNames: List[str] = Form([], description=f"{PLACEHOLDER_PREFIX}ds_sheet_names"),
-    description: str = Form('', description=f"{PLACEHOLDER_PREFIX}ds_description")
+    req: CreateFromExcelUrlRequest,
 ):
+    """Tạo datasource từ file Excel/CSV ở presigned URL, nạp xong mới trả kết quả.
+
+    Cùng body với ``/createFromExcelAsync`` và cùng trình tự giữ chỗ (khoá theo tên, datasource
+    ``Importing``, dòng job, heartbeat, dọn bảng khi lỗi); khác ở chỗ việc tải và nạp chạy ngay
+    trong request, kết quả trả trong response, không có callback. File tải vào RAM, không ghi đĩa.
+
+    - Tải và đối chiếu sheet TRƯỚC khi ghi bất cứ dòng nào vào DB: các lỗi hay gặp nhất (URL hết
+      hạn, object không tồn tại, sai tên sheet, file hỏng) không để lại dấu vết.
+    - Kiểm client còn kết nối ngay trước khi giữ chỗ: bên gọi hết giờ chờ trong lúc đang tải thì
+      sẽ dọn theo tên mà không thấy gì; tạo datasource sau đó là tạo ra thứ không ai biết.
+    - Nạp trong thread của request (``to_thread``), không qua pool worker của bản async: đi qua pool
+      thì request thứ ``EXCEL_IMPORT_WORKERS + 1`` phải xếp hàng trong lúc bên gọi vẫn đếm giờ.
+    - Dòng job tạo thẳng ``running``, ``delivery = response``, không lưu URL: vòng phục hồi không
+      chạy lại nó, chỉ kết liễu (drop bảng, datasource ``Failed``) nếu pod chết giữa chừng.
+    - Lỗi sau khi đã giữ chỗ: xoá luôn datasource và dòng job. Bên gọi chưa bao giờ thấy ``dsId``
+      này, giữ lại dòng ``Failed`` chỉ thành rác.
+
+    Lỗi trả body ``{code, message}`` theo bộ mã của ``remote_file``/worker (xem ``_import_error``).
     """
-    Tạo nguồn dữ liệu từ file Excel/CSV trong đúng một lời gọi.
-    Ghép từ 3 hàm /parseExcel, /importToDb, /add
-    """
-    # Kiểm tra có tồn tại tên nguồn dữ liệu trùng không
-    check_name(session, trans, user, CoreDatasource(name=name))
+    name = (req.name or '').strip()
+    if not name:
+        raise HTTPException(400, "Datasource name is required")
+    oid = user.oid if user.oid is not None else 1
+    model_set = validate_ds_models(session, oid, req.models)
 
-    parsed = await parse_excel(file=file)
+    try:
+        src = validate_source_url(
+            req.fileUrl, min_ttl_seconds=settings.EXCEL_SYNC_DOWNLOAD_TIMEOUT
+        )
+    except ExcelImportError as e:
+        raise _import_error(e)
 
-    # Lọc sheet theo sheetNames nếu có, hoặc lấy tất cả nếu là CSV  
-    if file.filename.lower().endswith('.csv') or not sheetNames:
-        sheets = parsed["data"]
-    else:
-        sheets = [sheet for sheet in parsed["data"] if sheet["sheetName"] in sheetNames]
-        if len(sheets) != len(set(sheetNames)):
-            raise HTTPException(
-                400, f"Sheet not found. Available: {', '.join(s['sheetName'] for s in parsed['data'])}"
-            )
+    # Kiểm trùng sớm, chưa khoá: trùng thì khỏi tải. Dưới khoá sẽ kiểm lại.
+    existing = find_conflicting_ds(session, user.oid, name)
+    if existing is not None:
+        raise _conflict_error(existing)
 
-    imported = await import_to_db(session=session, trans=trans, import_req=ImportRequest(
-        filePath=parsed["filePath"],
-        sheets=[
-            SheetFields(
-                sheetName=s["sheetName"],
-                fields=[FieldInfo(**f) for f in s["fields"]]
-            )
-            for s in sheets
-        ],
-    ))
+    sheet_names = list(dict.fromkeys(req.sheetNames or []))
+    try:
+        data = await asyncio.to_thread(
+            download_bytes, src,
+            limit=max_bytes(),
+            connect_timeout=settings.FILE_DOWNLOAD_CONNECT_TIMEOUT,
+            read_timeout=settings.FILE_DOWNLOAD_READ_TIMEOUT,
+            total_timeout=settings.EXCEL_SYNC_DOWNLOAD_TIMEOUT,
+        )
+        workbook = InMemoryWorkbook(data, f"{safe_stem(src.object_key)}.{src.extension}")
+        del data
+        await asyncio.to_thread(resolve_sheets, workbook, sheet_names)
+    except ExcelImportError as e:
+        raise _import_error(e)
 
-    tables = [
-        CoreTable(table_name=s["tableName"], table_comment=s["tableComment"])
-        for s in imported["sheets"]
-    ]
+    if await request.is_disconnected():
+        SQLBotLogUtil.warning(
+            f"createFromExcel: client gone before reserving '{name}' ({src.safe_label})"
+        )
+        raise HTTPException(499, {"code": "CLIENT_DISCONNECTED",
+                                  "message": "Client disconnected before import"})
 
-    create_obj = CreateDatasource(
-        name=name, description=description, type="excel",
-        configuration={"filename": imported["filename"], "sheets": imported["sheets"]},
-        tables=tables
-    )
+    try:
+        await _lock_ds_name(session, oid, name)
+        existing = find_conflicting_ds(session, user.oid, name)
+        if existing is not None:
+            session.rollback()
+            raise _conflict_error(existing)
 
-    _normalize_ds_configuration(create_obj)
-    ds = await create_ds(session, trans, user, create_obj)
+        ds = await create_ds_importing(session, user, name, req.description)
+        pin_ds_models(session, ds.id, ds.oid, model_set)
+        job = create_job(session, ds_id=ds.id, oid=ds.oid, create_by=user.id,
+                         ds_name=ds.name, file_path='', sheet_names=sheet_names,
+                         delivery=ExcelImportDelivery.RESPONSE)
+        ds_id, ds_name, job_id = ds.id, ds.name, job.id
+        session.commit()
+    except Exception:
+        session.rollback()
+        raise
 
+    try:
+        results = await asyncio.to_thread(run_import_job, job_id, workbook)
+    except Exception as e:
+        workbook = None
+        await _discard_failed_ds(session, ds_id)
+        if not isinstance(e, ExcelImportError):
+            SQLBotLogUtil.exception(f"createFromExcel: import of ds {ds_id} crashed: {e}")
+            e = ExcelImportError("INTERNAL_ERROR", str(e))
+        raise _import_error(e)
+    # Thả bytes ngay, trước khi dựng response.
+    workbook = None
+
+    session.rollback()  # bắt đầu transaction mới để thấy bảng/cột do thread nạp vừa commit
+    table_ids = {t.table_name: t.id for t in get_tables_by_ds_id(session, ds_id)}
     return CreateFromExcelResponse(
-        dsId=ds.id, name=ds.name,
+        dsId=ds_id, name=ds_name,
         tables=[
             CreatedExcelTable(
-                tableId=t.id,
-                tableName=t.table_name,
-                sheetName=s["sheetName"],
-                rows=s["rows"]
-            ) for t, s in zip(tables, imported["sheets"])
+                tableId=table_ids[r["tableName"]],
+                tableName=r["tableName"],
+                sheetName=r["sheetName"],
+                rows=r["rows"],
+            ) for r in results
         ],
     )
+
+
+async def _lock_ds_name(session: SessionDep, oid: int, name: str) -> None:
+    """Giữ advisory lock theo ``(oid, name)`` cho tới hết transaction hiện tại.
+
+    Dùng chung cho hai bản tạo datasource từ Excel, để chúng tuần tự hoá với nhau trên cùng một
+    tên. Rollback trước để đóng transaction ngầm do các câu SELECT trước đó mở, cho khoá giữ đúng
+    phạm vi.
+
+    Chờ bằng thử-rồi-ngủ, KHÔNG dùng bản chờ sẵn của Postgres: câu lệnh chờ là lời gọi DB đồng bộ,
+    đứng im trong ``async def`` là chặn cả event loop của tiến trình. ``await asyncio.sleep`` giữa
+    hai lần thử thì nhường quyền điều khiển. Hầu như luôn chiếm được ở lần thử đầu; vòng lặp chỉ
+    dùng tới khi trùng tên. Hết ``EXCEL_IMPORT_LOCK_TIMEOUT_MS`` thì trả 409.
+    """
+    session.rollback()
+    lock_key = f"sqlbot:ds:name:{oid}:{name}"
+    deadline = time.monotonic() + settings.EXCEL_IMPORT_LOCK_TIMEOUT_MS / 1000
+    while not try_acquire_xact_lock(session, lock_key):
+        session.rollback()
+        if time.monotonic() >= deadline:
+            raise HTTPException(409, {
+                "code": "DATASOURCE_NAME_LOCKED",
+                "message": f"Another import for name '{name}' is in progress",
+            })
+        await asyncio.sleep(0.2)
+
+
+async def _discard_failed_ds(session: SessionDep, ds_id: int) -> None:
+    """Xoá datasource giữ chỗ của một lần ``/createFromExcel`` thất bại, kèm dòng job.
+
+    Bảng đã tạo đã được ``fail_import_job`` drop; ``delete_ds`` lo phần còn lại (dòng job, cấu
+    hình model, metadata). Datasource có thể đã bị bên gọi xoá trước (``DATASOURCE_DELETED``) nên
+    phải kiểm còn tồn tại. Lỗi ở đây chỉ log, không được che lỗi gốc đang trả về.
+    """
+    try:
+        session.rollback()
+        if get_ds(session, ds_id) is not None:
+            await delete_ds(session, ds_id)
+    except Exception as e:
+        session.rollback()
+        SQLBotLogUtil.exception(f"createFromExcel: cannot discard failed ds {ds_id}: {e}")
 
 
 def _conflict_error(ds: CoreDatasource) -> HTTPException:
@@ -931,6 +1018,34 @@ def _conflict_error(ds: CoreDatasource) -> HTTPException:
         "dsId": ds.id,
         "status": ds.status,
     })
+
+
+# HTTP status cho từng mã lỗi của ``/createFromExcel`` đồng bộ; mã không có ở đây là 500. 400 là
+# lỗi do đầu vào (URL, file, tên sheet), 502 là lỗi mạng/kho chứa có thể tự khỏi khi thử lại.
+_IMPORT_ERROR_STATUS = {
+    "URL_INVALID": 400,
+    "URL_HOST_NOT_ALLOWED": 400,
+    "URL_BAD_EXTENSION": 400,
+    "URL_EXPIRED": 400,
+    "DOWNLOAD_FORBIDDEN": 400,
+    "DOWNLOAD_NOT_FOUND": 400,
+    "FILE_TOO_LARGE": 400,
+    "CANNOT_READ_WORKBOOK": 400,
+    "NO_SHEET_PARSED": 400,
+    "EXCEL_READ_FAILED": 400,
+    "SHEET_NOT_FOUND": 400,
+    "DOWNLOAD_FAILED": 502,
+}
+
+
+def _import_error(e: ExcelImportError) -> HTTPException:
+    """Dịch ``ExcelImportError`` của ``/createFromExcel`` đồng bộ thành HTTP error.
+
+    Body là ``{code, message}`` cộng ``details`` của lỗi (vd ``availableSheets``), cùng bộ mã với
+    callback của bản async để bên gọi xử lý một kiểu. Status theo ``_IMPORT_ERROR_STATUS``.
+    """
+    detail = {"code": e.error_code, "message": e.message, **(e.details or {})}
+    return HTTPException(status_code=_IMPORT_ERROR_STATUS.get(e.error_code, 500), detail=detail)
 
 
 def _bad_request(e: ExcelImportError) -> HTTPException:
@@ -983,6 +1098,7 @@ async def create_from_excel_async(
     name = (req.name or '').strip()
     if not name:
         raise HTTPException(400, "Datasource name is required")
+    model_set = validate_ds_models(session, user.oid if user.oid is not None else 1, req.models)
 
     # Kiểm URL bằng những gì đọc được từ chính chuỗi, không chạm mạng. Làm trước cả việc tra tên
     # trùng vì nó rẻ hơn một câu SELECT.
@@ -1016,22 +1132,7 @@ async def create_from_excel_async(
     # cùng sinh ra hoặc cùng không: có nguồn dữ liệu mà không có job là một dòng Importing vĩnh
     # viễn không ai nhặt; có job mà không có nguồn dữ liệu là worker chạy vào hư không.
     try:
-        session.rollback()  # đóng transaction ngầm do các câu SELECT ở trên mở, để khóa giữ đúng phạm vi
-
-        # Chờ khóa bằng cách thử-rồi-ngủ, KHÔNG dùng bản chờ sẵn của Postgres: câu lệnh chờ là lời
-        # gọi DB đồng bộ, đứng im trong ``async def`` là chặn cả event loop của tiến trình. ``await
-        # asyncio.sleep`` giữa hai lần thử thì ngược lại — nhường quyền điều khiển, các request khác
-        # vẫn chạy. Hầu như luôn chiếm được ngay ở lần thử đầu; vòng lặp chỉ dùng tới khi trùng tên.
-        lock_key = f"sqlbot:ds:name:{user.oid if user.oid is not None else 1}:{name}"
-        deadline = time.monotonic() + settings.EXCEL_IMPORT_LOCK_TIMEOUT_MS / 1000
-        while not try_acquire_xact_lock(session, lock_key):
-            session.rollback()
-            if time.monotonic() >= deadline:
-                raise HTTPException(409, {
-                    "code": "DATASOURCE_NAME_LOCKED",
-                    "message": f"Another import for name '{name}' is in progress",
-                })
-            await asyncio.sleep(0.2)
+        await _lock_ds_name(session, user.oid if user.oid is not None else 1, name)
 
         existing = find_conflicting_ds(session, user.oid, name)
         if existing is not None:
@@ -1039,6 +1140,8 @@ async def create_from_excel_async(
             raise _conflict_error(existing)
 
         ds = await create_ds_importing(session, user, name, req.description)
+        # Cùng transaction với dòng datasource: worker nền embed bằng đúng model đã chốt.
+        pin_ds_models(session, ds.id, ds.oid, model_set)
         # Danh sách sheet ghi xuống NGUYÊN VĂN, chưa đối chiếu: pha này không có file để đối chiếu.
         job = create_job(session, ds_id=ds.id, oid=ds.oid, create_by=user.id, ds_name=ds.name,
                          file_path=save_path, sheet_names=list(dict.fromkeys(req.sheetNames or [])),

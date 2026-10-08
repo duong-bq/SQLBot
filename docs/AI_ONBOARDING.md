@@ -64,6 +64,11 @@ Hệ quả cụ thể: `ChatFinishStep` đã bị **đánh số lại** để ch
   `AI_CALLBACK_URL` (rỗng là tắt gửi) và `FILE_DOWNLOAD_ALLOWED_HOSTS` (rỗng là **chặn hết**).
   Kiến trúc ở [BACKEND_ARCHITECTURE.md](BACKEND_ARCHITECTURE.md) §5, hợp đồng ở
   `DATASOURCE_API_SPEC.md` §9.
+- `POST /datasource/createFromExcel` (bản **đồng bộ**, đường Gateway dùng) nhận **cùng body URL**
+  với bản async — dạng multipart cũ đã bỏ. File tải thẳng vào RAM, **không ghi đĩa**, nạp ngay
+  trong request rồi trả `{dsId, name, tables}`; không callback. Hỏng ở bất kỳ bước nào thì không
+  để lại nguồn dữ liệu. Dùng chung hàng đợi `excel_import_jobs` với bản async (`delivery =
+  'response'`) chỉ để dọn bảng khi pod chết. Cấu hình ở [OPERATIONS.md](OPERATIONS.md) §2.9.
 - `POST /chat/question` nhận thêm `fileUrls` — **danh sách** presigned URL của các file `.docx`
   đính kèm câu hỏi (tối đa `CHAT_DOC_MAX_FILES`). Các file được tải song song và trích text ngay
   trong request, ghép vào **trước** câu hỏi thành các khối `<attached-document>`, mỗi file một dòng
