@@ -72,6 +72,10 @@ class Settings(BaseSettings):
     DEFAULT_PWD: str = "SQLBot@123456"
     ASSISTANT_TOKEN_KEY: str = "X-SQLBOT-ASSISTANT-TOKEN"
 
+    # Tắt khi migration chạy bằng một Job riêng trước khi pod lên (Kubernetes); bật thì mỗi tiến trình tự
+    # chạy `alembic upgrade head` lúc khởi động, như bản upstream.
+    MIGRATE_ON_STARTUP: bool = True
+
     CACHE_TYPE: Literal["redis", "memory", "None"] = "memory"
     # Danh sách "host:port" cách nhau bằng dấu phẩy, ý nghĩa tùy REDIS_MODE: standalone là một Redis duy
     # nhất (bỏ trống thì dùng localhost:6379), sentinel là các Sentinel, cluster là vài node của cluster.

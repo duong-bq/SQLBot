@@ -73,7 +73,8 @@ def shutdown_resources() -> None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    run_migrations()
+    if settings.MIGRATE_ON_STARTUP:
+        run_migrations()
     init_sqlbot_cache()
     init_dynamic_cors(app)
     init_terminology_embedding_data()

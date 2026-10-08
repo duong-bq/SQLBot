@@ -325,6 +325,8 @@ Build cần ra được mạng tới ba host mà `uv.lock` ghim URL tuyệt đ�
 `test.pypi.org` (sqlbot-xpack), `download.pytorch.org` (torch CPU). Muốn đổi index thì phải sửa
 `[[tool.uv.index]]` trong `pyproject.toml` rồi `uv lock` lại — `--frozen` đọc URL trong lock.
 
+**Migration.** Mặc định (`MIGRATE_ON_STARTUP=true`) mỗi tiến trình tự chạy `alembic upgrade head` lúc khởi động, như upstream; nhiều pod khởi động cùng lúc trên DB chưa migrate thì tranh nhau. Trên Kubernetes migration chạy bằng một Job riêng (Helm hook `pre-install,pre-upgrade`, `migration:` trong `values.yaml` của gitops, lệnh `alembic upgrade head`) và pod đặt `MIGRATE_ON_STARTUP=false` nên không migrate nữa. Job chạy trước khi Deployment đổi, nên schema luôn lên trước code mới. Lỗi migration thì Job lỗi và Deployment cũ giữ nguyên.
+
 **Probe sức khỏe.** `GET /healthz` (liveness) không làm I/O nên dependency chậm không làm pod bị khởi động lại. `GET /readyz` (readiness) chạy `SELECT 1` trên Postgres, và `PING` Redis khi `CACHE_TYPE=redis`, trong chung một ngân sách 2 giây; trả 503 thì pod bị gỡ khỏi Service chứ không bị restart. Hai route nằm ở gốc (cộng `CONTEXT_PATH` nếu có), không cần JWT, không bọc envelope `{code, data}`, và access log bỏ qua các lần probe thành công. Code ở `common/core/health.py`.
 
 **`SECRET_KEY` phải đặt cố định** (từ Secret, cùng một giá trị cho mọi replica). Không đặt thì code sinh
