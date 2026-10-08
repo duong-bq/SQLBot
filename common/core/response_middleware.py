@@ -33,7 +33,9 @@ class ResponseMiddleware(BaseHTTPMiddleware):
             f"{settings.API_V1_STR}/hooks/ai-sync",
             f"{settings.CONTEXT_PATH}/openapi.json",
             f"{settings.CONTEXT_PATH}/docs",
-            f"{settings.CONTEXT_PATH}/redoc"
+            f"{settings.CONTEXT_PATH}/redoc",
+            f"{settings.CONTEXT_PATH}/healthz",
+            f"{settings.CONTEXT_PATH}/readyz",
         ]
 
         route = request.scope.get("route")

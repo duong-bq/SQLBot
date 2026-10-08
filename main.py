@@ -1,3 +1,4 @@
+import logging
 import os
 from typing import Dict, Any
 
@@ -26,6 +27,7 @@ from apps.system.middleware.auth import TokenMiddleware
 from apps.system.schemas.permission import RequestContextMiddleware
 from common.audit.schemas.request_context import RequestContextMiddlewareCommon
 from common.core.config import settings
+from common.core.health import QuietProbeAccessLog, router as health_router
 from common.core.response_middleware import ResponseMiddleware, exception_handler
 from common.core.sqlbot_cache import init_sqlbot_cache
 from common.utils.distributed_lock import SingleWorkerGuard
@@ -285,6 +287,8 @@ app.add_middleware(ResponseMiddleware)
 app.add_middleware(RequestContextMiddleware)
 app.add_middleware(RequestContextMiddlewareCommon)
 app.include_router(api_router, prefix=settings.API_V1_STR)
+app.include_router(health_router, prefix=settings.CONTEXT_PATH)
+logging.getLogger("uvicorn.access").addFilter(QuietProbeAccessLog())
 
 # Register exception handlers
 app.add_exception_handler(StarletteHTTPException, exception_handler.http_exception_handler)
