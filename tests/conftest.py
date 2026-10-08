@@ -7,6 +7,7 @@ không thể chạy trên SQLite. Fixture `pg_url` skip (không fail) khi thiế
 
 import os
 import sys
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -14,6 +15,13 @@ import pytest
 ROOT_DIR = Path(__file__).resolve().parents[1]
 if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
+
+# `sqlbot_xpack` tạo thư mục UPLOAD_DIR ngay lúc import; mặc định /opt/sqlbot/... mà user thường không ghi được,
+# nên test tự trỏ các đường dẫn ghi file vào thư mục tạm (biến đã đặt sẵn ở ngoài thì giữ nguyên).
+_SCRATCH = Path(tempfile.gettempdir()) / "sqlbot-tests"
+for _name, _sub in (("BASE_DIR", ""), ("UPLOAD_DIR", "data/file"), ("EXCEL_PATH", "data/excel"),
+                    ("MCP_IMAGE_PATH", "images"), ("LOCAL_MODEL_PATH", "models")):
+    os.environ.setdefault(_name, str(_SCRATCH / _sub))
 
 # `main.py` import `sqlbot_xpack` độc lập TRƯỚC bất kỳ module `apps.*` nào. Nếu bỏ dòng này, module
 # đầu tiên import `apps.system.schemas.permission` (vd `apps.hooks.api.ai_sync`) sẽ kích hoạt vòng

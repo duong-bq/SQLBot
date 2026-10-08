@@ -43,10 +43,10 @@ PostgreSQL phải có sẵn bên ngoài và có extension pgvector; Redis chỉ 
 |------|---------|
 | `DB_HOST`, `DB_PORT`, `DB_USERNAME`, `DB_PASSWORD`, `DB_NAME` | Kết nối Postgres (cần extension pgvector) |
 | `SECRET_KEY` | Khóa ký JWT, sinh bằng `openssl rand -base64 32` |
-| `EMBEDDING_PROVIDER`, `EMBEDDING_API_BASE_URL`, `EMBEDDING_API_MODEL` | Embedding qua server riêng (`EMBEDDING_PROVIDER=api`) |
+| `EMBEDDING_PROVIDER`, `EMBEDDING_API_BASE_URL`, `EMBEDDING_API_MODEL`, `EMBEDDING_API_KEY` | Embedding qua server riêng (`EMBEDDING_PROVIDER=api`) |
 | `CACHE_TYPE` | Cache: `memory`, `redis` hoặc `None`; dùng `redis` khi chạy nhiều pod |
 | `REDIS_CONNECTION_STRING`, `REDIS_MODE`, `REDIS_SENTINEL_MASTER`, `REDIS_PASSWORD`, `REDIS_DATABASE_ID` | Redis `standalone` (mặc định), `sentinel` hoặc `cluster`; xem `docs/OPERATIONS.md` §3.4 |
-| `BASE_DIR`, `UPLOAD_DIR`, `EXCEL_PATH`, `MCP_IMAGE_PATH` | Thư mục ghi file, mặc định dưới `/opt/sqlbot` |
+| `DEFAULT_PWD` | Mật khẩu mặc định của người dùng mới (mặc định `SQLBot@123456`); ai-gateway đăng nhập tài khoản workspace bằng đúng giá trị này |
 | `AI_CALLBACK_URL`, `AI_CALLBACK_ACTION_TYPE` | Callback khi nạp Excel bất đồng bộ xong |
 | `CORS_ALLOW_ALL_ORIGINS`, `BACKEND_CORS_ORIGINS`, `FILE_DOWNLOAD_ALLOWED_HOSTS` | CORS và danh sách host được phép tải file |
 

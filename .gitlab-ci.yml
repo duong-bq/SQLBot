@@ -1,18 +1,18 @@
 # ===========================================================
 # SQLBot - GitLab CI (test, build & push to Harbor)
-# CD: Argo CD. Branches: test | staging | main. Runner tag: sqlbot
+# CD: Argo CD. Branches: test | staging | master. Runner tag: sqlbot
 # CI variables set in GitLab, never here: HARBOR_USER, HARBOR_PASSWORD, GITOPS_PUSH_TOKEN (write access to devops/cicd/h04); optional BASE_VERSION.
 # ===========================================================
 
 workflow:
   rules:
-    - if: '$CI_COMMIT_BRANCH =~ /^(test|staging|main)$/'
+    - if: '$CI_COMMIT_BRANCH =~ /^(test|staging|master)$/'
       when: always
     - when: never
 
 default:
   tags:
-    - sqlbot
+    - h04-sqlbot
 
 variables:
   DOCKER_BUILDKIT: "1"
@@ -39,7 +39,7 @@ stages:
       variables:
         TAG_PREFIX: "stg-"
         DEPLOY_ENVIRONMENT: "staging"
-    - if: $CI_COMMIT_BRANCH == "main"
+    - if: $CI_COMMIT_BRANCH == "master"
       variables:
         TAG_PREFIX: "prod-"
         DEPLOY_ENVIRONMENT: "production"
@@ -62,16 +62,10 @@ stages:
 test:
   stage: test
   rules:
-    - if: '$CI_COMMIT_BRANCH =~ /^(test|staging|main)$/'
-  # Installs the locked dependencies (torch CPU wheels, ~1.7 GB) on the same base image the service runs on, then runs the whole suite.
-  # sqlbot_xpack creates UPLOAD_DIR at import, so every data path points at /tmp. The tests that need a real Postgres skip without SQLBOT_TEST_DB_URL.
+    - if: '$CI_COMMIT_BRANCH =~ /^(test|staging|master)$/'
   script:
     - |
-      docker run --rm -v "${CI_PROJECT_DIR}:/src:ro" \
-        -e UV_HTTP_TIMEOUT=600 -e UV_CONCURRENT_DOWNLOADS=4 \
-        -e BASE_DIR=/tmp/sqlbot -e UPLOAD_DIR=/tmp/sqlbot/data/file -e EXCEL_PATH=/tmp/sqlbot/data/excel \
-        -e MCP_IMAGE_PATH=/tmp/sqlbot/images -e LOCAL_MODEL_PATH=/tmp/sqlbot/models \
-        dockerhub.elcomlab.com/wolfi/python:v3.11.17@sha256:fdf85f09b2ccf0d5cb8d68549ddbf615adf0129019f69546bcbc9e8ee73a523c sh -c '
+      docker run --rm -v "${CI_PROJECT_DIR}:/src:ro" dockerhub.elcomlab.com/wolfi/python:v3.11.17@sha256:fdf85f09b2ccf0d5cb8d68549ddbf615adf0129019f69546bcbc9e8ee73a523c sh -c '
         cp -r /src /home/appuser/work && cd /home/appuser/work &&
         uv sync -q --frozen --extra cpu --python /usr/bin/python3 &&
         .venv/bin/python -m pytest tests -q -p no:cacheprovider'
