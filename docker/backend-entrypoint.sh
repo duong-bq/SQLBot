@@ -14,13 +14,13 @@ import socket
 import sys
 import time
 
-# Redis chỉ chờ khi thực sự dùng (CACHE_TYPE=redis); mặc định của app là cache in-memory.
+# Redis chỉ chờ khi thực sự dùng; CACHE_TYPE mặc định của app là redis nên biến trống cũng tính là redis.
 # Mỗi mục là (tên, danh sách địa chỉ); chỉ cần MỘT địa chỉ trong danh sách trả lời là đủ, vì Sentinel
 # và cluster có nhiều node mà không node nào bắt buộc phải sống riêng lẻ.
 targets = [("Postgres", [(os.environ.get("DB_HOST", "localhost"),
                           int(os.environ.get("DB_PORT", "5432")))])]
 
-if os.environ.get("CACHE_TYPE", "").lower() == "redis":
+if os.environ.get("CACHE_TYPE", "redis").lower() == "redis":
     nodes = []
     for item in os.environ.get("REDIS_CONNECTION_STRING", "localhost:6379").split(","):
         host, _, port = item.strip().rpartition(":")

@@ -35,7 +35,7 @@ cp .env.example .env     # điền DB_HOST, DB_PASSWORD, SECRET_KEY, EMBEDDING_A
 docker run --rm -p 8001:8000 --env-file .env sqlbot-backend:test
 ```
 
-PostgreSQL phải có sẵn bên ngoài và có extension pgvector; Redis chỉ cần khi `CACHE_TYPE=redis`. Backend nghe cổng 8000 trong container. Kiểm tra sống bằng `GET /api/v1/system/config/key`: đường này không cần JWT và có truy vấn database nên cũng xác nhận kết nối Postgres.
+PostgreSQL phải có sẵn bên ngoài và có extension pgvector; Redis là cache mặc định (`CACHE_TYPE=redis`); chạy local không có Redis thì đặt `CACHE_TYPE=memory`. Backend nghe cổng 8000 trong container. Kiểm tra sống bằng `GET /api/v1/system/config/key`: đường này không cần JWT và có truy vấn database nên cũng xác nhận kết nối Postgres.
 
 ## Biến môi trường chính
 
@@ -44,7 +44,7 @@ PostgreSQL phải có sẵn bên ngoài và có extension pgvector; Redis chỉ 
 | `DB_HOST`, `DB_PORT`, `DB_USERNAME`, `DB_PASSWORD`, `DB_NAME` | Kết nối Postgres (cần extension pgvector) |
 | `SECRET_KEY` | Khóa ký JWT, sinh bằng `openssl rand -base64 32` |
 | `EMBEDDING_PROVIDER`, `EMBEDDING_API_BASE_URL`, `EMBEDDING_API_MODEL`, `EMBEDDING_API_KEY` | Embedding qua server riêng (`EMBEDDING_PROVIDER=api`) |
-| `CACHE_TYPE` | Cache: `memory`, `redis` hoặc `None`; dùng `redis` khi chạy nhiều pod |
+| `CACHE_TYPE` | Cache: `redis` (mặc định), `memory` hoặc `None`; nhiều pod phải dùng `redis` |
 | `REDIS_CONNECTION_STRING`, `REDIS_MODE`, `REDIS_SENTINEL_MASTER`, `REDIS_PASSWORD`, `REDIS_DATABASE_ID` | Redis `standalone` (mặc định), `sentinel` hoặc `cluster`; xem `docs/OPERATIONS.md` §3.4 |
 | `DEFAULT_PWD` | Mật khẩu mặc định của người dùng mới (mặc định `SQLBot@123456`); ai-gateway đăng nhập tài khoản workspace bằng đúng giá trị này |
 | `AI_CALLBACK_URL`, `AI_CALLBACK_ACTION_TYPE` | Callback khi nạp Excel bất đồng bộ xong |
