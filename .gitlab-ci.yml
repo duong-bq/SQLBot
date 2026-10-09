@@ -189,7 +189,7 @@ deploy:
         echo "Tag unchanged, nothing to commit"
         exit 0
       fi
-      git commit -m "deploy(${DEPLOY_ENVIRONMENT}): bump image tag to ${IMAGE_TAG_VERSION} [skip ci]"
+      git commit -m "deploy(${DEPLOY_ENVIRONMENT}): bump ${HARBOR_REPO} image tag to ${IMAGE_TAG_VERSION} [skip ci]"
       for attempt in 1 2 3; do
         git push "${GITOPS_URL}" HEAD:main && exit 0
         git pull --rebase "${GITOPS_URL}" main
