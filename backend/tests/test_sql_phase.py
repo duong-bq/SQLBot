@@ -70,7 +70,9 @@ def service(monkeypatch):
     s.change_title = False
     s.table_name_list = ['t1']
     s.current_logs = {}
-    s.chat_question = types.SimpleNamespace(question='câu hỏi')
+    s.chat_question = types.SimpleNamespace(question='câu hỏi', datasource_ids=None,
+                                            include_answer=False, include_chart=False,
+                                            extended_response=False)
     s.out_ds_instance = None
 
     s.calls = []

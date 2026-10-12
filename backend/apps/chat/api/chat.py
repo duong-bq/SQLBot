@@ -16,9 +16,9 @@ from apps.chat.curd.chat import delete_chat_with_user, get_chart_data_with_user,
     list_chats, get_chat_with_records, create_chat, get_chat_chart_data, get_chat_predict_data, \
     get_chat_with_records_with_data, get_chat_record_by_id, \
     format_json_data, format_json_list_data, get_chart_config, list_recent_questions, rename_chat_with_user, \
-    get_chat_log_history, get_chart_data_with_user_live, resolve_chat_id
+    get_chat_log_history, get_chart_data_with_user_live, resolve_chat_id, validate_ask_datasource_ids
 from apps.chat.models.chat_model import CreateChat, ChatRecord, RenameChat, ChatQuestion, AxisObj, QuickCommand, \
-    ChatInfo, Chat, ChatFinishStep, ChatQuestionBase, SimpleChat, ChatItem
+    ChatInfo, Chat, ChatFinishStep, ChatQuestionBase, SimpleChat, ChatItem, ChatAskQuestion
 from apps.chat.task.llm import LLMService
 from apps.chat.utils.attachment import (
     ERR_TOO_MANY_FILES, dedupe_file_urls,
@@ -466,6 +466,61 @@ async def resolve_chat_for_question(
     )
 
 
+def _invalid_datasource_ids(message: str) -> HTTPException:
+    """HTTP 400 mã ``invalid_datasource_ids`` cho các lỗi về danh sách datasource của `/chat/ask`."""
+    return HTTPException(status_code=400, detail={"code": "invalid_datasource_ids", "message": message})
+
+
+async def resolve_chat_for_ask(
+    session: SessionDep,
+    current_user: CurrentUser,
+    request_question: ChatAskQuestion,
+) -> int:
+    """Dependency của `/chat/ask`: như ``resolve_chat_for_question`` và thêm nhánh danh sách datasource.
+
+    Không có ``datasource_ids`` thì đi đúng đường cũ. Có thì: không dùng chung với ``datasource``,
+    không được rỗng, mọi id phải hợp lệ (``validate_ask_datasource_ids``). Danh sách một phần tử
+    tương đương ``datasource`` nên hội thoại mới được tạo gắn sẵn datasource đó; từ hai phần tử trở
+    lên hội thoại được tạo chưa gắn datasource để pha chạy chọn một cái.
+
+    Hội thoại đã tồn tại mà đã gắn datasource nằm ngoài danh sách bị từ chối: nếu để chạy tiếp, kết
+    quả sẽ đến từ datasource người gọi không hề liệt kê.
+
+    Khai ``request_question`` cùng tên và cùng kiểu với route `/ask` để FastAPI dùng chung một body.
+    """
+    ids = request_question.datasource_ids
+    if ids is None:
+        return resolve_chat_id(
+            session=session,
+            current_user=current_user,
+            chat_id=request_question.chat_id,
+            datasource_id=request_question.datasource,
+        )
+    if request_question.datasource is not None:
+        raise _invalid_datasource_ids("Không gửi đồng thời 'datasource' và 'datasource_ids'.")
+    if not ids:
+        raise _invalid_datasource_ids("'datasource_ids' không được rỗng.")
+    try:
+        ids = validate_ask_datasource_ids(session, current_user, ids)
+    except ValueError as e:
+        raise _invalid_datasource_ids(str(e))
+
+    chat_id = resolve_chat_id(
+        session=session,
+        current_user=current_user,
+        chat_id=request_question.chat_id,
+        datasource_id=ids[0] if len(ids) == 1 else None,
+        allow_no_datasource=True,
+    )
+    chat = session.get(Chat, chat_id)
+    # Chỉ so khi hội thoại thuộc workspace của user: hội thoại của workspace khác sẽ bị
+    # require_permissions từ chối ngay sau đó, không để thông điệp ở đây hé lộ gì về nó.
+    if chat and chat.oid == current_user.oid and chat.datasource and chat.datasource not in ids:
+        raise _invalid_datasource_ids(
+            f"Hội thoại đã gắn datasource {chat.datasource}, không nằm trong 'datasource_ids'.")
+    return chat_id
+
+
 def default_finish_step() -> ChatFinishStep:
     """Điểm dừng mặc định của ``POST /chat/question``, quyết định bởi ``GENERATE_CHART_ENABLED``.
 
@@ -632,9 +687,9 @@ async def question_answer(
 async def ask(
     session: SessionDep,
     current_user: CurrentUser,
-    request_question: ChatQuestionBase,
+    request_question: ChatAskQuestion,
     current_assistant: CurrentAssistant,
-    resolved_chat_id: int = Depends(resolve_chat_for_question),
+    resolved_chat_id: int = Depends(resolve_chat_for_ask),
 ):
     """
     Biến thể ĐỒNG BỘ của ``/chat/question`` — cùng hợp đồng đầu vào (``ChatQuestionBase``: ``chat_id``,
@@ -645,11 +700,15 @@ async def ask(
     Dành cho caller server-to-server (vd. một gateway tích hợp) không tiện tiêu thụ SSE — không phải
     thay thế ``/question`` cho giao diện chat, nơi phản hồi tăng dần vẫn cần thiết.
 
-    Dừng ở ``QUERY_DATA`` (không sinh câu trả lời bằng lời hay biểu đồ): pha sinh answer hiện chỉ
-    được nối dây cho nhánh ``in_chat`` (xem ghi chú trong ``LLMService.run_task``), nối nó vào nhánh
-    này sẽ đổi hành vi của các client MCP không-stream đang dùng chung ``question_answer_inner``.
-    Ngữ nghĩa "trả JSON xong xuôi cho caller máy-đọc" cũng tự nhiên khớp với SQL + dữ liệu thô hơn
-    là văn xuôi tổng hợp — caller tự quyết định trình bày lại thế nào.
+    Mặc định dừng ở ``QUERY_DATA`` (không sinh câu trả lời bằng lời hay biểu đồ). Muốn thêm thì bật
+    ``include_answer`` / ``include_chart``: hai cờ này (chứ không phải ``finish_step``, vốn không
+    diễn đạt được "chart mà không answer") quyết định pha nào chạy thêm trong ``LLMService.run_task``,
+    chỉ ở nhánh JSON đồng bộ nên MCP không bị đổi hành vi. Answer và chart chạy song song.
+
+    ``datasource_ids`` (thay cho ``datasource``, không dùng chung) là danh sách datasource để SQLBot
+    chọn đúng MỘT cái trả lời câu hỏi — xem ``resolve_chat_for_ask``. Có danh sách hoặc có cờ thì
+    response thêm ``datasource: {id, name}``, ``answer``, ``chart`` theo cờ; ``answer``/``chart`` là
+    ``null`` khi được xin mà pha đó hỏng (lượt vẫn thành công, dữ liệu vẫn có).
 
     Trả về khi thành công (HTTP 200): ``{"success": true, "record_id", "sql",
     "data": {"fields", "fields_info", "data": [...rows], "limit"?}}`` — đúng hợp đồng JSON đã dùng
@@ -659,6 +718,13 @@ async def ask(
     ``error`` nào ở đây, toàn bộ là một response JSON duy nhất.
     """
     question = await _resolve_chat_question(session, resolved_chat_id, request_question)
+    if request_question.datasource_ids is not None:
+        question.datasource_ids = list(dict.fromkeys(request_question.datasource_ids))
+        if len(question.datasource_ids) == 1:
+            # Hội thoại cũ chưa gắn datasource vẫn được gắn ở LLMService.__init__.
+            question.datasource_id = question.datasource_ids[0]
+    question.include_answer = request_question.include_answer
+    question.include_chart = request_question.include_chart
     return await question_answer_inner(
         session,
         current_user,
