@@ -2,7 +2,7 @@
 
 from fastapi import APIRouter, Path, Request
 
-from apps.ai_model_config.crud import list_rows, put_workspace_models
+from apps.ai_model_config.crud import list_rows, lock_workspace, put_workspace_models
 from apps.ai_model_config.errors import (
     CODE_WORKSPACE_NOT_FOUND,
     ModelConfigError,
@@ -28,7 +28,9 @@ def _require_workspace(session, oid: int) -> None:
 @router.put("/workspace/{oid}", include_in_schema=False)
 @require_permissions(permission=SqlbotPermission(role=['admin']))
 async def put_workspace(session: SessionDep, request: Request, oid: int = Path()):
-    """Thay toàn bộ cấu hình model của workspace; response có ``changed``.
+    """Thay toàn bộ cấu hình model của workspace; response có ``changed`` và ``synced_datasources``.
+
+    Datasource đi theo workspace (llm/rerank) được đồng bộ trong cùng transaction.
 
     Đọc body thô thay vì khai schema cho FastAPI: lỗi 422 mặc định dội lại ``input`` có
     ``api_key``. Không gọi mạng, nên Gateway gọi lại bao nhiêu lần cũng rẻ.
@@ -40,12 +42,14 @@ async def put_workspace(session: SessionDep, request: Request, oid: int = Path()
         raise invalid("body", "Body phải là JSON.").to_http() from None
     try:
         model_set = parse_model_set(raw, root="body")
-        changed = put_workspace_models(session, oid, model_set)
+        lock_workspace(session, oid)
+        changed, synced = put_workspace_models(session, oid, model_set)
     except ModelConfigError as exc:
         raise exc.to_http() from None
     return {
         "models": serialize_rows(list_rows(session, SCOPE_WORKSPACE, oid)),
         "changed": changed,
+        "synced_datasources": synced,
     }
 
 

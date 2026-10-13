@@ -12,6 +12,7 @@ from apps.ai_model_config.errors import (
     invalid,
 )
 from apps.ai_model_config.models import (
+    MODEL_EMBEDDING,
     MODEL_TYPES,
     ORIGIN_CUSTOM,
     ORIGIN_WORKSPACE,
@@ -20,6 +21,7 @@ from apps.ai_model_config.models import (
     AiModelConfig,
 )
 from apps.ai_model_config.schemas import ModelSetIn, mask_key
+from apps.system.models.system_model import WorkspaceModel
 from common.core.config import settings
 from common.utils.aes_crypto import sqlbot_aes_decrypt, sqlbot_aes_encrypt
 
@@ -82,8 +84,70 @@ def get_row(
     return session.exec(stmt).first()
 
 
-def put_workspace_models(session: Session, oid: int, model_set: ModelSetIn) -> bool:
-    """Thay toàn bộ cấu hình workspace; trả True nếu có gì thay đổi.
+def lock_workspace(session: Session, oid: int) -> None:
+    """Khoá dòng workspace (``SELECT … FOR UPDATE``) tới hết transaction.
+
+    Tuần tự hoá ``put_workspace_models`` với ``pin_datasource_models`` của cùng workspace: bên đến
+    sau chờ bên kia commit rồi mới đọc, nên hoặc pin chép giá trị mới, hoặc ``PUT`` thấy dòng
+    datasource vừa tạo. Khoá dòng ``sys_workspace`` (luôn tồn tại) chứ không khoá dòng cấu hình,
+    vì workspace chưa có cấu hình thì không có dòng nào để khoá. Phải gọi trước khi đọc cấu hình.
+    Hai nơi gọi (API ``PUT`` và hook pin) để hàm CRUD không phụ thuộc bảng ``sys_workspace``.
+    """
+    session.exec(
+        select(WorkspaceModel.id).where(WorkspaceModel.id == oid).with_for_update()
+    ).first()
+
+
+def sync_workspace_followers(session: Session, oid: int, now: datetime) -> int:
+    """Đưa dòng llm/rerank của datasource "đi theo workspace" về đúng dòng workspace hiện hành.
+
+    Dòng đi theo là dòng datasource ``origin=workspace`` loại llm hoặc rerank. Workspace có dòng
+    thì chép đè (cùng chép khoá đã mã hoá, không giải mã) và bump ``updated_at`` để cache giải mã
+    vô hiệu; workspace không còn dòng loại đó thì xoá dòng đi theo, datasource về model chung.
+    Hội tụ chứ không chỉ áp phần chênh: dòng đã khớp thì không ghi. Embedding và dòng ``custom``
+    không bao giờ bị đụng. Trả số dòng datasource đã đổi hoặc xoá.
+    """
+    workspace_rows = {
+        row.model_type: row for row in list_rows(session, SCOPE_WORKSPACE, oid)
+    }
+    synced = 0
+    for model_type in MODEL_TYPES:
+        if model_type == MODEL_EMBEDDING:
+            continue
+        stmt = select(AiModelConfig).where(
+            AiModelConfig.scope == SCOPE_DATASOURCE,
+            AiModelConfig.oid == oid,
+            AiModelConfig.model_type == model_type,
+            AiModelConfig.origin == ORIGIN_WORKSPACE,
+        )
+        source = workspace_rows.get(model_type)
+        for row in session.exec(stmt).all():
+            if source is None:
+                session.delete(row)
+            elif (row.base_url, row.model, row.api_key_enc, row.api_key_hint) == (
+                source.base_url, source.model, source.api_key_enc, source.api_key_hint,
+            ):
+                continue
+            else:
+                row.base_url = source.base_url
+                row.model = source.model
+                row.api_key_enc = source.api_key_enc
+                row.api_key_hint = source.api_key_hint
+                row.updated_at = now
+                session.add(row)
+            synced += 1
+    session.flush()
+    return synced
+
+
+def put_workspace_models(
+    session: Session, oid: int, model_set: ModelSetIn
+) -> tuple[bool, int]:
+    """Thay toàn bộ cấu hình workspace; trả ``(changed, synced)``.
+
+    ``changed`` là True nếu dòng workspace có thay đổi; ``synced`` là số dòng datasource đi theo
+    đã đổi hoặc xoá (xem ``sync_workspace_followers``). Việc đồng bộ chạy cả khi ``changed`` là
+    False, nên gửi lại ``PUT`` y nguyên là cách sửa datasource lệch.
 
     Thiếu khối nào thì xoá dòng loại đó (loại đó về model chung). Idempotent: giá trị không đổi
     thì không ghi, không đổi ``updated_at``, nên cache giải mã và cache embedder không bị xoá
@@ -131,7 +195,7 @@ def put_workspace_models(session: Session, oid: int, model_set: ModelSetIn) -> b
         session.add(row)
         changed = True
     session.flush()
-    return changed
+    return changed, sync_workspace_followers(session, oid, now)
 
 
 def _host_port(url: str) -> tuple[str | None, int | None]:
@@ -171,8 +235,9 @@ def pin_datasource_models(
 
     Từng loại: có khối tuỳ chỉnh thì ghi dòng ``custom``; không có mà workspace có thì CHÉP dòng
     workspace thành dòng ``workspace``; không có cả hai thì không ghi, loại đó dùng model chung
-    suốt đời datasource. Chép giá trị chứ không tham chiếu, nên đổi cấu hình workspace về sau
-    không đụng datasource đã có. Phải gọi trước khi embedding nền chạy.
+    suốt đời datasource. Chép giá trị chứ không tham chiếu. Dòng ``workspace`` loại llm/rerank
+    về sau được ``sync_workspace_followers`` đổi theo workspace; dòng embedding và dòng ``custom``
+    thì đứng yên. Phải gọi trước khi embedding nền chạy, và sau ``lock_workspace``.
     """
     check_custom_hosts(session, oid, model_set)
     custom = dict(model_set.blocks())
