@@ -156,6 +156,35 @@ class TestSqlPhaseDungSom:
         drive(service._sql_phase(None, {}, True, True, ChatFinishStep.GENERATE_SQL))
 
 
+class TestSqlPhaseJsonTrongReasoning:
+    """Content rỗng nhưng reasoning có JSON đáp án: pha dùng JSON đó, không thử lại."""
+
+    def test_moi_buoc_parse_doc_json_tu_reasoning(self, service, monkeypatch):
+        monkeypatch.setattr(llm_mod, 'get_chat_chart_data', lambda session, rid: [{'a': 1}])
+
+        def generate_sql(_session, retry_reason=None):
+            service.calls.append(('generate_sql', retry_reason))
+            yield {'content': '', 'reasoning_content': 'Cần bảng t1.\n\n\n'}
+            yield {'content': '', 'reasoning_content': SQL_ANSWER}
+
+        seen = []
+        service.generate_sql = generate_sql
+        service.get_chart_type_from_sql_answer = lambda text: seen.append(('chart', text)) or 'bar'
+        service.check_sql = lambda session, res, operate: seen.append(('check', res)) or (
+            'SELECT 1', ['t1'])
+        service.check_save_sql = lambda session, res, operate: seen.append(('save', res)) or (
+            'SELECT 1')
+
+        json_result = {}
+        _, res = drive(service._sql_phase(None, json_result, False, False,
+                                          ChatFinishStep.GENERATE_ANSWER))
+
+        assert res.degraded_reason is None
+        assert json_result['sql'] == 'SELECT 1'
+        assert len(service.calls) == 1
+        assert seen == [('chart', SQL_ANSWER), ('check', SQL_ANSWER), ('save', SQL_ANSWER)]
+
+
 class TestSqlPhaseThuLai:
     """Vòng thử lại phải nằm trọn trong pha, không rò ra hợp đồng SSE."""
 

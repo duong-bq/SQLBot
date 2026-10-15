@@ -175,6 +175,28 @@ def _cap_history_answer(text: str) -> str:
     return stripped[:limit] + '\n...[nội dung quá dài, đã cắt bớt]'
 
 
+def _pick_sql_answer(content: str, reasoning: str) -> str:
+    """Chọn văn bản làm đáp án sinh SQL: `content`, hoặc JSON đáp án lạc sang phần reasoning.
+
+    Đáp án chuẩn nằm ở `content`, nhưng phần reasoning có thể nuốt luôn khối JSON. Gặp thật ở
+    ds159 ngày 15/10/2026: prompt cũ bảo Qwen (đã tắt thinking) viết trong <think>, model sinh
+    token <think> nhưng không bao giờ sinh </think>. Bộ reasoning parser của vLLM bắt token mở rồi
+    dồn mọi thứ phía sau, kể cả JSON, sang trường `reasoning_content` — chữ <think> không hề tới
+    tay SQLBot. Content rỗng, cả hai lượt thử đều hỏng, trong khi SQL đúng nằm sẵn ở đó (replay
+    40 lượt: 18/20 lượt prompt cũ rơi vào ca này). Prompt đã bỏ <think>, nhưng model vẫn có thể
+    tự sinh token đó theo thói quen, và model có reasoning thật cũng có thể đặt JSON vào kênh này.
+
+    Content có JSON đáp án thì content luôn thắng: JSON trong reasoning khi đó có thể chỉ là bản
+    nháp. Lùi sang reasoning thì trả về riêng khối JSON chứ không phải cả đoạn reasoning, để lịch
+    sử hội thoại và các bước parse phía sau chỉ thấy đáp án. Không tìm được ở đâu thì trả nguyên
+    `content` để `check_sql` báo đúng loại lỗi như trước.
+    """
+    if extract_json_object(content, required_keys=('success',)) is not None:
+        return content
+    json_str = extract_json_object(reasoning, required_keys=('success',))
+    return json_str if json_str is not None else content
+
+
 def _humanize_error(message: str) -> str:
     """Rút chuỗi lỗi nội bộ về đúng phần người đọc hiểu được, bỏ traceback.
 
@@ -1344,6 +1366,9 @@ class LLMService:
 
         Model từ chối prompt (400) thì khối thông tin CSDL được rút gọn dần rồi gọi lại — xem
         `_reduce_schema_prompt`.
+
+        Content không có JSON đáp án mà reasoning có thì lịch sử ghi khối JSON lấy từ reasoning
+        (xem `_pick_sql_answer`); `save_sql_answer` vẫn lưu nguyên content như model trả về.
         """
         # append current question
         if retry_reason:
@@ -1386,7 +1411,12 @@ class LLMService:
         # Lịch sử chỉ nhận bản đã rút gọn. `end_log` bên dưới cũng lưu `self.sql_message` chứ không
         # lưu `messages`: chính field này là thứ `init_messages` của lượt sau đọc để phát lại, nên
         # nó phải là lịch sử sạch. Prompt thật của lần gọi (kèm lần thử hỏng) đã nằm ở `start_log`.
-        self.sql_message.append(AIMessage(_cap_history_answer(full_sql_text)))
+        sql_answer = _pick_sql_answer(full_sql_text, full_thinking_text)
+        if sql_answer != full_sql_text:
+            SQLBotLogUtil.warning(
+                f'SQL answer JSON found only in reasoning_content (record {self.record.id}); '
+                f'using it as the answer')
+        self.sql_message.append(AIMessage(_cap_history_answer(sql_answer)))
 
         self.current_logs[OperationEnum.GENERATE_SQL] = end_log(session=_session,
                                                                 log=self.current_logs[OperationEnum.GENERATE_SQL],
@@ -1948,8 +1978,10 @@ class LLMService:
                 # generate sql
                 sql_res = self.generate_sql(_session, retry_reason=retry_reason)
                 full_sql_text = ""
+                full_reasoning_text = ""
                 for chunk in sql_res:
                     full_sql_text += chunk.get("content")
+                    full_reasoning_text += chunk.get("reasoning_content") or ""
                     if in_chat:
                         yield "data:" + orjson.dumps(
                             {
@@ -1962,6 +1994,9 @@ class LLMService:
                     yield "data:" + orjson.dumps(
                         {"type": "info", "msg": "sql generated"}
                     ).decode() + "\n\n"
+                # Từ đây mọi bước parse đọc đáp án đã chọn, kể cả khi JSON lạc sang reasoning:
+                # cùng một lựa chọn với lịch sử mà `generate_sql` vừa ghi.
+                full_sql_text = _pick_sql_answer(full_sql_text, full_reasoning_text)
                 # filter sql
                 SQLBotLogUtil.info(full_sql_text)
 
@@ -2864,8 +2899,10 @@ def process_stream(res: Iterator[BaseMessageChunk],
     - **Trường riêng của provider** (``additional_kwargs['reasoning_content']``): đường sạch, chỉ
       việc chuyển tiếp. Hệ thống đang tắt đường này bằng ``LLM_DISABLE_THINKING``, nhưng model nào
       không tôn trọng cờ đó thì vẫn rơi vào đây.
-    - **Thẻ ``<think>...</think>`` nằm lẫn trong ``content``**: prompt sinh SQL chủ động yêu cầu
-      model suy luận trong khối này (templates/template.yaml), nên đây mới là đường đang chạy thật.
+    - **Thẻ ``<think>...</think>`` nằm lẫn trong ``content``**: prompt sinh SQL từng yêu cầu model
+      suy luận trong khối này, nay đã chuyển sang văn xuôi không thẻ vì Qwen tắt thinking không
+      đóng được thẻ (xem ``_pick_sql_answer``). Lưu ý: sau vLLM có reasoning parser, thẻ bị server
+      bóc trước và nội dung về qua trường riêng ở trên, nên nhánh này chỉ chạy khi server không bóc.
       Cần tự bóc thẻ ra khỏi ``content``, kể cả khi thẻ bị cắt đôi giữa hai chunk — đó là việc của
       ``pending_start_tag`` và ``pending_end_tag``: mẩu đuôi khớp tiền tố của thẻ được giữ lại,
       chờ chunk sau ghép vào rồi mới xét. Thiếu bộ đệm cho thẻ ĐÓNG thì một stream cắt kiểu
