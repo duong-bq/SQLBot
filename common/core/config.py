@@ -90,9 +90,9 @@ class Settings(BaseSettings):
     LOG_DIR: str = "logs"
     LOG_FORMAT: str = "%(asctime)s - %(name)s - %(levelname)s:%(lineno)d - %(message)s"
     SQL_DEBUG: bool = False
-    BASE_DIR: str = "/opt/sqlbot"
+    BASE_DIR: str = "/tmp/sqlbot"
     SCRIPT_DIR: str = f"{BASE_DIR}/scripts"
-    UPLOAD_DIR: str = "/opt/sqlbot/data/file"
+    UPLOAD_DIR: str = "/tmp/sqlbot/data/file"
     SQLBOT_KEY_EXPIRED: int = 100  # License key expiration timestamp, 0 means no expiration
     
     SQLBOT_DOC_ENABLED: bool = True
@@ -112,8 +112,8 @@ class Settings(BaseSettings):
         # )
         return f"postgresql+psycopg://{urllib.parse.quote(self.DB_USERNAME)}:{urllib.parse.quote(self.DB_PASSWORD)}@{self.DB_HOST}:{self.DB_PORT}/{self.DB_NAME}"
 
-    MCP_IMAGE_PATH: str = '/opt/sqlbot/images'
-    EXCEL_PATH: str = '/opt/sqlbot/data/excel'
+    MCP_IMAGE_PATH: str = '/tmp/sqlbot/images'
+    EXCEL_PATH: str = '/tmp/sqlbot/data/excel'
     MCP_IMAGE_HOST: str = 'http://localhost:3000'
     SERVER_IMAGE_HOST: str = 'http://YOUR_SERVE_IP:MCP_PORT/images/'
     SERVER_IMAGE_TIMEOUT: int = 15

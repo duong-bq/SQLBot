@@ -25,7 +25,7 @@ Ba nhóm giá trị **bắt buộc sửa khi chạy local**:
 
 | Nhóm | Vì sao |
 |---|---|
-| `BASE_DIR`, `UPLOAD_DIR`, `EXCEL_PATH`, `MCP_IMAGE_PATH`, `LOCAL_MODEL_PATH` | Mặc định là `/opt/sqlbot/...` (dành cho container chạy root). User thường không ghi được, và `sqlbot_xpack` gọi `mkdir(UPLOAD_DIR)` **ngay lúc import** → `PermissionError` trước cả khi app chạy |
+| `BASE_DIR`, `UPLOAD_DIR`, `EXCEL_PATH`, `MCP_IMAGE_PATH`, `LOCAL_MODEL_PATH` | `BASE_DIR`, `UPLOAD_DIR`, `EXCEL_PATH`, `MCP_IMAGE_PATH` mặc định nằm dưới `/tmp/sqlbot/...` (file tạm của một request, ghi xuống `/tmp`); `LOCAL_MODEL_PATH` vẫn là `/opt/sqlbot/models`. User thường không ghi được, và `sqlbot_xpack` gọi `mkdir(UPLOAD_DIR)` **ngay lúc import** → `PermissionError` trước cả khi app chạy |
 | `EMBEDDING_PROVIDER=api` + `EMBEDDING_API_*` | Mặc định `local` nạp `shibing624/text2vec-base-chinese` từ `LOCAL_MODEL_PATH`; model đó chỉ có trong image Docker. Chạy local mà để `local` thì mỗi lần lưu/sync datasource ném `FileNotFoundError` |
 | `DB_PASSWORD` | Ghi mật khẩu **thô, không URL-encode sẵn**: `config.py` đã bọc `urllib.parse.quote()`. Điền sẵn `%40` là mã hóa hai lần và Postgres từ chối đăng nhập |
 
@@ -332,9 +332,7 @@ Build cần ra được mạng tới ba host mà `uv.lock` ghim URL tuyệt đ�
 **`SECRET_KEY` phải đặt cố định** (từ Secret, cùng một giá trị cho mọi replica). Không đặt thì code sinh
 khóa ngẫu nhiên mỗi lần khởi động và mọi JWT chết theo mỗi lần restart.
 
-**Ghi file dưới `/opt/sqlbot/data` và `/opt/sqlbot/images`** — container chạy uid 10001, nên volume gắn vào
-hai đường dẫn này phải ghi được bởi uid/gid 10001 (`fsGroup: 10001` trong Kubernetes). Thư mục `excel/`
-chứa file Excel tạm của luồng nạp dữ liệu; nhiều replica cần dùng chung thư mục này.
+**File tạm dưới `/tmp/sqlbot`** (`data/file`, `data/excel`, `images`) — chỉ ghi xuống `/tmp` của pod (emptyDir có `sizeLimit` và `ephemeral-storage` trong gitops). File Excel của luồng `/parseExcel` → `/importToDb` nằm chờ giữa hai request nên với nhiều replica request thứ hai có thể rơi vào pod khác; chạy một replica hoặc chuyển bước này sang MinIO.
 
 **Trước khi deploy bản có migration `076`**, đếm số dòng nó sẽ backfill:
 
@@ -346,10 +344,7 @@ Migration đặt các dòng đó thành `Success`. Trên máy dev con số là 0
 kiểm chứng với dữ liệu thật; production trả về số lớn thì phải xem qua danh sách trước — nguồn dữ
 liệu nào thực sự hỏng mà bị đánh dấu `Success` sẽ quay lại danh sách hỏi đáp.
 
-`docker/backend-entrypoint.sh` chờ Postgres (và Redis nếu `CACHE_TYPE=redis`; với Sentinel hoặc cluster chỉ cần một node trả lời) mở cổng trước khi gọi
-uvicorn — vì `lifespan` chạy `alembic upgrade head` ngay lúc start, DB chưa sẵn sàng thì process
-chết luôn. Timeout `SQLBOT_WAIT_TIMEOUT` (mặc định 120s). Uvicorn chạy với `--proxy-headers
---forwarded-allow-ips='*'` để sau reverse proxy vẫn lấy đúng IP client và scheme.
+Image không có entrypoint chờ Postgres hay Redis: `lifespan` chạy `alembic upgrade head` ngay lúc start, DB chưa sẵn sàng thì process thoát và k8s khởi động lại (CrashLoopBackOff có giãn cách); migration chạy riêng bằng hook Job. Uvicorn chạy với `--proxy-headers --forwarded-allow-ips='*'` để sau reverse proxy vẫn lấy đúng IP client và scheme.
 
 ### 3.2. Image all-in-one của upstream
 
@@ -771,7 +766,7 @@ export SQLBOT_TEST_DB_URL="postgresql+psycopg://test:test@127.0.0.1:55432/sqlbot
 
 Chạy test không có DB (48 test skip): `set -a && . ./env.txt && set +a` rồi
 `.venv/bin/python -m pytest tests/ -q`. Cần `env.txt` vì `sqlbot_xpack` `mkdir` `UPLOAD_DIR`
-ngay lúc import, mặc định là `/opt/sqlbot` — user thường không ghi được vào đó (§1).
+ngay lúc import, mặc định là `/tmp/sqlbot/data/file` (§1).
 
 ### 7.13. `extraJdbc` — tham số driver nhận nhưng không giữ lời hứa
 

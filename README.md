@@ -10,9 +10,8 @@ alembic/, alembic.ini       migration database
 locales/, templates/        bản dịch và mẫu
 scripts/                    script đo và demo (không vào image)
 pyproject.toml, uv.lock     dependency (uv)
-docker/                     backend-entrypoint.sh: chờ Postgres và Redis sẵn sàng rồi mới chạy uvicorn
 Dockerfile                  build image backend (Wolfi, Python 3.11, user appuser uid/gid 10001)
-.dockerignore               chỉ để vào context build phần mã chạy và docker/backend-entrypoint.sh
+.dockerignore               chỉ để vào context build phần mã chạy
 docs/                       tài liệu kiến trúc, vận hành, pipeline Text-to-SQL, đặc tả API
 tests/                      toàn bộ test (chạy từ gốc repo: `pytest tests/`)
 .env.example                mẫu biến môi trường

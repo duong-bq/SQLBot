@@ -29,7 +29,7 @@ Khoảng 339 file đổi đường dẫn. Cấu trúc bên trong từng thư m�
 
 - `common/core/config.py`: `env_file="../.env"` thành `".env"`. Trước đó `.env` nằm ở thư mục cha của `backend/`; giờ nằm ở thư mục làm việc, tức gốc repo. Chạy backend từ thư mục khác thì `.env` bị bỏ qua im lặng.
 - `tests/conftest.py` đưa gốc repo vào `sys.path`; ba test và hai chỗ trong test cứng chuỗi `backend` đã sửa.
-- `Dockerfile` đọc `pyproject.toml` và `uv.lock` ở gốc; `.dockerignore` chuyển thành danh sách cho phép từng thư mục (`alembic`, `apps`, `common`, `locales`, `templates`, `main.py`, `pyproject.toml`, `uv.lock`, `docker/backend-entrypoint.sh`). `scripts/` và `tests/` không vào image như trước.
+- `Dockerfile` đọc `pyproject.toml` và `uv.lock` ở gốc; `.dockerignore` chuyển thành danh sách cho phép từng thư mục (`alembic`, `apps`, `common`, `locales`, `templates`, `main.py`, `pyproject.toml`, `uv.lock`). `scripts/` và `tests/` không vào image như trước.
 - README, `.env.example`, `CLAUDE.md`, toàn bộ `docs/` và vài comment trong code không còn tham chiếu `backend/`.
 
 ## 4. Test sau khi gộp

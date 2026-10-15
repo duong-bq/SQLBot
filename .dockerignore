@@ -13,7 +13,6 @@
 !main.py
 !pyproject.toml
 !uv.lock
-!docker/backend-entrypoint.sh
 
 # Loại trong các thư mục vừa mở
 **/__pycache__
