@@ -618,6 +618,7 @@ kỳ tài liệu, log hay issue nào; nếu cần xoay vòng mật khẩu thì p
 | Pha gợi ý câu hỏi hỏng **không** giết lượt hỏi | Giống pha biểu đồ: chỉ phát `info: recommended question failed` rồi đi tiếp. LLM trả rác thì lưu `[]`, client nhận `content: "[]"` chứ không phải thiếu event |
 | Pha biểu đồ hỏng **không** giết lượt hỏi | Phát `info: chart failed` rồi đi tiếp; vẫn có `answer` + `finish`. Cố ý không gọi `save_error` vì web UI hiện khối lỗi đỏ với mọi record có `error` khác rỗng |
 | Lỗi giữa stream vẫn là **HTTP 200** | Phải đọc event `error`, không dựa vào status code |
+| Log `model rejected SQL prompt, retry with reduced schema (step …)` | Datasource quá lớn so với context của model; SQLBot đang tự bớt khối schema (TEXT2SQL_PIPELINE.md §8). Thỉnh thoảng thấy thì bình thường, thấy ở mọi lượt thì nên thu hẹp bảng của datasource hoặc dùng model context lớn hơn. Embedding lỗi hoặc tắt sẽ đưa **mọi** bảng vào prompt và dễ chạm trần kể cả ở nấc cuối — khi đó người dùng nhận lỗi "vượt quá context của model kể cả khi đã rút gọn tối đa", không retry |
 | Cắt dòng dữ liệu mà không kèm `build_data_scope_note` → LLM bịa số tổng | Xem [TEXT2SQL_PIPELINE.md §6](TEXT2SQL_PIPELINE.md) |
 | Không có cơ chế hủy | `AbortController` phía client chỉ ngắt kết nối; backend vẫn chạy tới hết và vẫn tính token |
 | Không chạy song song nhiều câu hỏi trên cùng `chat_id` | Xem `API_SPEC.md` §7.4 |

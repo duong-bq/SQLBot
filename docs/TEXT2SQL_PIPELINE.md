@@ -39,8 +39,8 @@ flowchart TD
 
     E --> F[RAG: terminology · data_training · custom_prompt]
     F --> F2[resolve_sw_permission<br/>sw_permission.py:119]
-    F2 --> G[choose_table_schema → M-Schema<br/>đã lọc bảng/cột — llm.py:594]
-    G --> H[init_messages: lắp prompt multi-turn<br/>llm.py:404]
+    F2 --> G[choose_table_schema → M-Schema<br/>đã lọc bảng/cột — llm.py:639]
+    G --> H[init_messages: lắp prompt multi-turn<br/>llm.py:448]
     H --> I{"ds đã chọn?"}
     I -- chưa --> I2[LLM chọn datasource<br/>llm.py:1127]
     I -- rồi --> J[check_connection]
@@ -50,7 +50,7 @@ flowchart TD
     RG -->|"cần, hoặc cổng tắt (mặc định)"| K[["vòng retry — llm.py:1839"]]
     RG -->|"không cần"| R
 
-    K --> L[["LLM lần 1: sinh SQL<br/>llm.py:1275"]]
+    K --> L[["LLM lần 1: sinh SQL<br/>llm.py:1354"]]
     L --> M[check_sql + AST whitelist<br/>llm.py:1906]
     M --> M2[apply_scope_to_sql<br/>bọc scope query — llm.py:2017]
     M2 --> N[execute_sql trên DB nghiệp vụ]
@@ -245,11 +245,16 @@ event `info: sql generated` trong một lượt — xem [API_SPEC.md §6.8](api_
 `chat_record.error` khác rỗng, mà lượt này sắp có câu trả lời tử tế. Lý do hỏng vẫn nằm đủ trong log.
 
 **Prompt retry chỉ thêm một message ngắn nêu lý do**, không dựng lại prompt đầy đủ
-([llm.py:1275](../backend/apps/chat/task/llm.py#L1275) `generate_sql`). Câu hỏi gốc và m-schema vẫn
+([llm.py:1354](../backend/apps/chat/task/llm.py#L1354) `generate_sql`). Câu hỏi gốc và m-schema vẫn
 nằm trong `self.sql_message` phía trên. Quan trọng hơn: **câu trả lời hỏng và lời nhắc sửa chỉ nằm
 trong danh sách `messages` tạm của lần gọi này, không nhập vào `self.sql_message`** — nếu không,
 lượt sau sẽ đọc thấy lời khiển trách "câu trả lời vừa rồi KHÔNG dùng được" và hiểu là đang nói về
 chính nó.
+
+**Vượt context sau khi đã rút gọn hết thì không retry, không hạ cấp.** `SchemaReductionExhausted`
+(§8) cố ý không kế thừa `SingleMessageError` nên vòng retry không bắt nó: gọi lại với cùng prompt
+chỉ tốn thêm một lần bị từ chối. Lỗi đi thẳng lên khối `except` tổng của `run_task`, client nhận
+event `error` với thông điệp ngắn; qua Gateway là `datasource_query_failed`.
 
 ### 5.4. Điều kiện hạ cấp
 
@@ -416,8 +421,12 @@ lấy phân bố rồi quyết.
 ### Định dạng
 
 M-Schema là cách serialize schema dạng bán cấu trúc (nguồn: XiYan-SQL của Alibaba), token-hiệu quả
-hơn DDL thô. Sinh tại [datasource.py:1180](../backend/apps/datasource/crud/datasource.py#L1180)
-`get_table_schema`:
+hơn DDL thô. Dựng dạng cấu trúc tại [datasource.py:1184](../backend/apps/datasource/crud/datasource.py#L1184)
+`get_table_m_schema` (đối tượng `MSchema` trong [m_schema.py](../backend/apps/datasource/m_schema.py):
+bảng, cột, FK, kèm cờ bảng nào được kéo theo quan hệ) rồi mới render ra chuỗi.
+`get_table_schema` ([datasource.py:1267](../backend/apps/datasource/crud/datasource.py#L1267)) giữ
+nguyên chữ ký cũ, chỉ bọc hàm dựng rồi render — các chỗ gọi cũ không đổi. Bất biến: bản render khớp
+từng byte chuỗi mà code cũ nối tay. Chuỗi render có dạng:
 
 ```
 【DB_ID】 <schema_name>
@@ -448,7 +457,7 @@ này thì mọi câu hỏi cần JOIN sẽ hỏng khi bảng đối tác không 
 
 ### `table_name_list` là whitelist
 
-`choose_table_schema` ([llm.py:594](../backend/apps/chat/task/llm.py#L594)) trả về danh sách tên
+`choose_table_schema` ([llm.py:639](../backend/apps/chat/task/llm.py#L639)) trả về danh sách tên
 bảng đã đưa vào prompt, lưu ở `self.table_name_list`. Danh sách này **vừa** là thứ LLM nhìn thấy,
 **vừa** là whitelist mà SQL sinh ra bị đối chiếu. Một bảng không lọt vào M-Schema thì SQL nào đụng
 tới nó cũng bị từ chối.
@@ -458,6 +467,33 @@ dạng giá trị thật (ví dụ mã tỉnh viết thế nào).
 
 **Với người dùng có quyền SW, danh sách này bị thu hẹp trước khi M-Schema được dựng** — một phép
 thu hẹp duy nhất kéo theo cả ba thứ: prompt, whitelist và dữ liệu mẫu. Xem §13.
+
+### Thang rút gọn khi vượt context
+
+SQLBot không biết context của model phía sau LiteLLM nên không đếm token trước. Nó gửi bản đầy đủ;
+model từ chối (400) thì bớt dần khối thông tin CSDL rồi gửi lại
+([prompt_budget.py](../backend/apps/chat/task/prompt_budget.py), điều phối ở
+[llm.py:1434](../backend/apps/chat/task/llm.py#L1434) `_stream_sql_with_schema_reduction`). Các nấc
+áp dụng dồn, theo thứ tự:
+
+1. bỏ sample data;
+2. bỏ chú thích cột của bảng kéo theo quan hệ;
+3. bỏ hẳn bảng kéo theo quan hệ, cùng các dòng FK chạm tới chúng;
+4. bỏ chú thích cột của các bảng được chọn (top embedding, hoặc mọi bảng khi embedding tắt/lỗi).
+
+Chú thích bảng giữ ở mọi nấc. Nấc không có gì để bỏ thì nhảy qua, không tốn lần gọi LLM. Nấc 0 (bản
+đầy đủ) giống hệt trước khi có thang.
+
+- **Điều kiện lên nấc**: lỗi 400 **chưa phân loại** (hết ngân sách LiteLLM… thì không) và **chưa
+  stream ra chunk nào**. Lỗi giữa stream hay lỗi 5xx ném thẳng như cũ.
+- **Mức đã đạt giữ cho cả lượt**: message schema được sửa tại chỗ, nên lần retry SQL và các prompt
+  chart, answer, gợi ý chạy sau trong lượt dùng luôn bản rút gọn. Khối schema không vào lịch sử nên
+  lượt sau bắt đầu lại từ bản đủ.
+- **Whitelist không đổi**: rút gọn chỉ đụng prompt; SQL dùng bảng kéo theo đã bị bỏ khỏi prompt vẫn
+  qua tầng AST. Không nấc nào mở lại bảng hay cột ngoài quyền SW.
+- **Hết nấc**: ném `SchemaReductionExhausted` (thông điệp ngắn, không traceback); xem §5.3 về việc
+  lỗi này không retry, không hạ cấp. Chưa áp được nấc nào (vd datasource của assistant bên ngoài) thì
+  ném nguyên lỗi gốc.
 
 ---
 
@@ -508,7 +544,7 @@ upstream, **cố ý giữ khi merge**:
 
 ### Thứ tự message của pha SQL
 
-`init_messages` ([llm.py:404](../backend/apps/chat/task/llm.py#L404)) dựng `self.sql_message` theo
+`init_messages` ([llm.py:448](../backend/apps/chat/task/llm.py#L448)) dựng `self.sql_message` theo
 đúng thứ tự:
 
 ```
