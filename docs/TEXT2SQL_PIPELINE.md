@@ -35,39 +35,39 @@ flowchart TD
     A[POST /chat/question] --> B[resolve_chat_for_question<br/>chat.py:440]
     B --> C[question_answer_inner<br/>chat.py:576]
     C --> D[stream_sql<br/>chat.py:767]
-    D --> E[LLMService.run_task<br/>llm.py:2113]
+    D --> E[LLMService.run_task<br/>llm.py:2255]
 
     E --> F[RAG: terminology · data_training · custom_prompt]
     F --> F2[resolve_sw_permission<br/>sw_permission.py:119]
     F2 --> G[choose_table_schema → M-Schema<br/>đã lọc bảng/cột — llm.py:639]
     G --> H[init_messages: lắp prompt multi-turn<br/>llm.py:448]
     H --> I{"ds đã chọn?"}
-    I -- chưa --> I2[LLM chọn datasource<br/>llm.py:1127]
+    I -- chưa --> I2[LLM chọn datasource<br/>llm.py:1195]
     I -- rồi --> J[check_connection]
     I2 --> J
 
-    J --> RG{"cổng định tuyến<br/>lượt này cần dữ liệu mới?<br/>llm.py:2178"}
-    RG -->|"cần, hoặc cổng tắt (mặc định)"| K[["vòng retry — llm.py:1839"]]
+    J --> RG{"cổng định tuyến<br/>lượt này cần dữ liệu mới?<br/>llm.py:2339"}
+    RG -->|"cần, hoặc cổng tắt (mặc định)"| K[["vòng retry — llm.py:1918"]]
     RG -->|"không cần"| R
 
     K --> L[["LLM lần 1: sinh SQL<br/>llm.py:1354"]]
-    L --> M[check_sql + AST whitelist<br/>llm.py:1906]
-    M --> M2[apply_scope_to_sql<br/>bọc scope query — llm.py:2017]
+    L --> M[check_sql + AST whitelist<br/>llm.py:2048]
+    M --> M2[apply_scope_to_sql<br/>bọc scope query — llm.py:2159]
     M2 --> N[execute_sql trên DB nghiệp vụ]
     N -- lỗi --> O{"còn lượt retry?"}
     O -- còn --> L
     O -- hết --> P{"LLM_ANSWER_ON_FAILURE<br/>và finish_step ≥ ANSWER?"}
     P -- không --> Q[event error]
-    P -- có --> R[hạ cấp: build_answer_fallback_prompts<br/>llm.py:754]
+    P -- có --> R[hạ cấp: build_answer_fallback_prompts<br/>llm.py:810]
 
     N -- ok --> S{finish_step}
     S -- GENERATE_SQL --> Z[finish]
     S -- QUERY_DATA --> Z
-    S -- ≥ GENERATE_ANSWER --> T[build_answer_prompts<br/>llm.py:708]
+    S -- ≥ GENERATE_ANSWER --> T[build_answer_prompts<br/>llm.py:764]
     R --> U
     T --> U[["LLM lần 2: answer<br/>chạy trong ThreadPoolExecutor"]]
     R --> Y
-    T --> Y[["LLM lần 4: gợi ý câu hỏi tiếp theo<br/>thread thứ ba — llm.py:895"]]
+    T --> Y[["LLM lần 4: gợi ý câu hỏi tiếp theo<br/>thread thứ ba — llm.py:963"]]
 
     U --> V{"finish_step = GENERATE_CHART<br/>và không hạ cấp?"}
     V -- không --> W[drain_answer_queue block=True]
@@ -107,9 +107,9 @@ dòng quyền nào đi qua chúng như không có gì xảy ra — xem §13.
 | Giải nghĩa chat | [chat.py:440](../backend/apps/chat/api/chat.py#L440) `resolve_chat_for_question` | Chuyển `chat_id` (int nội bộ **hoặc** `external_id` dạng UUID) thành id nội bộ. **Bắt buộc là FastAPI dependency**, không được gọi trong thân hàm, vì `require_permissions` cần thấy id nội bộ đã giải nghĩa |
 | Điều phối | [chat.py:576](../backend/apps/chat/api/chat.py#L576) `question_answer_inner` | Tách quick-command (`/regenerate`, `/analysis`, `/predict`) khỏi câu hỏi thường |
 | Dựng stream | [chat.py:767](../backend/apps/chat/api/chat.py#L767) `stream_sql` | Tạo `LLMService`, trả `StreamingResponse`. Docstring ở đây giải thích từng tham số, kể cả "núm vặn" `finish_step` |
-| Chạy pipeline | [llm.py:2113](../backend/apps/chat/task/llm.py#L2113) `run_task` | Toàn bộ pipeline, dạng generator yield từng dòng SSE |
+| Chạy pipeline | [llm.py:2255](../backend/apps/chat/task/llm.py#L2255) `run_task` | Toàn bộ pipeline, dạng generator yield từng dòng SSE |
 
-`run_task` chạy trong thread riêng (`run_task_async`, [llm.py:1770](../backend/apps/chat/task/llm.py#L1770)),
+`run_task` chạy trong thread riêng (`run_task_async`, [llm.py:1907](../backend/apps/chat/task/llm.py#L1907)),
 kết quả đẩy qua queue để route async đọc ra. Đó là lý do trong `run_task` phải tự mở session
 (`session_maker()`) chứ không dùng `SessionDep` của FastAPI.
 
@@ -152,9 +152,9 @@ nhánh nguồn và từ chối id LLM trả ngoài các ứng viên đã đưa c
 giá trị mặc định bị Python chốt lại một lần lúc import module, nên test monkeypatch `settings` sẽ
 không có tác dụng.
 
-Các chốt trong `run_task`: dừng sau SQL ([llm.py:1994](../backend/apps/chat/task/llm.py#L1994)),
-dừng sau dữ liệu ([llm.py:2215](../backend/apps/chat/task/llm.py#L2215)), dừng sau answer
-([llm.py:2277](../backend/apps/chat/task/llm.py#L2277)).
+Các chốt trong `run_task`: dừng sau SQL ([llm.py:2136](../backend/apps/chat/task/llm.py#L2136)),
+dừng sau dữ liệu ([llm.py:2374](../backend/apps/chat/task/llm.py#L2374)), dừng sau answer
+([llm.py:2436](../backend/apps/chat/task/llm.py#L2436)).
 
 ---
 
@@ -162,7 +162,7 @@ dừng sau dữ liệu ([llm.py:2215](../backend/apps/chat/task/llm.py#L2215)), 
 
 Cả ba đều là phần fork thêm vào, upstream không có. Cổng định tuyến nằm riêng ở
 [question_gate.py](../backend/apps/chat/task/question_gate.py); vòng retry và nhánh hạ cấp nằm trong
-[llm.py:1781-2112](../backend/apps/chat/task/llm.py#L1781) `_sql_phase`.
+[llm.py:1918-2254](../backend/apps/chat/task/llm.py#L1918) `_sql_phase`.
 
 ### 5.1. Cổng định tuyến câu hỏi
 
@@ -174,7 +174,7 @@ quả lượt trước, hay câu hỏi về chính datasource. Đó là pha đ�
 vào ngữ cảnh, nên chạy thừa vừa tốn tiền vừa làm nhiễu câu trả lời — và những event SSE đã trót phát
 ra thì không prompt nào ở pha sau gỡ lại được.
 
-**Vị trí**: ngay sau `check_connection`, trước `_sql_phase` ([llm.py:2178](../backend/apps/chat/task/llm.py#L2178)).
+**Vị trí**: ngay sau `check_connection`, trước `_sql_phase` ([llm.py:2339](../backend/apps/chat/task/llm.py#L2339)).
 Phải đứng sau `init_messages` vì cổng cần `table_name_list` — và đó cũng là lý do nó không thể lùi
 sớm hơn.
 
@@ -224,7 +224,7 @@ nhưng vẫn có `answer-result` → `answer` → `finish`, và **không có bi�
 
 Toàn bộ pha SQL (sinh → kiểm tra → chạy) nằm trong một `while True`. Bốn loại exception bị bắt:
 `SingleMessageError`, `SQLBotDBError`, `ParseSQLResultError`, `SQLBotDBConnectionError`
-([llm.py:2067](../backend/apps/chat/task/llm.py#L2067)).
+([llm.py:2209](../backend/apps/chat/task/llm.py#L2209)).
 
 ```
 lỗi → còn lượt retry?  ─ có ─→  sinh lại SQL, kèm lý do hỏng
@@ -232,7 +232,7 @@ lỗi → còn lượt retry?  ─ có ─→  sinh lại SQL, kèm lý do hỏn
                                                         └ không ─→ raise → event error
 ```
 
-### 5.3. Bốn quyết định thiết kế cần biết trước khi sửa
+### 5.3. Các quyết định thiết kế cần biết trước khi sửa
 
 **Mất kết nối DB thì không retry.** `SQLBotDBConnectionError` bỏ qua thẳng sang nhánh hạ cấp —
 sinh lại SQL không cứu được gì.
@@ -256,13 +256,24 @@ chính nó.
 chỉ tốn thêm một lần bị từ chối. Lỗi đi thẳng lên khối `except` tổng của `run_task`, client nhận
 event `error` với thông điệp ngắn; qua Gateway là `datasource_query_failed`.
 
+**JSON đáp án lạc sang phần reasoning thì lấy từ đó, không tính là lỗi.** Prompt cũ bảo model
+suy luận trong thẻ `<think>`. Qwen khi tắt thinking mở thẻ mà không đóng, reasoning parser của vLLM
+dồn cả JSON đáp án sang `reasoning_content`, content rỗng, cả hai lần thử đều hỏng (ca ds159,
+15/10/2026). Prompt đã chuyển sang suy luận văn xuôi không bọc thẻ; thêm vào đó `_pick_sql_answer`
+([llm.py:178](../backend/apps/chat/task/llm.py#L178)) làm lưới an toàn: content có JSON đáp án (khối
+có khoá `success`) thì dùng content, không thì lấy khối JSON đó từ reasoning. Lưới này áp ở cả
+`_sql_phase` (trước chart_type, brief, `check_sql`) lẫn `generate_sql` (bản nhập vào lịch sử hội
+thoại); `chat_record` vẫn lưu nguyên content model trả về. Không có JSON ở đâu cả thì giữ lỗi cũ và
+đi vòng retry như thường. Lỗi còn lại chưa chặn được: model viết xong phần suy luận rồi dừng, không
+viết JSON — lần retry thường cứu được.
+
 ### 5.4. Điều kiện hạ cấp
 
 Chỉ hạ cấp khi **cả ba** đúng: `in_chat` (không phải nhánh MCP), `LLM_ANSWER_ON_FAILURE=True`, và
 `finish_step.value >= GENERATE_ANSWER`. Các nhánh dừng sớm vẫn cần nhận lỗi thật để giữ nguyên hợp
 đồng cũ.
 
-Prompt fallback ([llm.py:754](../backend/apps/chat/task/llm.py#L754)) thay `<data>` bằng tóm tắt các
+Prompt fallback ([llm.py:810](../backend/apps/chat/task/llm.py#L810)) thay `<data>` bằng tóm tắt các
 lượt hỏi-đáp cũ, cộng thêm **danh sách tên bảng** (không phải cả m-schema): nhóm câu hỏi về chính
 datasource ("có bao nhiêu bảng") gần như luôn làm pha SQL gãy, trong khi đáp án nằm sẵn trong schema.
 
@@ -290,7 +301,7 @@ không được rò sang biến thể `no_query`, và bộ luật chung phải c
 
 ### Song song hoá
 
-Answer chạy trong worker của `ThreadPoolExecutor` ([llm.py:67](../backend/apps/chat/task/llm.py#L67),
+Answer chạy trong worker của `ThreadPoolExecutor` ([llm.py:74](../backend/apps/chat/task/llm.py#L74),
 `max_workers=200`), đẩy chunk qua `queue.Queue`. Luồng chính vét queue **không chặn** xen giữa các
 chunk chart, và **chặn** ở cuối cùng trước khi phát `finish`.
 
@@ -320,9 +331,9 @@ nằm ở đây vì cùng lý do: **`_session` không được đi qua thread**.
 
 Bốn thứ hoạt động như một khối, sửa một cái mà quên cái kia là tái sinh lỗi:
 
-1. **`ANSWER_MAX_ROWS = 100`** ([llm.py:79](../backend/apps/chat/task/llm.py#L79)) — trần số dòng
+1. **`ANSWER_MAX_ROWS = 100`** ([llm.py:86](../backend/apps/chat/task/llm.py#L86)) — trần số dòng
    nhồi vào prompt answer. SQL đã bị chặn ở 1000 dòng, nhưng nhồi cả 1000 chỉ tốn token.
-2. **`build_data_scope_note(total, sent)`** ([llm.py:82](../backend/apps/chat/task/llm.py#L82)) —
+2. **`build_data_scope_note(total, sent)`** ([llm.py:89](../backend/apps/chat/task/llm.py#L89)) —
    câu văn nói cho LLM biết `<data>` là đủ hay đã cắt. Nêu tổng thật **kể cả khi không cắt**, để LLM
    khỏi phải tự đếm.
 3. **Vị trí trong prompt**: `data_scope` đặt **sau** `<data>`, `answer_history` đặt **đầu** prompt.
@@ -399,7 +410,7 @@ Con số này quyết định chi phí và độ trễ, và là chỗ tài liệ
 | Lượt hỏi hỏng hẳn (event `error`) | 1 + số lần retry | thoát trước điểm khởi động answer/gợi ý — **không** tốn lượt gọi nào cho pha phụ |
 | Bật cổng định tuyến (§5.1) | +1 | thêm một lượt gọi **ngắn** trước pha SQL, cho mọi câu hỏi |
 | Lượt bị cổng rẽ sang answer | **3** | cổng + answer hạ cấp + gợi ý. Tiết kiệm được lượt sinh SQL **và** lượt sinh chart |
-| Chưa chọn datasource | +1 | thêm một lần LLM chọn datasource ([llm.py:1127](../backend/apps/chat/task/llm.py#L1127)). `/ask` với `datasource_ids` từ hai id trở lên cũng đi nhánh này, chỉ trên tập đã cho |
+| Chưa chọn datasource | +1 | thêm một lần LLM chọn datasource ([llm.py:1195](../backend/apps/chat/task/llm.py#L1195)). `/ask` với `datasource_ids` từ hai id trở lên cũng đi nhánh này, chỉ trên tập đã cho |
 | MCP (`finish_step=QUERY_DATA`) | 1 | chỉ sinh SQL |
 | `/ask` với `include_answer` và/hoặc `include_chart` | 1 + số pha bật | sinh SQL + answer và/hoặc chart (song song); không có gợi ý câu hỏi tiếp theo |
 | `/analysis`, `/predict` | 1 mỗi lệnh | chạy trên record đã có, không sinh SQL lại |
@@ -510,11 +521,11 @@ cấm truy vấn metadata, ép giới hạn số dòng. Đây là tầng **mềm
 
 ### Tầng 2 — AST whitelist bảng
 
-[llm.py:1906-1923](../backend/apps/chat/task/llm.py#L1906). Parse SQL bằng `sqlglot` theo đúng
+[llm.py:2054-2071](../backend/apps/chat/task/llm.py#L2054). Parse SQL bằng `sqlglot` theo đúng
 dialect của datasource, lấy tập tên bảng thật, so với `set(self.table_name_list)`. Thừa bảng nào →
 `SingleMessageError`.
 
-`extract_tables_from_sql` ([llm.py:107](../backend/apps/chat/task/llm.py#L107)) có ba điểm khác
+`extract_tables_from_sql` ([llm.py:114](../backend/apps/chat/task/llm.py#L114)) có ba điểm khác
 upstream, **cố ý giữ khi merge**:
 
 - Loại tên CTE bằng `cte.alias_or_name` (không phải `cte.alias` như bản vá upstream `7118b401a`):
@@ -568,10 +579,10 @@ giữa các khối kiến thức. Các ack đang ghi cứng bằng tiếng Việ
 ### Lịch sử được cắt hai tầng
 
 - `get_last_conversation_rounds` — giữ `GENERATE_SQL_QUERY_HISTORY_ROUND_COUNT` (5) lượt gần nhất.
-- `trim_history_by_size` ([llm.py:2888](../backend/apps/chat/task/llm.py#L2888)) — cắt theo
+- `trim_history_by_size` ([llm.py:3063](../backend/apps/chat/task/llm.py#L3063)) — cắt theo
   `LLM_SQL_HISTORY_TOTAL_MAX_CHARS` (24000). Chặn bằng ký tự chứ không chỉ bằng số lượt: một lượt có
   thể to bất thường, mà m-schema trong system prompt đã ăn sẵn ~24K.
-- `_cap_history_answer` ([llm.py:143](../backend/apps/chat/task/llm.py#L143)) — trần
+- `_cap_history_answer` ([llm.py:150](../backend/apps/chat/task/llm.py#L150)) — trần
   `LLM_SQL_HISTORY_ANSWER_MAX_CHARS` (4000) cho **một** câu trả lời trước khi nhập vào lịch sử. Có
   model đã xuất 94.731 ký tự lặp vô hạn; nhét nguyên vào lịch sử là lượt sau vỡ context window rồi
   hỏng vĩnh viễn.
@@ -753,8 +764,8 @@ Chi tiết đầy đủ (schema từng event, ví dụ capture thật, bảng l�
 | Lỗi giữa stream | Vẫn trả HTTP **200**; lỗi nằm trong event `error` |
 | Lỗi file đính kèm | Ngoại lệ của dòng trên: bắt được **trước khi** stream mở nên trả `HTTP 400` + `{code, message}`, không có event nào. Chưa `yield` byte đầu tiên thì status code còn nói được sự thật — đừng chuyển nó vào event `error` |
 | Event tùy chọn | `sql`, `sql-data`, `brief` **có thể không xuất hiện** (hạ cấp / không phải lượt đầu) |
-| Event token | `sql-result`, `answer-result` — cộng dồn `content`. `reasoning_content` rỗng ở `answer-result` nhưng **có nội dung** ở `sql-result`: prompt sinh SQL bắt model suy luận trong khối `<think>` ([template.yaml:359](../backend/templates/template.yaml#L359)), `process_stream` bóc khối đó ra trường riêng. `LLM_DISABLE_THINKING` chỉ tắt thinking **native của provider**, không tắt khối này |
-| Số liệu | Nằm trong trường `data` của event `sql-data` ([llm.py:2062](../backend/apps/chat/task/llm.py#L2062)), **không** phải trong `content` — `content` vẫn là chuỗi `"execute-success"` như hợp đồng cũ |
+| Event token | `sql-result`, `answer-result` — cộng dồn `content`. `reasoning_content` chỉ có nội dung khi model bật suy luận gốc; với cấu hình mặc định (tắt thinking) nó thường rỗng ở cả hai. Prompt sinh SQL yêu cầu vài dòng suy luận văn xuôi **ngay trong `content`**, không bọc thẻ, rồi kết thúc bằng khối JSON ([template.yaml:359](../backend/templates/template.yaml#L359)). Prompt cũ dùng thẻ `<think>` và đã gây lỗi content rỗng — xem §5.3 |
+| Số liệu | Nằm trong trường `data` của event `sql-data` ([llm.py:2200](../backend/apps/chat/task/llm.py#L2200)), **không** phải trong `content` — `content` vẫn là chuỗi `"execute-success"` như hợp đồng cũ |
 | Cấu hình biểu đồ | Về **trọn gói** ở event `chart`, không stream theo token. Pha biểu đồ hỏng thì phát `info: chart failed` và **đi tiếp** — vẫn có `answer` và `finish` |
 | Cổng định tuyến | Khi bật cổng (§5.1), một event `info` mở đầu lượt: `msg` là `route <action>/<category>`, kèm `(forced: …)` khi quyết định bị ép. Đây là **chẩn đoán**, không phải hợp đồng — API_SPEC dặn đối tác đừng parse phần sau chữ `route` |
 | Gợi ý câu hỏi tiếp theo | Cặp `info: recommended question generated` + `recommended_question`, phát **ngay trước `finish`** ở cả hai lối ra của `run_task` (nhánh hạ cấp và nhánh sau chart). `content` là **chuỗi JSON** chứa mảng câu hỏi, có thể là `"[]"`. Hỏng thì chỉ có `info: recommended question failed` |
@@ -762,7 +773,7 @@ Chi tiết đầy đủ (schema từng event, ví dụ capture thật, bảng l�
 Thêm một event mới thì phải cập nhật `API_SPEC.md` §6.3 — đối tác đọc file đó, không đọc code.
 
 Trường `data` của `sql-data` dựng bởi `build_sql_data_payload`
-([llm.py:1703](../backend/apps/chat/task/llm.py#L1703)). Nó **phải** được gọi sau `save_sql_data`,
+([llm.py:1840](../backend/apps/chat/task/llm.py#L1840)). Nó **phải** được gọi sau `save_sql_data`,
 vì hàm lưu mới là chỗ cắt kết quả xuống 1000 dòng và gắn khóa `limit`; gọi trước thì client nhận
 nhiều dòng hơn bản lưu trong DB.
 
@@ -860,7 +871,7 @@ chạy **thẳng vào bảng vật lý**, không qua bảng dẫn xuất.
 Cưỡng chế đặt ở đúng hai chỗ: `choose_table_schema` (siết bảng + cột, trước khi prompt được dựng)
 và ngay trước `execute_sql` (siết hàng). Các pha phụ nào **dựng schema độc lập**, không đi qua
 `choose_table_schema`, đều phải nhận lại đúng bộ lọc đó: task gợi ý của endpoint rời
-`/chat/recommend_questions` ([llm.py:1051](../backend/apps/chat/task/llm.py#L1051)) và pha sinh biểu
+`/chat/recommend_questions` ([llm.py:1119](../backend/apps/chat/task/llm.py#L1119)) và pha sinh biểu
 đồ. Quên một trong hai là mở lại đúng cái kênh rò rỉ vừa bịt.
 
 Pha gợi ý chạy trong lượt hỏi (§6) là ngoại lệ, và cố ý: nó **dùng lại** `chat_question.db_schema`

@@ -350,21 +350,25 @@ Khác SSE thông thường ở hai điểm: **không có `event:`** (chỉ có `
 | Event | `reasoning_content` |
 |---|---|
 | `answer-result` | luôn rỗng |
-| `sql-result` | **có nội dung** — mô hình suy luận trước khi viết SQL |
+| `sql-result` | thường rỗng — chỉ có nội dung khi model bật suy luận gốc (native reasoning) |
 
-Vì thế các event `sql-result` về thành **hai đợt nối nhau**: đợt đầu chỉ có `reasoning_content`
-(`content` rỗng), đợt sau ngược lại — chỉ có `content` (`reasoning_content` rỗng). Không có event
-hay cờ nào đánh dấu ranh giới giữa hai đợt, và không cần: chỉ việc cộng dồn từng trường riêng ra
-hai chuỗi.
+Prompt sinh SQL yêu cầu mô hình viết vài dòng suy luận văn xuôi **ngay trong `content`**, rồi kết
+thúc bằng khối JSON. Vì vậy với model đang dùng (Qwen tắt thinking), các event `sql-result` thường
+chỉ có `content`. Với model bật suy luận gốc, các event `sql-result` về thành **hai đợt nối nhau**:
+đợt đầu chỉ có `reasoning_content` (`content` rỗng), đợt sau chỉ có `content`. Không có event hay
+cờ nào đánh dấu ranh giới giữa hai đợt, và không cần: chỉ việc cộng dồn từng trường riêng ra hai
+chuỗi.
 
 Bỏ qua hoàn toàn `reasoning_content` là an toàn — nó không chứa thông tin nào mà các event mốc
 phía sau không có. Muốn hiện "bot đang suy nghĩ" thì cộng dồn riêng nó vào một khu vực riêng,
-**đừng trộn vào `content`**.
+**đừng trộn vào `content`**. Đôi khi mô hình viết lạc cả đáp án vào phần suy luận, khi đó
+`content` của cả lượt sinh SQL rỗng; server vẫn lấy được đáp án và các event mốc phía sau về bình
+thường.
 
-⚠ `content` của `sql-result` là **bản thô** mô hình sinh ra: một khối JSON chứa câu SQL kèm vài
-metadata (trong đó có tiêu đề hội thoại). Đừng parse chuỗi này — bản đã bóc sẵn và kiểm duyệt về ở
-event `sql` và `brief` ngay sau đó. Chỉ dùng `content` của `sql-result` khi muốn hiện quá trình
-sinh SQL cho người dùng xem.
+⚠ `content` của `sql-result` là **bản thô** mô hình sinh ra: vài dòng suy luận văn xuôi, rồi một
+khối JSON chứa câu SQL kèm vài metadata (trong đó có tiêu đề hội thoại). Đừng parse chuỗi này — bản
+đã bóc sẵn và kiểm duyệt về ở event `sql` và `brief` ngay sau đó. Chỉ dùng `content` của
+`sql-result` khi muốn hiện quá trình sinh SQL cho người dùng xem.
 
 #### `answer-result` là câu trả lời của Bot
 

@@ -135,17 +135,17 @@ lại harness và kèm số liệu. Chi tiết trong [OPERATIONS.md](OPERATIONS.
 **2. Chú thích trong code là nguồn sự thật về "tại sao".**
 [llm.py](../backend/apps/chat/task/llm.py) và [config.py](../backend/common/core/config.py) có
 chú thích rất dày, nhiều chỗ ghi cả kết quả đo được và cảnh báo *"cố ý giữ nhánh này khi merge từ
-upstream"* (ví dụ [llm.py:107](../backend/apps/chat/task/llm.py#L107)). Trước khi "dọn dẹp" một
+upstream"* (ví dụ [llm.py:132](../backend/apps/chat/task/llm.py#L132)). Trước khi "dọn dẹp" một
 đoạn trông thừa, đọc chú thích của nó — phần lớn là vá lỗi đã đo được.
 
 **3. Mọi chỗ cắt bớt dữ liệu đưa vào prompt đều phải nói cho LLM biết đã cắt.**
 Cắt im lặng thì LLM đếm số dòng nó nhận được rồi báo đó là tổng. Ca đo thật: SQL trả 136 dòng,
 câu trả lời khẳng định "tổng cộng 72 nghị quyết". Cặp `ANSWER_MAX_ROWS` +
-`build_data_scope_note` ([llm.py:79-82](../backend/apps/chat/task/llm.py#L79)) tồn tại vì lý do
+`build_data_scope_note` ([llm.py:86-89](../backend/apps/chat/task/llm.py#L86)) tồn tại vì lý do
 đó và **phải luôn đi cùng nhau**.
 
 ## 6. Đi tiếp
 
 Muốn sửa pha answer → [TEXT2SQL_PIPELINE.md](TEXT2SQL_PIPELINE.md) §5, rồi mở
-[llm.py:708](../backend/apps/chat/task/llm.py#L708) và khối `answer` trong
+[llm.py:764](../backend/apps/chat/task/llm.py#L764) và khối `answer` trong
 [templates/template.yaml:630](../backend/templates/template.yaml#L630).

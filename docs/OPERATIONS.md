@@ -139,7 +139,7 @@ nghĩa, `run_task` bỏ qua bất kể biến này.
 |---|---|---|
 | `LLM_DISABLE_THINKING` | `True` | Tắt pha reasoning. Model như Qwen3 có thể kẹt trong vòng lặp suy luận, đốt hết token mà không xuất `content` nào → pipeline nhận chuỗi rỗng rồi chết |
 | `LLM_DISABLE_THINKING_EXTRA_BODY` | `{"chat_template_kwargs": {"enable_thinking": false}}` | Payload tiêm vào `extra_body`. Chuẩn vLLM/SGLang. API kiểu DashScope cần `{"enable_thinking": false}` — **đổi biến này, đừng sửa code** |
-| `PARSE_REASONING_BLOCK_ENABLED` | `True` | Tách khối `<think>…</think>` khỏi `content` |
+| `PARSE_REASONING_BLOCK_ENABLED` | `True` | Tách khối `<think>…</think>` khỏi `content`. Chỉ có tác dụng khi model tự viết thẻ mà server không bóc trước; prompt hiện không yêu cầu thẻ này nữa (xem bẫy ở §7.4) |
 
 ### 2.6. Embedding và top-K
 
@@ -161,7 +161,7 @@ vector cũ và mới không cùng không gian.
 | Nơi | Giá trị | Ghi chú |
 |---|---|---|
 | `GENERATE_SQL_QUERY_LIMIT_ENABLED` | `True` | Ép LLM thêm `LIMIT` vào SQL |
-| `ANSWER_MAX_ROWS` (**hằng số trong code**, [llm.py:79](../backend/apps/chat/task/llm.py#L79)) | `100` | Trần số dòng nhồi vào prompt answer. Sửa thì **bắt buộc** giữ nguyên cặp với `build_data_scope_note` |
+| `ANSWER_MAX_ROWS` (**hằng số trong code**, [llm.py:86](../backend/apps/chat/task/llm.py#L86)) | `100` | Trần số dòng nhồi vào prompt answer. Sửa thì **bắt buộc** giữ nguyên cặp với `build_data_scope_note` |
 
 ### 2.8. Bảo mật và mạng
 
@@ -485,7 +485,7 @@ Một dòng cho mỗi thao tác, phân biệt bằng cột `operate` (`Operation
 | Cột | Nội dung |
 |---|---|
 | `messages` (JSONB) | **Đây là chỗ có giá trị nhất.** Xem §"hai bản messages" bên dưới |
-| `reasoning_content` | Phần suy luận. Rỗng ở hầu hết bước, **trừ `GENERATE_SQL`**: prompt pha đó yêu cầu model suy luận trong khối `<think>`. `LLM_DISABLE_THINKING` chỉ tắt thinking native của provider, không tắt khối này |
+| `reasoning_content` | Phần suy luận gốc (native) của model; rỗng khi tắt thinking. Prompt `GENERATE_SQL` yêu cầu suy luận văn xuôi **ngay trong câu trả lời**, nên phần đó nằm trong `messages`, không ở đây. Nếu cột này có nội dung mà câu trả lời rỗng thì model đã viết lạc đáp án sang phần suy luận (xem bẫy ở §7.4) |
 | `token_usage` | Số token vào/ra |
 | `local_operation` | `True` = bước không gọi LLM (chọn bảng, lọc thuật ngữ, chạy SQL) |
 | `error` | Bước này có hỏng không |
@@ -619,6 +619,7 @@ kỳ tài liệu, log hay issue nào; nếu cần xoay vòng mật khẩu thì p
 | Pha biểu đồ hỏng **không** giết lượt hỏi | Phát `info: chart failed` rồi đi tiếp; vẫn có `answer` + `finish`. Cố ý không gọi `save_error` vì web UI hiện khối lỗi đỏ với mọi record có `error` khác rỗng |
 | Lỗi giữa stream vẫn là **HTTP 200** | Phải đọc event `error`, không dựa vào status code |
 | Log `model rejected SQL prompt, retry with reduced schema (step …)` | Datasource quá lớn so với context của model; SQLBot đang tự bớt khối schema (TEXT2SQL_PIPELINE.md §8). Thỉnh thoảng thấy thì bình thường, thấy ở mọi lượt thì nên thu hẹp bảng của datasource hoặc dùng model context lớn hơn. Embedding lỗi hoặc tắt sẽ đưa **mọi** bảng vào prompt và dễ chạm trần kể cả ở nấc cuối — khi đó người dùng nhận lỗi "vượt quá context của model kể cả khi đã rút gọn tối đa", không retry |
+| Prompt yêu cầu model viết thẻ `<think>` khi đã tắt thinking → **content rỗng** | Qwen tắt thinking vẫn mở `<think>` theo lời prompt nhưng không đóng; reasoning parser của vLLM bóc thẻ ở server và dồn toàn bộ phần sau, kể cả JSON đáp án, sang `reasoning_content`. Ca thật ds159 (15/10/2026): pha SQL báo `LLM returned empty content`, qua Gateway là `datasource_query_failed`. Prompt sinh SQL vì thế dùng suy luận văn xuôi không bọc thẻ, và pha SQL lấy JSON đáp án từ phần reasoning khi content không có (TEXT2SQL_PIPELINE.md §5.3). Viết prompt mới thì **đừng yêu cầu thẻ suy luận**. Log `SQL answer JSON found only in reasoning_content` nghĩa là lưới an toàn vừa cứu một lượt; thấy thường xuyên thì model đang bỏ qua lời dặn về định dạng |
 | Cắt dòng dữ liệu mà không kèm `build_data_scope_note` → LLM bịa số tổng | Xem [TEXT2SQL_PIPELINE.md §6](TEXT2SQL_PIPELINE.md) |
 | Không có cơ chế hủy | `AbortController` phía client chỉ ngắt kết nối; backend vẫn chạy tới hết và vẫn tính token |
 | Không chạy song song nhiều câu hỏi trên cùng `chat_id` | Xem `API_SPEC.md` §7.4 |
