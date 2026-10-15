@@ -14,6 +14,10 @@ import sqlbot_xpack  # noqa: F401  isort:skip
 from apps.datasource.crud.datasource import _resolve_relations
 
 
+def fk_lines(foreign_keys):
+    return [fk.line for fk in foreign_keys]
+
+
 def t_obj(table_id, name, fields):
     return {"id": table_id, "table_name": name, "schema_table": f"# Table: {name}\n", "fields": fields}
 
@@ -35,7 +39,7 @@ def test_edge_giua_hai_bang_duoc_chon_in_du_dong():
     lost, lines = _resolve_relations([edge(1, "12", 2, "21")], [ORDERS, CUSTOMERS], [1, 2])
 
     assert lost == []
-    assert lines == ["orders.customer_id=customers.id"]
+    assert fk_lines(lines) == ["orders.customer_id=customers.id"]
 
 
 def test_edge_toi_bang_khong_co_trong_all_tables_bi_bo():
@@ -43,7 +47,7 @@ def test_edge_toi_bang_khong_co_trong_all_tables_bi_bo():
     lost, lines = _resolve_relations([edge(1, "12", 2, "21")], [ORDERS], [1])
 
     assert lost == []
-    assert lines == []
+    assert fk_lines(lines) == []
 
 
 def test_edge_toi_cot_bi_loc_khong_in():
@@ -53,7 +57,7 @@ def test_edge_toi_cot_bi_loc_khong_in():
     lost, lines = _resolve_relations([edge(1, "12", 2, "21")], [ORDERS, customers], [1, 2])
 
     assert lost == []
-    assert lines == []
+    assert fk_lines(lines) == []
 
 
 def test_edge_toi_bang_ngoai_top_embedding_keo_bang_vao():
@@ -63,14 +67,15 @@ def test_edge_toi_bang_ngoai_top_embedding_keo_bang_vao():
 
     # giữ thứ tự all_tables
     assert [t["id"] for t in lost] == [2, 3]
-    assert lines == ["order_items.order_id=orders.id", "orders.customer_id=customers.id"]
+    assert fk_lines(lines) == ["order_items.order_id=orders.id", "orders.customer_id=customers.id"]
+    assert [fk.tables for fk in lines] == [("order_items", "orders"), ("orders", "customers")]
 
 
 def test_edge_khong_cham_bang_duoc_chon_bi_bo():
     lost, lines = _resolve_relations([edge(1, "12", 2, "21")], [ORDERS, CUSTOMERS, ITEMS], [3])
 
     assert lost == []
-    assert lines == []
+    assert fk_lines(lines) == []
 
 
 def test_cell_port_kieu_chuoi_khop_nhu_int():
@@ -80,7 +85,7 @@ def test_cell_port_kieu_chuoi_khop_nhu_int():
     lost, lines = _resolve_relations(relations, [ORDERS, CUSTOMERS], [1])
 
     assert [t["id"] for t in lost] == [2]
-    assert lines == ["orders.customer_id=customers.id"]
+    assert fk_lines(lines) == ["orders.customer_id=customers.id"]
 
 
 def test_edge_hong_dinh_dang_bi_bo_qua():
@@ -95,7 +100,7 @@ def test_edge_hong_dinh_dang_bi_bo_qua():
     lost, lines = _resolve_relations(relations, [ORDERS, CUSTOMERS], [1, 2])
 
     assert lost == []
-    assert lines == ["orders.customer_id=customers.id"]
+    assert fk_lines(lines) == ["orders.customer_id=customers.id"]
 
 
 def test_edge_trung_chi_in_mot_lan():
@@ -103,4 +108,4 @@ def test_edge_trung_chi_in_mot_lan():
 
     _, lines = _resolve_relations(relations, [ORDERS, CUSTOMERS], [1, 2])
 
-    assert lines == ["orders.customer_id=customers.id"]
+    assert fk_lines(lines) == ["orders.customer_id=customers.id"]

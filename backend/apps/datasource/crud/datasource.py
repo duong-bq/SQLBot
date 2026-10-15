@@ -1,6 +1,7 @@
 import datetime
 import json
 import uuid
+from dataclasses import replace
 from typing import List, Optional
 
 from fastapi import HTTPException
@@ -11,6 +12,7 @@ from sqlmodel import select
 from apps.ai_model_config.hooks import cleanup_datasource, pin_ds_models, validate_ds_models
 from apps.datasource.crud.permission import get_column_permission_fields, get_row_permission_filters, is_normal_user
 from apps.datasource.embedding.table_embedding import calc_table_embedding
+from apps.datasource.m_schema import MSchema, MSchemaField, MSchemaForeignKey, MSchemaTable
 from apps.datasource.utils.utils import aes_decrypt, aes_encrypt
 from apps.db.constant import DB
 from apps.db.db import get_tables, get_fields, exec_sql, check_connection, get_relations
@@ -1145,13 +1147,14 @@ def _resolve_relations(relations: list, all_tables: list, selected_ids: list) ->
     ``cell``/``port`` được chuẩn hóa về ``int``: đồ thị do backend seed ghi ``cell`` là int, còn
     frontend X6 lưu lại thành chuỗi. Edge hỏng định dạng bị bỏ qua, không ném lỗi.
 
-    Trả về ``(lost_tables, fk_lines)``: bảng ngoài ``selected_ids`` được kéo vào theo quan hệ (giữ
-    thứ tự ``all_tables``) và các dòng ``bang.cot=bang.cot`` (bỏ trùng, giữ thứ tự edge).
+    Trả về ``(lost_tables, foreign_keys)``: bảng ngoài ``selected_ids`` được kéo vào theo quan hệ
+    (giữ thứ tự ``all_tables``) và các ``MSchemaForeignKey`` với dòng ``bang.cot=bang.cot`` (bỏ
+    trùng, giữ thứ tự edge) kèm tên hai bảng — nấc rút gọn prompt cần tên bảng để bỏ FK theo bảng.
     """
     table_by_id = {t.get('id'): t for t in all_tables}
     selected = set(selected_ids)
     lost_ids = set()
-    fk_lines = []
+    foreign_keys = []
     for edge in relations:
         ends = []
         for side in ('source', 'target'):
@@ -1171,16 +1174,17 @@ def _resolve_relations(relations: list, all_tables: list, selected_ids: list) ->
             if table.get('id') not in selected:
                 lost_ids.add(table.get('id'))
         line = '='.join(f"{table.get('table_name')}.{table['fields'][port]}" for table, port in ends)
-        if line not in fk_lines:
-            fk_lines.append(line)
+        if all(fk.line != line for fk in foreign_keys):
+            foreign_keys.append(MSchemaForeignKey(
+                line=line, tables=(ends[0][0].get('table_name'), ends[1][0].get('table_name'))))
     lost_tables = [t for t in all_tables if t.get('id') in lost_ids]
-    return lost_tables, fk_lines
+    return lost_tables, foreign_keys
 
 
-def get_table_schema(session: SessionDep, current_user: CurrentUser, ds: CoreDatasource, question: str,
-                     embedding: bool = True, table_list: list[str] = None,
-                     column_filter: dict[str, set] = None) -> tuple[str, list]:
-    """Dựng M-Schema (chuỗi đưa vào prompt) và danh sách tên bảng từ `core_table`/`core_field`.
+def get_table_m_schema(session: SessionDep, current_user: CurrentUser, ds: CoreDatasource, question: str,
+                       embedding: bool = True, table_list: list[str] = None,
+                       column_filter: dict[str, set] = None) -> tuple[Optional[MSchema], list]:
+    """Dựng M-Schema dạng cấu trúc và danh sách tên bảng từ `core_table`/`core_field`.
 
     Danh sách bảng trả về chính là whitelist mà tầng kiểm tra AST dùng để chặn SQL — nên thu hẹp
     `table_list` ở đây là thu hẹp đồng thời cả prompt lẫn tầng cưỡng chế. So khớp tên bảng EXACT
@@ -1192,36 +1196,31 @@ def get_table_schema(session: SessionDep, current_user: CurrentUser, ds: CoreDat
 
     Phần bổ sung bảng theo table_relation và khối Foreign keys chỉ rút từ tập đã lọc (`all_tables`)
     nên không mở lại bảng/cột ngoài `table_list`, `column_filter` hay đã tắt — xem `_resolve_relations`.
+
+    Datasource không có bảng nào thì trả `(None, [])`; có bảng nhưng lọc hết thì trả M-Schema rỗng
+    (render ra phần đầu `【DB_ID】`) — giữ nguyên hai kết quả khác nhau của bản nối chuỗi cũ.
     """
-    schema_str = ""
     table_objs = get_table_obj_by_ds(session=session, current_user=current_user, ds=ds)
     if len(table_objs) == 0:
-        return schema_str, []
+        return None, []
     db_name = table_objs[0].schema
-    schema_str += f"【DB_ID】 {db_name}\n【Schema】\n"
     tables = []
     all_tables = []  # temp save all tables
-    table_name_list = []
     for obj in table_objs:
         # 如果传入了table_list，则只处理在列表中的表
         if table_list is not None and obj.table.table_name not in table_list:
             continue
 
-        schema_table = ''
         no_schema_types = ["mysql", "es", "sqlite", "hive", "doris", "starrocks"]
-        schema_table += f"# Table: {db_name}.{obj.table.table_name}" if ds.type not in no_schema_types and db_name else f"# Table: {obj.table.table_name}"
+        title = f"{db_name}.{obj.table.table_name}" if ds.type not in no_schema_types and db_name else obj.table.table_name
         table_comment = ''
         if obj.table.custom_comment:
             table_comment = obj.table.custom_comment.strip()
-        if table_comment == '':
-            schema_table += '\n[\n'
-        else:
-            schema_table += f", {table_comment}\n[\n"
 
         printed_fields = {}
+        field_list = []
         if obj.fields:
             allowed_columns = column_filter.get(obj.table.table_name) if column_filter else None
-            field_list = []
             for field in obj.fields:
                 if allowed_columns is not None and field.field_name not in allowed_columns:
                     continue
@@ -1229,48 +1228,53 @@ def get_table_schema(session: SessionDep, current_user: CurrentUser, ds: CoreDat
                 field_comment = ''
                 if field.custom_comment:
                     field_comment = field.custom_comment.strip()
-                if field_comment == '':
-                    field_list.append(f"({field.field_name}:{field.field_type})")
-                else:
-                    field_list.append(f"({field.field_name}:{field.field_type}, {field_comment})")
+                field_list.append(MSchemaField(name=field.field_name, type=field.field_type, comment=field_comment))
             if allowed_columns is not None and not field_list:
                 SQLBotLogUtil.warning(
                     f"[sw_permission] Lọc cột làm bảng '{obj.table.table_name}' không còn field nào "
                     f"trong schema — tên cột trong scope query phía SW có thể lệch với core_field."
                 )
-            schema_table += ",\n".join(field_list)
-        schema_table += '\n]\n'
 
-        t_obj = {"id": obj.table.id, "table_name": obj.table.table_name, "schema_table": schema_table,
-                 "embedding": obj.table.embedding, "fields": printed_fields}
+        m_table = MSchemaTable(name=obj.table.table_name, title=title, comment=table_comment,
+                               fields=tuple(field_list))
+        t_obj = {"id": obj.table.id, "table_name": obj.table.table_name, "schema_table": m_table.render(),
+                 "embedding": obj.table.embedding, "fields": printed_fields, "m_table": m_table}
         tables.append(t_obj)
         all_tables.append(t_obj)
 
     # 如果没有符合过滤条件的表，直接返回
     if not tables:
-        return schema_str, []
+        return MSchema(db_name=db_name), []
 
     # do table embedding
     if embedding and tables and settings.TABLE_EMBEDDING_ENABLED:
         tables = calc_table_embedding(tables, question, ds_id=ds.id)
-    # splice schema
-    if tables:
-        for s in tables:
-            schema_str += s.get('schema_table')
-            table_name_list.append(s.get('table_name'))
+    # calc_table_embedding dựng lại dict chỉ còn vài khoá, nên tra lại bảng cấu trúc theo id
+    m_table_by_id = {t.get('id'): t.get('m_table') for t in all_tables}
+    m_tables = [m_table_by_id[s.get('id')] for s in tables]
 
     # field relation
+    foreign_keys = []
     if tables and ds.table_relation:
         relations = [x for x in ds.table_relation if x.get('shape') == 'edge']
-        lost_tables, fk_lines = _resolve_relations(relations, all_tables, [s.get('id') for s in tables])
-        for s in lost_tables:
-            schema_str += s.get('schema_table')
-            table_name_list.append(s.get('table_name'))
-        if fk_lines:
-            schema_str += '【Foreign keys】\n'
-            schema_str += ''.join(f"{line}\n" for line in fk_lines)
+        lost_tables, foreign_keys = _resolve_relations(relations, all_tables, [s.get('id') for s in tables])
+        m_tables += [replace(s.get('m_table'), pulled=True) for s in lost_tables]
 
-    return schema_str, table_name_list
+    m_schema = MSchema(db_name=db_name, tables=tuple(m_tables), foreign_keys=tuple(foreign_keys))
+    return m_schema, m_schema.table_names
+
+
+def get_table_schema(session: SessionDep, current_user: CurrentUser, ds: CoreDatasource, question: str,
+                     embedding: bool = True, table_list: list[str] = None,
+                     column_filter: dict[str, set] = None) -> tuple[str, list]:
+    """Dựng M-Schema dạng chuỗi đưa vào prompt và danh sách tên bảng (whitelist AST).
+
+    Lớp bọc giữ nguyên chữ ký cũ cho những chỗ chỉ cần chuỗi; quy tắc chọn/lọc bảng nằm ở
+    `get_table_m_schema`.
+    """
+    m_schema, table_name_list = get_table_m_schema(session, current_user, ds, question, embedding=embedding,
+                                                   table_list=table_list, column_filter=column_filter)
+    return (m_schema.render() if m_schema else ""), table_name_list
 
 
 @cache(namespace=CacheNamespace.AUTH_INFO, cacheName=CacheName.DS_ID_LIST, keyExpression="oid")
