@@ -902,6 +902,18 @@ class LLMService:
                         {'content': state.get('text', '').strip(), 'type': 'answer'}).decode() + '\n\n'
                 return
 
+    def collect_answer(self, answer_queue: Optional[queue.Queue], state: Dict[str, Any],
+                       json_result: Dict[str, Any]):
+        """Chờ pha answer xong và ghi ``answer`` vào ``json_result`` (nhánh JSON của `/chat/ask`).
+
+        Dùng lại ``drain_answer_queue`` nhưng bỏ hết event SSE nó phát: nhánh này không có dây SSE,
+        để chuỗi lọt ra thì chúng nằm lẫn trong chunk_list cùng ``json_result``. Answer hỏng thì
+        ``answer`` là ``None`` — lượt vẫn thành công, dữ liệu vẫn có.
+        """
+        for _ in self.drain_answer_queue(answer_queue, state, block=True):
+            pass
+        json_result['answer'] = None if state.get('failed') else state.get('text', '').strip()
+
     def generate_inline_recommend(self, _session: Session):
         """Sinh gợi ý câu hỏi tiếp theo cho CHÍNH lượt hỏi này, chạy trong thread riêng.
 
@@ -1152,6 +1164,11 @@ class LLMService:
                 }
                 for ds in _session.exec(stmt)
             ]
+        if self.chat_question.datasource_ids:
+            # `/chat/ask` kèm danh sách: chỉ được chọn trong danh sách. Lọc ở đây (sau cả hai nhánh
+            # nguồn) để assistant cũng bị giao với tập nó cho phép; giao rỗng rơi vào lỗi bên dưới.
+            _allowed_ids = {str(_id) for _id in self.chat_question.datasource_ids}
+            _ds_list = [_ds for _ds in _ds_list if str(_ds.get('id')) in _allowed_ids]
         if not _ds_list:
             raise SingleMessageError('No available datasource configuration found')
         ignore_auto_select = _ds_list and len(_ds_list) == 1
@@ -1221,6 +1238,12 @@ class LLMService:
             data: dict = _ds_list[0] if ignore_auto_select else ds
 
             if data.get('id') and data.get('id') != 0:
+                if self.chat_question.datasource_ids and str(data['id']) not in {
+                        str(_ds.get('id')) for _ds in _ds_list}:
+                    # LLM trả id ngoài các ứng viên nó được xem: không tin, vì kết quả sẽ đến từ
+                    # datasource người gọi không liệt kê.
+                    raise SingleMessageError(
+                        f"Datasource {data['id']} is not in the given datasource list")
                 _datasource = data['id']
                 _chat = _session.get(Chat, self.record.chat_id)
                 _chat.datasource = _datasource
@@ -2176,6 +2199,9 @@ class LLMService:
             else:
                 self.validate_history_ds(_session)
 
+            if not stream and self.chat_question.extended_response:
+                json_result['datasource'] = {'id': self.ds.id, 'name': self.ds.name}
+
             # check connection
             connected = check_connection(ds=self.ds, trans=None)
             if not connected:
@@ -2191,6 +2217,15 @@ class LLMService:
             # im lặng, đúng loại khó lần nhất. Chốt `finish_step` là dây an toàn thứ hai: người
             # gọi đã nói rõ họ chỉ cần SQL hoặc dữ liệu thì không có gì để định tuyến.
             route = fail_open('disabled')
+
+            # Nhánh JSON của `/chat/ask` xin thêm pha answer / chart bằng hai cờ riêng chứ không bằng
+            # `finish_step` (không diễn đạt được "chart mà không answer"). Chỉ `/ask` đặt cờ, nên
+            # MCP không-stream (cùng `in_chat=False, stream=False`) vẫn đi đúng đường cũ.
+            want_answer = want_chart = False
+            if not in_chat and not stream:
+                want_answer = self.chat_question.include_answer
+                want_chart = self.chat_question.include_chart
+
             if in_chat and finish_step.value > ChatFinishStep.QUERY_DATA.value:
                 route = decide_route(self, _session)
                 if route.forced != 'disabled':
@@ -2227,7 +2262,7 @@ class LLMService:
                 _data = sql_phase.data
                 degraded_reason = sql_phase.degraded_reason
 
-            if finish_step.value <= ChatFinishStep.QUERY_DATA.value:
+            if finish_step.value <= ChatFinishStep.QUERY_DATA.value and not (want_answer or want_chart):
                 if stream:
                     if in_chat:
                         yield 'data:' + orjson.dumps({'type': 'finish'}).decode() + '\n\n'
@@ -2262,7 +2297,7 @@ class LLMService:
             answer_state: Dict[str, Any] = {}
             recommend_queue: Optional[queue.Queue] = None
             recommend_state: Dict[str, Any] = {}
-            if in_chat:
+            if in_chat or want_answer:
                 if degraded_reason:
                     # Lượt này không có dữ liệu mới: trả lời dựa trên lịch sử hội thoại.
                     # Không phát event riêng cho nhánh này: với client, lượt hạ cấp chỉ khác lượt
@@ -2283,14 +2318,17 @@ class LLMService:
                 # domainCode ngoài quyền, phễu bảng rỗng) đều thoát trước điểm này, nên lượt hỏng
                 # hẳn không tốn thêm một lời gọi LLM nào. Lượt hạ cấp thì ngược lại, VẪN đi qua đây:
                 # người dùng vừa hỏi hụt là lúc gợi ý có ích nhất.
-                if settings.CHAT_INLINE_RECOMMEND_ENABLED and self.chat_question.db_schema:
+                if in_chat and settings.CHAT_INLINE_RECOMMEND_ENABLED and self.chat_question.db_schema:
                     recommend_queue = queue.Queue()
                     executor.submit(self.run_recommend_worker, recommend_queue)
 
             # Nhánh hạ cấp không có SQL lẫn dữ liệu nên mọi pha sau answer (biểu đồ, phân tích) đều
             # vô nghĩa — dừng ngay tại đây bất kể finish_step yêu cầu đi xa tới đâu.
-            if degraded_reason or finish_step.value <= ChatFinishStep.GENERATE_ANSWER.value:
-                yield from self.drain_answer_queue(answer_queue, answer_state, block=True)
+            if degraded_reason or (finish_step.value <= ChatFinishStep.GENERATE_ANSWER.value and not want_chart):
+                if want_answer:
+                    self.collect_answer(answer_queue, answer_state, json_result)
+                else:
+                    yield from self.drain_answer_queue(answer_queue, answer_state, block=True)
                 yield from self.drain_recommend_queue(recommend_queue, recommend_state, block=True)
                 if in_chat:
                     yield 'data:' + orjson.dumps({'type': 'finish'}).decode() + '\n\n'
@@ -2340,7 +2378,9 @@ class LLMService:
                 #
                 # Nhánh ngoài app (MCP) vẫn ném như cũ: ở đó biểu đồ là sản phẩm chính chứ không
                 # phải pha phụ, và hợp đồng cũ của nó không có khái niệm "biểu đồ hỏng nhưng vẫn ok".
-                if not in_chat:
+                # Ngoại lệ là `/chat/ask` xin chart (`want_chart`): chart là phần thêm trên dữ liệu
+                # đã có, hỏng thì `chart: null` chứ không giết cả lượt.
+                if not in_chat and not want_chart:
                     raise
                 chart_failed = True
                 traceback.print_exc()
@@ -2376,6 +2416,10 @@ class LLMService:
                 yield from self.drain_answer_queue(answer_queue, answer_state, block=True)
                 yield from self.drain_recommend_queue(recommend_queue, recommend_state, block=True)
                 yield 'data:' + orjson.dumps({'type': 'finish'}).decode() + '\n\n'
+            elif want_chart:
+                # `/chat/ask` chỉ trả JSON: không render ảnh (request_picture), chỉ chờ nốt answer.
+                if want_answer:
+                    self.collect_answer(answer_queue, answer_state, json_result)
             else:
                 # generate picture
                 try:

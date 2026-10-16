@@ -550,6 +550,26 @@ class ChatQuestion(AiModelQuestion):
     # Mã lĩnh vực của lượt hỏi (từ `domainCode` của request, hoặc kế thừa từ record gốc khi
     # /regenerate). Được lưu vào chat_record.domain_code và đưa vào chuỗi sàng quyền SW.
     domain_code: Optional[str] = None
+    # Danh sách datasource ứng viên của `/chat/ask` (đã bỏ trùng). Khác `datasource_id`: đây là tập
+    # để `LLMService.select_datasource` CHỌN MỘT trong đó, không phải datasource đã chốt. None = lượt
+    # không dùng danh sách (mọi đường cũ).
+    datasource_ids: Optional[list[int]] = None
+    # Xin thêm pha answer / pha chart ở nhánh JSON đồng bộ của `/chat/ask`. Chỉ `/ask` đặt hai cờ
+    # này; MCP không bao giờ đặt nên hành vi nhánh `in_chat=False` của MCP giữ nguyên.
+    include_answer: bool = False
+    include_chart: bool = False
+
+    @property
+    def extended_response(self) -> bool:
+        """Lượt này dùng hợp đồng mở rộng của `/chat/ask` (có danh sách hoặc có cờ include_*).
+
+        Chỉ khi đó response mới thêm khoá `datasource`; request `/ask` kiểu cũ nhận đúng hình dạng cũ.
+        """
+        return (
+            self.datasource_ids is not None
+            or self.include_answer
+            or self.include_chart
+        )
 
 
 class ChatMcp(ChatQuestion):
@@ -603,6 +623,22 @@ class ChatQuestionBase(BaseModel):
                                                  'hỏi trên toàn bộ lĩnh vực thì bỏ hẳn trường này, '
                                                  'gửi null/rỗng sẽ bị trả 400',
                                      default=None)
+
+
+class ChatAskQuestion(ChatQuestionBase):
+    """Body riêng của `POST /chat/ask`: ``ChatQuestionBase`` cộng danh sách datasource và hai cờ.
+
+    Tách thành lớp con thay vì thêm vào ``ChatQuestionBase`` để `/chat/question` (SSE) không nhận
+    nhầm các trường này.
+    """
+
+    # Danh sách id datasource (id nội bộ SQLBot) để SQLBot chọn đúng MỘT cái trả lời câu hỏi. Không
+    # dùng chung với `datasource`; xem `resolve_chat_for_ask`.
+    datasource_ids: Optional[list[int]] = Body(
+        description='Danh sách id datasource để SQLBot chọn một; không dùng cùng `datasource`',
+        default=None)
+    include_answer: bool = Body(description='Trả thêm câu trả lời bằng lời (answer)', default=False)
+    include_chart: bool = Body(description='Trả thêm cấu hình biểu đồ (chart)', default=False)
 
 
 class McpQuestion(ChatQuestionBase):

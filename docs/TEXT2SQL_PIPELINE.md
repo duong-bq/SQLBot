@@ -135,6 +135,18 @@ không chờ chart xong.
 |---|---|---|
 | `POST /chat/question` (web + đối tác) | `GENERATE_CHART` khi `GENERATE_CHART_ENABLED=True` (mặc định), ngược lại `GENERATE_ANSWER` — `default_finish_step` ([chat.py:465](../apps/chat/api/chat.py#L465)) | Client cần câu trả lời chữ; biểu đồ là phần thêm, bật/tắt được mà không sửa code |
 | MCP | `QUERY_DATA` ([mcp.py:258](../apps/mcp/mcp.py#L258)) | MCP tự trả markdown/JSON tổng hợp, không tiêu thụ answer |
+| `POST /chat/ask` (JSON đồng bộ) | `QUERY_DATA`, kèm hai cờ `include_answer` / `include_chart` trên `ChatQuestion` | `finish_step` không diễn đạt được "chart mà không answer" (chart xếp sau answer) nên hai cờ quyết định pha nào chạy thêm, xem bên dưới |
+
+**Nhánh `/chat/ask` với cờ.** `run_task` tính `want_answer` / `want_chart` từ hai cờ, chỉ khi `not in_chat and not stream`; MCP cũng ở chế độ này nhưng không đặt cờ nên không đổi hành vi.
+Khi có cờ: không thoát sớm ở `QUERY_DATA`; worker answer khởi động nếu `in_chat or want_answer` (worker gợi ý câu hỏi vẫn chỉ `in_chat`);
+`collect_answer` chờ answer xong và ghi `json_result['answer']` (`None` nếu hỏng), bỏ hết event SSE để chúng không lẫn vào `chunk_list` cùng `json_result`;
+nhánh `elif want_chart` chỉ lưu `json_result['chart']`, không `request_picture`. Lỗi pha chart bị nuốt (→ `chart: null`) khi `want_chart`, vẫn ném như cũ ở nhánh ngoài app khác.
+Answer và chart chạy song song như ở nhánh chat. Hợp đồng ở `api_spec/CHAT_API_SPEC.md` §7.5.
+
+**Danh sách datasource (`datasource_ids`).** Dependency `resolve_chat_for_ask` kiểm danh sách (`validate_ask_datasource_ids`: cùng workspace, dùng được, khử trùng) rồi tạo chat
+không gắn datasource khi từ hai id trở lên (`resolve_chat_id(allow_no_datasource=True)`); một id thì như `datasource`. `select_datasource` lọc ứng viên theo danh sách sau cả hai
+nhánh nguồn và từ chối id LLM trả ngoài các ứng viên đã đưa cho nó (`SingleMessageError`). Response `/ask` có thêm `datasource: {id, name}` chỉ khi `ChatQuestion.extended_response`
+(có danh sách hoặc một cờ), để request kiểu cũ giữ nguyên hình dạng.
 
 `default_finish_step` đọc setting **trong thân hàm**, không đặt làm giá trị mặc định của tham số:
 giá trị mặc định bị Python chốt lại một lần lúc import module, nên test monkeypatch `settings` sẽ
@@ -382,8 +394,9 @@ Con số này quyết định chi phí và độ trễ, và là chỗ tài liệ
 | Lượt hỏi hỏng hẳn (event `error`) | 1 + số lần retry | thoát trước điểm khởi động answer/gợi ý — **không** tốn lượt gọi nào cho pha phụ |
 | Bật cổng định tuyến (§5.1) | +1 | thêm một lượt gọi **ngắn** trước pha SQL, cho mọi câu hỏi |
 | Lượt bị cổng rẽ sang answer | **3** | cổng + answer hạ cấp + gợi ý. Tiết kiệm được lượt sinh SQL **và** lượt sinh chart |
-| Chưa chọn datasource | +1 | thêm một lần LLM chọn datasource ([llm.py:1127](../apps/chat/task/llm.py#L1127)) |
+| Chưa chọn datasource | +1 | thêm một lần LLM chọn datasource ([llm.py:1127](../apps/chat/task/llm.py#L1127)). `/ask` với `datasource_ids` từ hai id trở lên cũng đi nhánh này, chỉ trên tập đã cho |
 | MCP (`finish_step=QUERY_DATA`) | 1 | chỉ sinh SQL |
+| `/ask` với `include_answer` và/hoặc `include_chart` | 1 + số pha bật | sinh SQL + answer và/hoặc chart (song song); không có gợi ý câu hỏi tiếp theo |
 | `/analysis`, `/predict` | 1 mỗi lệnh | chạy trên record đã có, không sinh SQL lại |
 
 Vì answer, chart và gợi ý chạy song song, các lần gọi thêm làm **chi phí token** tăng rõ hơn **độ
@@ -608,7 +621,7 @@ dữ liệu bị cắt mà không báo là công thức sinh ra câu trả lời
 
 ### `template.yaml` — bản đồ khối
 
-File duy nhất: [templates/template.yaml](../templates/template.yaml), một key gốc
+File duy nhất: [backend/templates/template.yaml](../templates/template.yaml), một key gốc
 `template:` với 12 khối con.
 
 | Khối | Dòng | Dùng cho |
@@ -639,7 +652,7 @@ load YAML.
 
 ### Ví dụ SQL theo dialect
 
-[templates/sql_examples/](../templates/sql_examples/) có 12 file YAML, mỗi file cho
+[backend/templates/sql_examples/](../templates/sql_examples/) có 12 file YAML, mỗi file cho
 một loại DB (`PostgreSQL.yaml`, `MySQL.yaml`, `Oracle.yaml`, …). `get_sql_template(db_type)` chọn
 file theo `DB.template_name`, mặc định về PostgreSQL nếu không khớp.
 
@@ -856,5 +869,5 @@ sàng — không có datasource cụ thể thì không có `queries[]` nào đ�
 **Không có biến cấu hình nào** bật/tắt tính năng này. Quyền là quyền: một cái cờ tắt được trong
 `.env` chỉ tạo ra một cách vô hiệu hoá phân quyền mà không ai thấy trong log.
 
-Unit test: [tests/test_sw_permission.py](../tests/test_sw_permission.py) (18 ca,
+Unit test: [backend/tests/test_sw_permission.py](../tests/test_sw_permission.py) (18 ca,
 phủ cả chuỗi sàng lẫn phép viết lại SQL).

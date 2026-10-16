@@ -192,6 +192,7 @@ Cùng dạng body `{"code", "message"}` và cùng trả **`400`** trước khi s
 | `code` | Nguyên nhân |
 |---|---|
 | `invalid_domain_code` | `domainCode` được gửi nhưng rỗng hoặc `null`. Muốn hỏi trên toàn bộ lĩnh vực thì **bỏ hẳn trường này** khỏi request — xem [§6.11](#611-giới-hạn-theo-lĩnh-vực--domaincode) |
+| `invalid_datasource_ids` | Chỉ ở `POST /chat/ask`: `datasource_ids` sai (rỗng, id không tồn tại, thuộc workspace khác, không dùng được, gửi kèm `datasource`, hoặc hội thoại đã gắn datasource ngoài danh sách) — xem [§7.5](#75-danh-sách-datasource-và-pha-tuỳ-chọn) |
 
 ---
 
@@ -851,14 +852,16 @@ chung được giữa các tài khoản: đừng cache theo `chat_id` hay theo d
 Biến thể **đồng bộ** của [§6. `POST /chat/question`](#6-post-chatquestion--hỏi-sse): cùng pipeline
 Text-to-SQL, cùng hợp đồng đầu vào, nhưng trả về **một JSON trọn vẹn** thay vì `text/event-stream`.
 Dùng khi bên gọi là một hệ thống khác (backend-to-backend) chỉ cần SQL và số liệu để tự xử lý tiếp,
-không tiện hoặc không cần tiêu thụ SSE. **Không dùng cho giao diện chat** — endpoint này dừng lại
-trước khi sinh câu trả lời bằng lời, xem [§7.4](#74-khác-biệt-so-với-chatquestion).
+không tiện hoặc không cần tiêu thụ SSE. **Không dùng cho giao diện chat** — mặc định endpoint này dừng
+lại trước khi sinh câu trả lời bằng lời; muốn thêm câu trả lời hoặc biểu đồ thì bật cờ riêng, xem
+[§7.5](#75-danh-sách-datasource-và-pha-tuỳ-chọn) và [§7.4](#74-khác-biệt-so-với-chatquestion).
 
 ### 7.1. Request
 
-Giống hệt request của `/chat/question` — cùng `chat_id`, `question`, `datasource`, `fileUrls`,
-`domainCode`, xem bảng field ở [§6](#6-post-chatquestion--hỏi-sse). Chỉ khác đường dẫn và header
-`Accept`:
+Giống request của `/chat/question` — cùng `chat_id`, `question`, `datasource`, `fileUrls`,
+`domainCode`, xem bảng field ở [§6](#6-post-chatquestion--hỏi-sse) — và thêm ba field tuỳ chọn
+(`datasource_ids`, `include_answer`, `include_chart`, xem [§7.5](#75-danh-sách-datasource-và-pha-tuỳ-chọn)).
+Không gửi ba field này thì request và response y hệt trước đây. Khác đường dẫn và header `Accept`:
 
 ```http
 POST /api/v1/chat/ask
@@ -905,8 +908,10 @@ Capture thật của request ở [§7.1](#71-request):
 | `sql` | SQL đã format — cùng nội dung với event `sql` bên `/chat/question` ([§6.5](#65-nội-dung-câu-trả-lời-và-câu-sql)) |
 | `data.fields`, `data.fields_info`, `data.data` | Đúng schema của event `sql-data` ([§6.6](#66-số-liệu--event-sql-data)), kể cả quy tắc số lớn về dạng chuỗi và khóa `data.limit` xuất hiện khi bị cắt ở 1000 dòng |
 
-Không có `answer`, không có `chart`, không có `recommended_question` — endpoint này không chạy tới
-các pha đó, xem [§7.4](#74-khác-biệt-so-với-chatquestion).
+Mặc định không có `answer`, không có `chart`, không có `recommended_question` — endpoint này không chạy
+tới các pha đó. `answer` và `chart` chỉ xuất hiện khi bật cờ tương ứng, cùng `datasource` khi dùng hợp đồng
+mở rộng ([§7.5](#75-danh-sách-datasource-và-pha-tuỳ-chọn)); `recommended_question` không bao giờ có ở `/ask`
+([§7.4](#74-khác-biệt-so-với-chatquestion)).
 
 ### 7.3. Response lỗi
 
@@ -945,10 +950,10 @@ dạng so với `/chat/question`: bên đó là event SSE `error`, ở `/ask` n�
 | | `/chat/question` | `/chat/ask` |
 |---|---|---|
 | Vận chuyển | `text/event-stream`, nhiều event | Một JSON, một lần |
-| Điểm dừng | Sinh câu trả lời bằng lời (+ biểu đồ nếu bật) | Dừng ngay sau khi chạy SQL — **không** sinh câu trả lời bằng lời, không có biểu đồ, không có gợi ý câu hỏi tiếp theo |
+| Điểm dừng | Sinh câu trả lời bằng lời (+ biểu đồ nếu bật) | Mặc định dừng ngay sau khi chạy SQL — không có câu trả lời bằng lời, không có biểu đồ. Bật `include_answer` / `include_chart` để thêm ([§7.5](#75-danh-sách-datasource-và-pha-tuỳ-chọn)). **Không bao giờ** có gợi ý câu hỏi tiếp theo |
 | Cổng định tuyến (chào hỏi / ngoài phạm vi) | Có, khi hệ thống bật (mặc định tắt) — xem [§6.8](#68-lượt-hỏi-không-có-sql-và-sql-data) | **Luôn tắt** — mọi câu hỏi, kể cả `"hi"`/`"chào bạn"`, đều đi thẳng vào pha sinh SQL |
 | Lỗi giữa chừng | Event `error`, HTTP vẫn 200 ([§6.7](#67--lỗi-giữa-stream-vẫn-là-http-200)) | `HTTP 500`, JSON không vỏ bọc ([§7.3](#73-response-lỗi)) |
-| Đính kèm `.docx` (`fileUrls`) | Nội dung vào ngữ cảnh cả pha sinh SQL lẫn pha trả lời | Chỉ vào ngữ cảnh pha sinh SQL — không có pha trả lời để dùng tới |
+| Đính kèm `.docx` (`fileUrls`) | Nội dung vào ngữ cảnh cả pha sinh SQL lẫn pha trả lời | Vào ngữ cảnh pha sinh SQL; chỉ vào pha trả lời khi bật `include_answer` |
 | `chat_id`, `datasource`, `domainCode` | [§6.1](#6-post-chatquestion--hỏi-sse), [§6.11](#611-giới-hạn-theo-lĩnh-vực--domaincode) | Y hệt |
 
 > **Vì `/ask` luôn tắt cổng định tuyến:** một câu hỏi kiểu xã giao hay ngoài phạm vi dữ liệu (`"chào
@@ -959,6 +964,70 @@ dạng so với `/chat/question`: bên đó là event SSE `error`, ở `/ask` n�
 Quick command trong câu hỏi (`/regenerate`, `/analysis`, `/predict`) được `/ask` nhận diện qua đúng
 bộ phân giải dùng chung với `/chat/question` — nhưng chưa được đo đạc/kiểm thử riêng cho `/ask` ở
 tài liệu này; nếu cần dùng, hãy tự xác minh trước khi phụ thuộc vào đó.
+
+### 7.5. Danh sách datasource và pha tuỳ chọn
+
+Ba field tuỳ chọn thêm vào body của `/chat/ask`. Chỉ `/ask` nhận chúng; `/chat/question` và MCP không đổi.
+
+```http
+POST /api/v1/chat/ask
+X-SQLBOT-TOKEN: Bearer <jwt>
+Content-Type: application/json
+
+{
+  "chat_id": "a3f1c0de-5b7e-4c21-9d4a-0e6f81b2c733",
+  "question": "Tổng thu ngân sách quý 2 là bao nhiêu tỷ đồng?",
+  "datasource_ids": [132, 133],
+  "include_answer": true,
+  "include_chart": false
+}
+```
+
+| Field | Kiểu | Mặc định | Ý nghĩa |
+|---|---|---|---|
+| `datasource_ids` | array\<int\> | không có | Id datasource SQLBot (như `id` ở `/datasource/list`). SQLBot **chọn đúng một** datasource trong danh sách để trả lời; dữ liệu trả về luôn đến từ một datasource duy nhất. Thay cho `datasource`, **không gửi cùng** `datasource` |
+| `include_answer` | bool | `false` | `true` thì thêm `answer`: câu trả lời bằng lời, cùng pha với `/chat/question` |
+| `include_chart` | bool | `false` | `true` thì thêm `chart`: cấu hình biểu đồ dạng JSON ([§6.9](#69-cấu-hình-biểu-đồ)); **không** render ảnh |
+
+Quy tắc của `datasource_ids`:
+
+- Trùng id được gộp, giữ thứ tự. Danh sách rỗng là lỗi (muốn không giới hạn thì bỏ field, không gửi `[]`).
+- Một phần tử thì tương đương `datasource` (không tốn lượt LLM chọn). Từ hai phần tử, SQLBot dùng bước chọn
+  datasource có sẵn (shortlist theo embedding + một lượt LLM) **chỉ trên tập này**; id LLM trả ngoài tập bị từ chối.
+- `chat_id` mới được tạo chưa gắn datasource (khi từ hai id trở lên) và gắn datasource được chọn sau khi chọn xong.
+  `chat_id` đã tồn tại mà gắn datasource nằm ngoài danh sách bị từ chối, vì kết quả sẽ đến từ nguồn người gọi không liệt kê.
+- Mọi id phải thuộc workspace của tài khoản đang đăng nhập và dùng được.
+
+**Response.** Có `datasource_ids` hoặc ít nhất một cờ thì `data` thêm `datasource` (nguồn đã chọn), và `answer`/`chart` theo cờ:
+
+```json
+{
+  "code": 0,
+  "data": {
+    "success": true,
+    "record_id": 912,
+    "sql": "SELECT SUM(\"so_tien_ty_dong\") AS \"total_revenue\" FROM \"public\".\"excel_Sheet1_2f6f49dc06\" WHERE \"quy\" = 'Quý 2' LIMIT 1000",
+    "data": {"fields": ["total_revenue"], "fields_info": [{"name": "total_revenue", "is_numeric": true}], "data": [{"total_revenue": 546.1}]},
+    "datasource": {"id": 132, "name": "Thu ngân sách 2024"},
+    "answer": "Tổng thu ngân sách quý 2 là 546,1 tỷ đồng.",
+    "chart": null
+  },
+  "msg": null
+}
+```
+
+- `datasource: {id, name}` chỉ có ở hợp đồng mở rộng; request kiểu cũ (không field mới nào) nhận đúng hình dạng cũ.
+- `answer` / `chart` chỉ có khi cờ tương ứng bật. Pha đó hỏng thì giá trị là `null`: lượt vẫn thành công, `sql` và số liệu vẫn có.
+- `answer` là chuỗi văn bản; `chart` là đối tượng JSON `{type, title, axis{x, y[], series?}}` như `/chat/question` ([§6.9](#69-cấu-hình-biểu-đồ)).
+- Không có event SSE nào lọt vào response.
+
+**Lỗi.** Lỗi danh sách bị chặn trước khi pipeline chạy, `HTTP 400`, body `{"code": "invalid_datasource_ids", "message": "..."}`
+(cùng dạng với `invalid_domain_code`, [§3.4](#34-bảng-mã-lỗi)). `message` là câu cho người đọc, đừng parse. Trường hợp: gửi cả `datasource` lẫn
+`datasource_ids`; `datasource_ids` rỗng; id không tồn tại, thuộc workspace khác hoặc không dùng được; hội thoại đã gắn datasource ngoài danh sách.
+Câu hỏi không khớp datasource nào trong danh sách (LLM trả "không tìm thấy nguồn phù hợp") là lỗi trong-pipeline `{"success": false, ...}` của [§7.3](#73-response-lỗi).
+
+**Chi phí và độ trễ.** Mỗi pha thêm một lượt LLM; `answer` và `chart` chạy **song song** nên thời gian chỉ lùi theo pha lâu nhất, không cộng dồn
+(đo thật trên model Qwen3.6-35B-A3B: ~14 s không cờ, ~26–29 s với một hoặc cả hai cờ, đã gồm bước chọn datasource). Đặt timeout phía client dư cho trường hợp này.
 
 ---
 

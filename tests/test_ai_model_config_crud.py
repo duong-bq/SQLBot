@@ -61,7 +61,7 @@ def _rows(session, scope, scope_id):
 
 class TestPutWorkspace:
     def test_tao_moi_ma_hoa_khoa(self, session):
-        assert crud.put_workspace_models(session, OID, _blocks()) is True
+        assert crud.put_workspace_models(session, OID, _blocks())[0] is True
         rows = _rows(session, "workspace", OID)
         assert set(rows) == {"llm", "embedding", "rerank"}
         assert rows["llm"].api_key_enc != "sk-llm-000000000001"
@@ -73,13 +73,13 @@ class TestPutWorkspace:
     def test_gui_lai_y_nguyen_thi_khong_doi(self, session):
         crud.put_workspace_models(session, OID, _blocks())
         before = {t: (r.updated_at, r.api_key_enc) for t, r in _rows(session, "workspace", OID).items()}
-        assert crud.put_workspace_models(session, OID, _blocks()) is False
+        assert crud.put_workspace_models(session, OID, _blocks())[0] is False
         after = {t: (r.updated_at, r.api_key_enc) for t, r in _rows(session, "workspace", OID).items()}
         assert before == after
 
     def test_thieu_khoi_thi_xoa_dong(self, session):
         crud.put_workspace_models(session, OID, _blocks())
-        assert crud.put_workspace_models(session, OID, _blocks(rerank=None)) is True
+        assert crud.put_workspace_models(session, OID, _blocks(rerank=None))[0] is True
         assert set(_rows(session, "workspace", OID)) == {"llm", "embedding"}
 
     def test_doi_model_thi_xoa_dim_doi_khoa_thi_giu(self, session):
@@ -97,7 +97,7 @@ class TestPutWorkspace:
         crud.put_workspace_models(session, OID, _blocks())
         _rows(session, "workspace", OID)["llm"].api_key_enc = "rác"
         session.flush()
-        assert crud.put_workspace_models(session, OID, _blocks()) is True
+        assert crud.put_workspace_models(session, OID, _blocks())[0] is True
         assert sqlbot_aes_decrypt(_rows(session, "workspace", OID)["llm"].api_key_enc) == "sk-llm-000000000001"
 
     def test_secret_key_khong_co_dinh_thi_503(self, session, monkeypatch):
@@ -149,12 +149,105 @@ class TestPinDatasource:
         crud.pin_datasource_models(session, 10, OID, _blocks(rerank=None, emb=None, host="https://gw.local:443"))
         assert _rows(session, "datasource", 10)["llm"].origin == "custom"
 
-    def test_doi_workspace_khong_dung_datasource(self, session):
+
+
+class TestDatasourceDiTheoWorkspace:
+    """Dòng datasource ``origin=workspace`` loại llm/rerank đổi theo workspace; còn lại đứng yên."""
+
+    def _setup(self, session):
         crud.put_workspace_models(session, OID, _blocks())
         crud.pin_datasource_models(session, 10, OID, parse_model_set(None))
-        crud.put_workspace_models(session, OID, _blocks(model_suffix="2", rerank=None))
-        ds = _rows(session, "datasource", 10)
-        assert ds["llm"].model == "mc-l1" and "rerank" in ds
+        custom = _blocks(emb=None, rerank=None, llm="sk-custom-0000009999", model_suffix="9")
+        crud.pin_datasource_models(session, 11, OID, custom)
+
+    def test_doi_llm_rerank_thi_dong_di_theo_doi_theo(self, session):
+        self._setup(session)
+        changed, synced = crud.put_workspace_models(
+            session, OID, _blocks(llm="sk-llm-000000000002", rerank="sk-rr-0000000000002",
+                                  model_suffix="2")
+        )
+        assert changed is True and synced == 3  # ds 10: llm, rerank; ds 11: rerank
+        ws = _rows(session, "workspace", OID)
+        ds10 = _rows(session, "datasource", 10)
+        for t in ("llm", "rerank"):
+            assert ds10[t].origin == "workspace"
+            assert (ds10[t].base_url, ds10[t].model, ds10[t].api_key_enc) == (
+                ws[t].base_url, ws[t].model, ws[t].api_key_enc)
+        assert ds10["llm"].model == "mc-l2"
+        assert sqlbot_aes_decrypt(ds10["llm"].api_key_enc) == "sk-llm-000000000002"
+        assert _rows(session, "datasource", 11)["rerank"].model == "mc-r2"
+
+    def test_dong_tuy_chinh_va_embedding_khong_doi(self, session):
+        self._setup(session)
+        embedding_before = _rows(session, "datasource", 10)["embedding"].model
+        crud.put_workspace_models(session, OID, _blocks(model_suffix="2"))
+        ds10, ds11 = _rows(session, "datasource", 10), _rows(session, "datasource", 11)
+        assert ds10["embedding"].model == embedding_before == "mc-e1"
+        assert ds10["embedding"].origin == "workspace"
+        assert ds11["llm"].origin == "custom" and ds11["llm"].model == "mc-l9"
+        assert sqlbot_aes_decrypt(ds11["llm"].api_key_enc) == "sk-custom-0000009999"
+
+    def test_updated_at_duoc_bump_de_cache_giai_ma_vo_hieu(self, session):
+        self._setup(session)
+        before = _rows(session, "datasource", 10)["llm"].updated_at
+        crud.put_workspace_models(session, OID, _blocks(llm="sk-llm-000000000002"))
+        assert _rows(session, "datasource", 10)["llm"].updated_at > before
+
+    def test_doi_khoa_thoi_cung_dong_bo(self, session):
+        self._setup(session)
+        crud.put_workspace_models(session, OID, _blocks(llm="sk-llm-000000000002"))
+        llm = _rows(session, "datasource", 10)["llm"]
+        assert llm.model == "mc-l1"
+        assert sqlbot_aes_decrypt(llm.api_key_enc) == "sk-llm-000000000002"
+
+    def test_gui_lai_y_nguyen_thi_khong_ghi_gi(self, session):
+        self._setup(session)
+        before = {t: r.updated_at for t, r in _rows(session, "datasource", 10).items()}
+        assert crud.put_workspace_models(session, OID, _blocks()) == (False, 0)
+        assert before == {t: r.updated_at for t, r in _rows(session, "datasource", 10).items()}
+
+    def test_put_hoi_tu_sua_dong_lech_khi_workspace_khong_doi(self, session):
+        self._setup(session)
+        row = _rows(session, "datasource", 10)["llm"]
+        row.model = "mc-lech"
+        session.flush()
+        changed, synced = crud.put_workspace_models(session, OID, _blocks())
+        assert (changed, synced) == (False, 1)
+        assert _rows(session, "datasource", 10)["llm"].model == "mc-l1"
+
+    def test_thieu_khoi_thi_xoa_dong_di_theo(self, session):
+        self._setup(session)
+        changed, synced = crud.put_workspace_models(session, OID, _blocks(rerank=None))
+        assert changed is True and synced == 2  # ds 10 và ds 11 đều mất dòng rerank
+        assert "rerank" not in _rows(session, "datasource", 10)
+        assert "rerank" not in _rows(session, "datasource", 11)
+        assert _rows(session, "datasource", 10)["llm"].origin == "workspace"
+
+    def test_khong_dung_workspace_khac(self, session):
+        self._setup(session)
+        crud.put_workspace_models(session, 2, _blocks(model_suffix="7"))
+        crud.pin_datasource_models(session, 20, 2, parse_model_set(None))
+        crud.put_workspace_models(session, 2, _blocks(model_suffix="8"))
+        assert _rows(session, "datasource", 10)["llm"].model == "mc-l1"
+        assert _rows(session, "datasource", 20)["llm"].model == "mc-l8"
+
+
+class TestLockWorkspace:
+    def test_phat_ra_for_update_tren_postgres(self):
+        from sqlalchemy.dialects import postgresql
+        from apps.system.models.system_model import WorkspaceModel
+
+        stmt = crud.select(WorkspaceModel.id).where(WorkspaceModel.id == OID).with_for_update()
+        assert "FOR UPDATE" in str(stmt.compile(dialect=postgresql.dialect()))
+
+    def test_chay_duoc_khi_workspace_ton_tai_hoac_khong(self):
+        from apps.system.models.system_model import WorkspaceModel
+
+        engine = create_engine("sqlite://")
+        WorkspaceModel.__table__.create(engine)
+        with Session(engine) as s:
+            crud.lock_workspace(s, OID)  # không có dòng: không lỗi
+        engine.dispose()
 
 
 def test_delete_scope_chi_xoa_dung_pham_vi(session):

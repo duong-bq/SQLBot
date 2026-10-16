@@ -10,6 +10,7 @@ from sqlmodel import Session
 from apps.ai_model_config.crud import (
     check_custom_hosts,
     delete_scope,
+    lock_workspace,
     pin_datasource_models,
 )
 from apps.ai_model_config.errors import ModelConfigError
@@ -34,6 +35,7 @@ def validate_ds_models(session: Session, oid: int, raw: Any) -> ModelSetIn:
 def pin_ds_models(session: Session, ds_id: int, oid: int, model_set: ModelSetIn) -> None:
     """Chốt cấu hình model cho datasource vừa flush, trước commit; xem ``pin_datasource_models``."""
     try:
+        lock_workspace(session, oid)
         pin_datasource_models(session, ds_id, oid, model_set)
     except ModelConfigError as exc:
         raise exc.to_http() from None

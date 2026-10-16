@@ -944,7 +944,8 @@ def create_chat(session: SessionDep, current_user: CurrentUser, create_chat_obj:
 
 
 def resolve_chat_id(session: SessionDep, current_user: CurrentUser, chat_id: Union[int, str],
-                    datasource_id: Optional[int] = None) -> int:
+                    datasource_id: Optional[int] = None,
+                    allow_no_datasource: bool = False) -> int:
     """Quy ``chat_id`` client gửi lên về id nội bộ (int) của bảng chat, tạo hội thoại nếu chưa có.
 
     Hai nguồn gọi có hai kiểu chat_id khác nhau:
@@ -962,6 +963,10 @@ def resolve_chat_id(session: SessionDep, current_user: CurrentUser, chat_id: Uni
     trùng với hội thoại của người khác sẽ lọt xuống nhánh tạo mới rồi chết vì vi phạm UNIQUE. Trả
     về id thật để decorator ``require_permissions(type='chat')`` từ chối đúng bản chất — không có
     quyền, chứ không phải lỗi hệ thống.
+
+    ``allow_no_datasource``: nhánh danh sách của `/chat/ask` — hội thoại mới được tạo KHÔNG gắn
+    datasource, ``LLMService.select_datasource`` sẽ chọn một cái trong danh sách khi chạy. Người
+    gọi tự kiểm danh sách (``validate_ask_datasource_ids``) trước; hàm này không biết danh sách.
     """
     # Chuỗi toàn chữ số vẫn hiểu là id nội bộ: client JS hay gửi số dưới dạng string, còn UUID thì
     # không bao giờ toàn chữ số nên không sợ nhập nhằng.
@@ -976,19 +981,21 @@ def resolve_chat_id(session: SessionDep, current_user: CurrentUser, chat_id: Uni
     if chat:
         return chat.id
 
-    if not datasource_id:
+    if not datasource_id and not allow_no_datasource:
         raise Exception(
             f"Chat with id {external_id} does not exist. Provide 'datasource' in the request body "
             f"so it can be created automatically."
         )
 
-    ds = session.get(CoreDatasource, datasource_id)
-    if not ds:
-        raise Exception(f"Datasource with id {datasource_id} not found")
-    if ds.oid != current_user.oid:
-        raise Exception(f"Datasource with id {datasource_id} does not belong to current workspace")
-    if not is_ds_usable(ds):
-        raise Exception(f"Datasource with id {datasource_id} is not ready (status={ds.status})")
+    ds = None
+    if datasource_id:
+        ds = session.get(CoreDatasource, datasource_id)
+        if not ds:
+            raise Exception(f"Datasource with id {datasource_id} not found")
+        if ds.oid != current_user.oid:
+            raise Exception(f"Datasource with id {datasource_id} does not belong to current workspace")
+        if not is_ds_usable(ds):
+            raise Exception(f"Datasource with id {datasource_id} is not ready (status={ds.status})")
 
     now = datetime.datetime.now()
     chat = Chat(
@@ -999,7 +1006,9 @@ def resolve_chat_id(session: SessionDep, current_user: CurrentUser, chat_id: Uni
         brief=now.strftime("%Y-%m-%d %H:%M:%S"),
         chat_type='chat',
         datasource=datasource_id,
-        engine_type=ds.type_name,
+        # Hội thoại chưa có datasource thì engine_type để rỗng, như `create_chat` khi không gắn
+        # datasource; `select_datasource` điền lại khi chọn xong.
+        engine_type=ds.type_name if ds else '',
         origin=0,
         brief_generate=False,
     )
@@ -1017,6 +1026,27 @@ def resolve_chat_id(session: SessionDep, current_user: CurrentUser, chat_id: Uni
     session.refresh(chat)
 
     return chat.id
+
+
+def validate_ask_datasource_ids(session: SessionDep, current_user: CurrentUser,
+                                datasource_ids: List[int]) -> List[int]:
+    """Kiểm danh sách datasource của `/chat/ask` và trả về bản đã bỏ trùng (giữ thứ tự).
+
+    Mọi id phải tồn tại, thuộc workspace của user và dùng được. Một id không đạt thì cả request
+    lỗi, nêu id đó: bỏ qua lặng lẽ sẽ để SQLBot chọn trong một tập khác tập người gọi tưởng.
+
+    Ném ``ValueError`` mang thông điệp; lớp API đổi sang HTTP 400.
+    """
+    unique_ids = list(dict.fromkeys(datasource_ids))
+    for ds_id in unique_ids:
+        ds = session.get(CoreDatasource, ds_id)
+        if not ds:
+            raise ValueError(f"Datasource with id {ds_id} not found")
+        if ds.oid != current_user.oid:
+            raise ValueError(f"Datasource with id {ds_id} does not belong to current workspace")
+        if not is_ds_usable(ds):
+            raise ValueError(f"Datasource with id {ds_id} is not ready (status={ds.status})")
+    return unique_ids
 
 
 def save_question(session: SessionDep, current_user: CurrentUser, question: ChatQuestion) -> ChatRecord:
