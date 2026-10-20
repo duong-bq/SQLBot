@@ -107,28 +107,46 @@ def test_form_queries_rong_thu_hoi_het_quyen(db_session):
     assert get_user_permissions(db_session, "u1") == []
 
 
-def test_upsert_ghi_de_dung_form_cu(db_session):
+def test_upsert_ghi_de_dung_dong_cu_khi_cung_bang(db_session):
     replace_user_permissions(
         db_session, user_id="u1", full_name="Tên cũ", is_admin=False,
-        form_queries=_forms(("f1", "t_old")), sync_version=100,
+        form_queries=_forms(("f1", "t1")), sync_version=100,
     )
     db_session.commit()
     before = get_user_permissions(db_session, "u1")[0]
     replace_user_permissions(
         db_session, user_id="u1", full_name="Tên mới", is_admin=True,
-        form_queries=_forms(("f1", "t_new")), sync_version=200,
+        form_queries=_forms(("f1", "t1")), sync_version=200,
     )
     db_session.commit()
     rows = get_user_permissions(db_session, "u1")
     assert len(rows) == 1
     row = rows[0]
-    # giữ nguyên dòng cũ (UPDATE, không DELETE + INSERT) nên id và created_at không đổi
+    # khoá dòng là (user_id, database_table_name): cùng bảng thì UPDATE, id và created_at không đổi
     assert row.id == before.id
     assert row.created_at == before.created_at
-    assert row.database_table_name == "t_new"
     assert row.sync_version == 200
     assert row.full_name == "Tên mới"
     assert row.is_admin is True
+
+
+def test_doi_ten_bang_xoa_dong_cu_va_tao_dong_moi(db_session):
+    replace_user_permissions(
+        db_session, user_id="u1", full_name=None, is_admin=False,
+        form_queries=_forms(("f1", "t_old")), sync_version=100,
+    )
+    db_session.commit()
+    old_id = get_user_permissions(db_session, "u1")[0].id
+    upserted, deleted = replace_user_permissions(
+        db_session, user_id="u1", full_name=None, is_admin=False,
+        form_queries=_forms(("f1", "t_new")), sync_version=200,
+    )
+    db_session.commit()
+    rows = get_user_permissions(db_session, "u1")
+    # cùng form_uuid nhưng khác bảng là một dòng quyền khác: bảng cũ bị thu hồi, bảng mới được cấp
+    assert (upserted, deleted) == (1, 1)
+    assert [row.database_table_name for row in rows] == ["t_new"]
+    assert rows[0].id != old_id
 
 
 def test_upsert_cap_nhat_queries_khac(db_session):
