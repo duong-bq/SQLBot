@@ -28,7 +28,7 @@ mạng) sẽ dẫn bạn đi sai ở đúng sáu chỗ này:
 | Phân quyền dữ liệu | Row/column permission cấu hình tay trên UI, nhờ LLM viết lại điều kiện lọc | Thêm một lớp **độc lập**: quyền bảng/cột/hàng đồng bộ từ hệ SW, cưỡng chế **tất định** bằng `sqlglot` |
 
 Hệ quả cụ thể: `ChatFinishStep` đã bị **đánh số lại** để chèn `GENERATE_ANSWER` vào giữa
-`QUERY_DATA` và `GENERATE_CHART`. Xem [chat_model.py:57](../backend/apps/chat/models/chat_model.py#L57).
+`QUERY_DATA` và `GENERATE_CHART`. Xem [chat_model.py:60](../backend/apps/chat/models/chat_model.py#L60).
 
 ## 3. Trạng thái hiện tại
 

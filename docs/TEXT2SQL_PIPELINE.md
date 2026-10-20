@@ -121,7 +121,7 @@ kết quả đẩy qua queue để route async đọc ra. Đó là lý do trong 
 GENERATE_SQL(1)  <  QUERY_DATA(2)  <  GENERATE_ANSWER(3)  <  GENERATE_CHART(4)
 ```
 
-Định nghĩa: [chat_model.py:57](../backend/apps/chat/models/chat_model.py#L57).
+Định nghĩa: [chat_model.py:60](../backend/apps/chat/models/chat_model.py#L60).
 
 **Giá trị số chính là thứ tự pha.** Mọi chốt trong `run_task` so sánh `finish_step.value <= X`, nên
 chèn một pha mới **bắt buộc phải đánh số lại** cho đúng thứ tự chạy. Giá trị chỉ tồn tại trong
@@ -278,7 +278,7 @@ lượt hỏi-đáp cũ, cộng thêm **danh sách tên bảng** (không phải 
 datasource ("có bao nhiêu bảng") gần như luôn làm pha SQL gãy, trong khi đáp án nằm sẵn trong schema.
 
 System prompt fallback tách hẳn khỏi system prompt answer thường
-([chat_model.py:460](../backend/apps/chat/models/chat_model.py#L460)): prompt chính bắt buộc "chỉ
+([chat_model.py:489](../backend/apps/chat/models/chat_model.py#L489)): prompt chính bắt buộc "chỉ
 dùng số trong `<data>`", mà nhánh này không có `<data>` nào.
 
 **Hai biến thể giọng kể — `fallback_kind`.** Cùng một nhánh hạ cấp phục vụ hai tình huống khác hẳn
@@ -339,7 +339,7 @@ Bốn thứ hoạt động như một khối, sửa một cái mà quên cái ki
 3. **Vị trí trong prompt**: `data_scope` đặt **sau** `<data>`, `answer_history` đặt **đầu** prompt.
    Đứng cuối thì trọng số cao nhất khi LLM quyết lấy con số tổng từ đâu; đặt lịch sử (chứa số liệu
    cũ) sau `<data-scope>` là cướp mất chính cái chốt đó. Xem
-   [chat_model.py:447](../backend/apps/chat/models/chat_model.py#L447).
+   [chat_model.py:476](../backend/apps/chat/models/chat_model.py#L476).
 4. **Rule trong `answer.system`** ([template.yaml:630](../backend/templates/template.yaml#L630)) —
    cấm bịa, và quy tắc lấy tổng từ `<data-scope>`.
 
@@ -564,7 +564,7 @@ Human    : sql.generate_rules  (rule + ví dụ theo dialect)
 AI       : "Tôi đã nắm rõ tất cả quy tắc…"        ← ack cứng, tiếng Việt
 Human    : sql.generate_basic_info  (engine + M-Schema + sample data)
 AI       : "Tôi đã xác nhận thông tin cơ sở dữ liệu…"
-[Human   : custom_prompt]      + AI ack     (chỉ khi có, cần license xpack)
+[Human   : quy tắc bổ sung]    + AI ack     (SQL Playbook từ Gateway, không thì custom_prompt xpack)
 [Human   : terminologies]      + AI ack     (chỉ khi RAG tìm được)
 [Human   : data_training]      + AI ack     (chỉ khi RAG tìm được)
 … lịch sử hội thoại các lượt trước …
@@ -600,7 +600,7 @@ Lịch sử cho pha **answer** thì lấy từ `chat_record` qua `get_recent_qa_
 `POST /chat/question` nhận thêm `fileUrls` (danh sách presigned URL của các `.docx`). Các file được
 tải và trích text **ngay trong request**, trước khi pipeline chạy
 ([chat.py:549](../backend/apps/chat/api/chat.py#L549)), rồi ghép vào **trước** câu hỏi qua
-`question_for_prompt` ([chat_model.py:333](../backend/apps/chat/models/chat_model.py#L333)):
+`question_for_prompt` ([chat_model.py:341](../backend/apps/chat/models/chat_model.py#L341)):
 
 ```
 <attached-document filename="bao-cao.docx">
@@ -680,19 +680,47 @@ File duy nhất: [backend/templates/template.yaml](../backend/templates/template
 | `guess` | 563 | Gợi ý câu hỏi tiếp theo |
 | `analysis` | 597 | Lệnh `/analysis` |
 | **`answer`** | **630** | **Pha trả lời — `system` / `user` / `fallback_system` / `fallback_user` / `fallback_variants`** |
-| `route` | 794 | Cổng định tuyến câu hỏi (§5.1) — `system` / `user` |
-| `predict` | 850 | Lệnh `/predict` |
-| `datasource` | 892 | LLM tự chọn datasource |
-| `permissions` | 912 | Sinh điều kiện lọc theo row-permission |
-| `dynamic_sql` | 980 | Nhánh assistant với datasource động |
+| `route` | 786 | Cổng định tuyến câu hỏi (§5.1) — `system` / `user` |
+| `predict` | 842 | Lệnh `/predict` |
+| `datasource` | 884 | LLM tự chọn datasource |
+| `permissions` | 904 | Sinh điều kiện lọc theo row-permission |
+| `dynamic_sql` | 972 | Nhánh assistant với datasource động |
 
 Nạp bằng `apps/template/template.py`, có `@cache` — **sửa file rồi phải restart process**, hoặc gọi
 `reload_all_templates()`.
 
+### Prompt người dùng sửa được qua Gateway
+
+Hai phần prompt cho người dùng sửa theo kho, qua cơ chế prompt của AI Gateway (thành phần
+`datasource-query`). Gateway resolve bộ prompt theo kho của datasource và gửi kèm body `/chat/ask`
+dưới khoá `prompts`; SQLBot tra theo `name`
+([gateway_prompts.py](../backend/apps/chat/utils/gateway_prompts.py)) và không tự gọi Gateway. Web UI
+và MCP không gửi `prompts`, nên luôn chạy bằng bản mặc định.
+
+| Prompt | Chỗ chèn | Thứ tự chọn nội dung |
+|---|---|---|
+| `[SQLBot] SQL Playbook` | Tin nhắn "quy tắc bổ sung" của pha SQL, cùng vị trí khe `custom_prompt` của xpack (§10) | Playbook → `custom_prompt` xpack → bỏ cặp tin nhắn |
+| `[SQLBot] Answer Persona` | Khối `<persona>` thay câu vai trò ở đầu `<Instruction>` của `answer.system` và `answer.fallback_system` | Persona từ Gateway → `templates/prompts/answer_persona.md` |
+
+- **Bản mặc định là một nguồn duy nhất**: [backend/templates/prompts/](../backend/templates/prompts/)
+  gồm hai file nội dung và manifest `prompts.json`. Công cụ `service_prompts.py sync` của Gateway đẩy
+  đúng hai file đó thành v0, nên sửa file thì phải sync lại.
+- **Khối `<!-- ... -->` bị bỏ trước khi dùng.** Gateway không cho lưu prompt rỗng, nên v0 của SQL
+  Playbook chỉ là một khối chú thích hướng dẫn; bỏ chú thích xong nó rỗng và pha SQL y như khi không
+  có playbook.
+- **Quy tắc cứng thắng.** Bốn quy tắc giọng văn (ngôn ngữ, trả lời thẳng ở câu đầu, nêu điểm đáng
+  chú ý, 3–5 câu) đã chuyển từ `<Rules>` sang persona mặc định, nên người dùng sửa được. Phần còn
+  lại của `<Rules>` (chống bịa số, `<data-scope>`, văn bản thuần, …) giữ nguyên, kèm một quy tắc:
+  persona mâu thuẫn với `<Rules>` thì theo `<Rules>`. Câu dẫn của khe SQL cũng nói rõ quy tắc người
+  dùng không thay được `<Rules>`, định dạng đầu ra hay giới hạn bảo mật.
+- Nội dung người dùng đi vào template dưới dạng **giá trị** của `format()`, nên không cần escape
+  `{}` (khác quy tắc escape bên dưới, vốn chỉ áp cho chữ viết thẳng trong `template.yaml`).
+- Chỉ log `name` và `version_ref`; gửi `prompts` mà thiếu tên thì ghi một dòng cảnh báo.
+
 ### Quy tắc escape `{{ }}`
 
 Prompt render bằng `str.format()` của Python (xem
-[chat_model.py:379](../backend/apps/chat/models/chat_model.py#L379) trở đi), **không phải Jinja**.
+[chat_model.py:387](../backend/apps/chat/models/chat_model.py#L387) trở đi), **không phải Jinja**.
 Hệ quả: mọi dấu `{` `}` muốn xuất hiện nguyên văn trong prompt — ví dụ JSON mẫu trong phần hướng
 dẫn output — phải viết thành `{{` `}}`. Quên escape thì lỗi `KeyError` lúc runtime, không phải lúc
 load YAML.

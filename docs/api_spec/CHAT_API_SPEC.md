@@ -864,8 +864,9 @@ lại trước khi sinh câu trả lời bằng lời; muốn thêm câu trả l
 
 Giống request của `/chat/question` — cùng `chat_id`, `question`, `datasource`, `fileUrls`,
 `domainCode`, xem bảng field ở [§6](#6-post-chatquestion--hỏi-sse) — và thêm ba field tuỳ chọn
-(`datasource_ids`, `include_answer`, `include_chart`, xem [§7.5](#75-danh-sách-datasource-và-pha-tuỳ-chọn)).
-Không gửi ba field này thì request và response y hệt trước đây. Khác đường dẫn và header `Accept`:
+(`datasource_ids`, `include_answer`, `include_chart`, xem [§7.5](#75-danh-sách-datasource-và-pha-tuỳ-chọn)),
+cộng `prompts` do AI Gateway gửi ([§7.6](#76-prompt-tuỳ-chỉnh--prompts)).
+Không gửi các field này thì request và response y hệt trước đây. Khác đường dẫn và header `Accept`:
 
 ```http
 POST /api/v1/chat/ask
@@ -1013,8 +1014,41 @@ Quy tắc của `datasource_ids`:
     "sql": "SELECT SUM(\"so_tien_ty_dong\") AS \"total_revenue\" FROM \"public\".\"excel_Sheet1_2f6f49dc06\" WHERE \"quy\" = 'Quý 2' LIMIT 1000",
     "data": {"fields": ["total_revenue"], "fields_info": [{"name": "total_revenue", "is_numeric": true}], "data": [{"total_revenue": 546.1}]},
     "datasource": {"id": 132, "name": "Thu ngân sách 2024"},
-    "answer": "Tổng thu ngân sách quý 2 là 546,1 tỷ đồng.",
-    "chart": null
+    "answer": "Tổng thu ngân sách quý 2 là 546,1 tỷ đồng."
+  },
+  "msg": null
+}
+```
+
+Response khi `include_chart: true` (capture thật 12/10/2026, câu hỏi "Thu ngân sách theo từng quý (tổng các khoản)", không bật `include_answer`
+nên không có `answer`; số làm tròn một chữ số thập phân):
+
+```json
+{
+  "code": 0,
+  "data": {
+    "success": true,
+    "record_id": 913,
+    "sql": "SELECT \"t1\".\"quy\" AS \"quarter\", SUM(\"t1\".\"so_tien_ty_dong\") AS \"total_revenue\" FROM \"public\".\"excel_Sheet1_2f6f49dc06\" \"t1\" GROUP BY \"t1\".\"quy\" ORDER BY \"t1\".\"quy\" LIMIT 1000",
+    "data": {
+      "fields": ["quarter", "total_revenue"],
+      "fields_info": [{"name": "quarter", "is_numeric": false}, {"name": "total_revenue", "is_numeric": true}],
+      "data": [
+        {"quarter": "Quý 1", "total_revenue": 476.5},
+        {"quarter": "Quý 2", "total_revenue": 546.1},
+        {"quarter": "Quý 3", "total_revenue": 522.9},
+        {"quarter": "Quý 4", "total_revenue": 618.0}
+      ]
+    },
+    "datasource": {"id": 132, "name": "Thu ngân sách 2024"},
+    "chart": {
+      "type": "column",
+      "title": "Thu ngân sách theo từng quý",
+      "axis": {
+        "x": {"name": "Quý", "value": "quarter"},
+        "y": [{"name": "Tổng thu ngân sách", "value": "total_revenue"}]
+      }
+    }
   },
   "msg": null
 }
@@ -1022,7 +1056,14 @@ Quy tắc của `datasource_ids`:
 
 - `datasource: {id, name}` chỉ có ở hợp đồng mở rộng; request kiểu cũ (không field mới nào) nhận đúng hình dạng cũ.
 - `answer` / `chart` chỉ có khi cờ tương ứng bật. Pha đó hỏng thì giá trị là `null`: lượt vẫn thành công, `sql` và số liệu vẫn có.
-- `answer` là chuỗi văn bản; `chart` là đối tượng JSON `{type, title, axis{x, y[], series?}}` như `/chat/question` ([§6.9](#69-cấu-hình-biểu-đồ)).
+- `answer` là chuỗi văn bản.
+- `chart` là **cùng cấu hình** với event `chart` của `/chat/question` (cùng hàm sinh và chuẩn hoá `check_save_chart`), nên năm loại
+  `table`, `column`, `bar`, `line`, `pie`, các trường `axis.x`/`axis.y`, `series`, `multi-quota` và quy tắc client **đúng như
+  [§6.9.2](#692-năm-loại-biểu-đồ)–[§6.9.3](#693-hai-trường-tùy-chọn--series-và-multi-quota)**. Khác biệt duy nhất: ở `/ask` `chart` là
+  **object JSON** nằm thẳng trong `data`, không phải chuỗi JSON đã escape như `content` của SSE, nên không cần `JSON.parse` thêm. Cũng như SSE,
+  cấu hình **không kèm số liệu**; ghép với `data.fields` / `data.data` bằng tên cột (mọi `value` đã chuẩn hoá về chữ thường), không có ảnh.
+  Tóm tắt: `table` dùng `columns` và không có `axis`; `column`/`bar`/`line` dùng `axis.x` + `axis.y` (mảng, đôi khi về object đơn, nên chuẩn hoá
+  về mảng); `pie` không có `x`, `y` là object và luôn có `series`.
 - Không có event SSE nào lọt vào response.
 
 **Lỗi.** Lỗi danh sách bị chặn trước khi pipeline chạy, `HTTP 400`, body `{"code": "invalid_datasource_ids", "message": "..."}`
@@ -1032,6 +1073,30 @@ Câu hỏi không khớp datasource nào trong danh sách (LLM trả "không tì
 
 **Chi phí và độ trễ.** Mỗi pha thêm một lượt LLM; `answer` và `chart` chạy **song song** nên thời gian chỉ lùi theo pha lâu nhất, không cộng dồn
 (đo thật trên model Qwen3.6-35B-A3B: ~14 s không cờ, ~26–29 s với một hoặc cả hai cờ, đã gồm bước chọn datasource). Đặt timeout phía client dư cho trường hợp này.
+
+### 7.6. Prompt tuỳ chỉnh — `prompts`
+
+Trường tuỳ chọn, chỉ có ở `/chat/ask`. AI Gateway gửi bộ prompt người dùng đã sửa cho dịch vụ `datasource-query`, resolve theo kho của
+datasource. Mỗi phần tử theo khuôn envelope prompt của Gateway; khoá lạ bị bỏ qua:
+
+```json
+"prompts": [
+  {"name": "[SQLBot] SQL Playbook", "version_ref": "...", "prompt_type": "text", "content": "Lọc theo năm báo cáo bằng cột nam_bc ...", "config": null},
+  {"name": "[SQLBot] Answer Persona", "version_ref": "...", "prompt_type": "text", "content": "Bạn là trợ lý dữ liệu của Sở ...", "config": null}
+]
+```
+
+| `name` | Chèn vào đâu |
+|---|---|
+| `[SQLBot] SQL Playbook` | Tin nhắn quy tắc bổ sung của pha sinh SQL (sau M-Schema). Model bắt buộc tuân thủ, nhưng không thay được quy tắc cứng, định dạng đầu ra hay giới hạn bảo mật. Thắng `custom_prompt` của xpack khi cả hai có |
+| `[SQLBot] Answer Persona` | Thay câu vai trò ở đầu prompt pha answer, cả nhánh fallback: danh tính, cách xưng hô, giọng văn. Khi mâu thuẫn với quy tắc cứng của pha answer thì quy tắc cứng thắng |
+
+- Không gửi `prompts`, thiếu một tên, hoặc `content` rỗng thì phần đó dùng bản mặc định trong `backend/templates/prompts/`. Gửi thiếu tên
+  thì SQLBot ghi một dòng cảnh báo cho lượt đó.
+- Khối `<!-- ... -->` trong `content` bị bỏ trước khi đưa vào prompt. Bản mặc định của SQL Playbook chỉ là một khối chú thích hướng dẫn cách
+  viết, nên gửi bản mặc định thì pha SQL y như khi không có playbook.
+- `content` được chèn nguyên văn; dấu `{}` không cần escape.
+- SQLBot chỉ log `name` và `version_ref`, không log `content`.
 
 ---
 

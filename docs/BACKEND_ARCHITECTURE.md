@@ -135,10 +135,10 @@ sinh khi merge nhánh), `072_add_chat_external_id.py`.
 | Sửa prompt riêng cho một loại DB | [templates/sql_examples/](../backend/templates/sql_examples/) |
 | Sửa pha trả lời bằng lời | [llm.py:764](../backend/apps/chat/task/llm.py#L764) + khối `answer` ở [template.yaml:630](../backend/templates/template.yaml#L630) |
 | Sửa vòng retry / hạ cấp | [llm.py:1918-2254](../backend/apps/chat/task/llm.py#L1918) `_sql_phase` |
-| Sửa cổng định tuyến câu hỏi (bỏ pha SQL khi không cần) | [apps/chat/task/question_gate.py](../backend/apps/chat/task/question_gate.py) + khối `route` ở [template.yaml:794](../backend/templates/template.yaml#L794). Điểm nối duy nhất vào pipeline: [llm.py:2339](../backend/apps/chat/task/llm.py#L2339) |
+| Sửa cổng định tuyến câu hỏi (bỏ pha SQL khi không cần) | [apps/chat/task/question_gate.py](../backend/apps/chat/task/question_gate.py) + khối `route` ở [template.yaml:786](../backend/templates/template.yaml#L786). Điểm nối duy nhất vào pipeline: [llm.py:2339](../backend/apps/chat/task/llm.py#L2339) |
 | Sửa pha gợi ý câu hỏi tiếp theo (chạy trong lượt hỏi) | [llm.py:963](../backend/apps/chat/task/llm.py#L963) `generate_inline_recommend` + [chat.py:1429](../backend/apps/chat/curd/chat.py#L1429) `get_user_old_questions`. Endpoint rời `/chat/recommend_questions` là **đường khác**, đừng sửa nhầm |
 | Thêm/sửa event SSE | `run_task` ([llm.py:2255](../backend/apps/chat/task/llm.py#L2255)) — **rồi cập nhật `API_SPEC.md` §6.3** |
-| Đổi điểm dừng pipeline | [chat_model.py:57](../backend/apps/chat/models/chat_model.py#L57) `ChatFinishStep` |
+| Đổi điểm dừng pipeline | [chat_model.py:60](../backend/apps/chat/models/chat_model.py#L60) `ChatFinishStep` |
 | Sửa M-Schema đưa vào prompt | [datasource.py:1184](../backend/apps/datasource/crud/datasource.py#L1184) `get_table_m_schema` (dựng) + [m_schema.py](../backend/apps/datasource/m_schema.py) (cấu trúc, render). `get_table_schema` ([datasource.py:1267](../backend/apps/datasource/crud/datasource.py#L1267)) chỉ bọc lại |
 | Sửa cách rút gọn prompt khi vượt context | [apps/chat/task/prompt_budget.py](../backend/apps/chat/task/prompt_budget.py) (các nấc, thứ tự) + [llm.py:1434](../backend/apps/chat/task/llm.py#L1434) `_stream_sql_with_schema_reduction` (điều kiện lên nấc). **Rồi cập nhật `TEXT2SQL_PIPELINE.md` §8** |
 | Đổi cách chọn bảng theo embedding | [table_embedding.py:43](../backend/apps/datasource/embedding/table_embedding.py#L43) |
@@ -196,7 +196,7 @@ xem [OPERATIONS.md §6](OPERATIONS.md).
 
 ### `chat.external_id` — vì sao tồn tại
 
-[chat_model.py:102](../backend/apps/chat/models/chat_model.py#L102). Khóa chính `chat.id` khai
+[chat_model.py:105](../backend/apps/chat/models/chat_model.py#L105). Khóa chính `chat.id` khai
 `Identity(always=True)`, tức Postgres **luôn tự sinh**, client không chèn giá trị riêng vào được.
 Nhưng đối tác tích hợp cần tự đặt định danh hội thoại phía họ. `external_id` là cột UUID riêng,
 `UNIQUE` (để hai lần hỏi cùng UUID chắc chắn rơi vào đúng một hội thoại) và `NULL` với hội thoại tạo
