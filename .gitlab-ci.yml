@@ -84,6 +84,19 @@ stages:
         { [ -z "${DB_NAME}" ] || { .venv/bin/python -c "import os, psycopg; c = psycopg.connect(host=os.environ[\"DB_HOST\"], port=os.environ[\"DB_PORT\"], user=os.environ[\"DB_USERNAME\"], password=os.environ[\"DB_PASSWORD\"], dbname=\"postgres\", autocommit=True); n = os.environ[\"DB_NAME\"]; c.execute(f\"CREATE DATABASE {n}\") if not c.execute(\"SELECT 1 FROM pg_database WHERE datname = %s\", (n,)).fetchone() else None"; export SQLBOT_TEST_DB_URL="$(.venv/bin/python -c "import os; from urllib.parse import quote; print(\"postgresql+psycopg://%s:%s@%s:%s/%s\" % (quote(os.environ[\"DB_USERNAME\"], safe=\"\"), quote(os.environ[\"DB_PASSWORD\"], safe=\"\"), os.environ[\"DB_HOST\"], os.environ[\"DB_PORT\"], os.environ[\"DB_NAME\"]))")"; }; } &&
         .venv/bin/python -m pytest -q -p no:cacheprovider ${PYTEST_ARGS}'
 
+# The pyproject ruleset reports well over a thousand findings in the current code, so the job only checks syntax errors and names that cannot resolve.
+lint:
+  stage: test
+  rules:
+    - if: '$CI_COMMIT_BRANCH =~ /^(test|staging|master)$/'
+  script:
+    - |
+      docker run --rm -v "${CI_PROJECT_DIR}:/src:ro" ${TEST_IMAGE} sh -c '
+        cp -r /src /home/appuser/work && cd /home/appuser/work &&
+        uv venv -q && . .venv/bin/activate &&
+        uv pip install -q ruff &&
+        ruff check --no-cache --select E9,F63,F7,F82 --extend-exclude "*.ipynb" .'
+
 test-unit:
   extends: .test_job
   variables:
