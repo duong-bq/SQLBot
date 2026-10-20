@@ -34,7 +34,7 @@ from apps.datasource.task.excel_import_task import (  # noqa: E402
 from apps.datasource.utils import remote_file  # noqa: E402
 from apps.datasource.utils.excel_import import ExcelImportError  # noqa: E402
 
-from test_excel_remote_file import override, sigv4_query  # noqa: E402
+from tests.unit.datasource.test_excel_remote_file import override, sigv4_query  # noqa: E402
 
 
 def make_workbook(path: str, sheet_names: list[str]) -> str:

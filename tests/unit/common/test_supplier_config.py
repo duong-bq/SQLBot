@@ -6,7 +6,7 @@ import os
 import unittest
 
 # Project root relative to this test file
-PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
 
 class TestModelFactoryConfig(unittest.TestCase):
