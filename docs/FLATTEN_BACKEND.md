@@ -42,7 +42,7 @@ pytest tests/
 
 Kết quả khi chạy trong image Wolfi: 342 passed, 45 skipped, 0 failed. 45 test bị skip vì thiếu `SQLBOT_TEST_DB_URL` (cần Postgres có pgvector rỗng; xem `docs/OPERATIONS.md` §7.12).
 
-Đã xóa 4 lớp test trong `tests/test_supplier_config.py` vì chúng đọc file của `frontend/` và `docs/README.en.md` (đều đã xóa): `TestMiniMaxSupplierConfig`, `TestMiniMaxI18nTranslations`, `TestMiniMaxIconFile`, `TestReadmeContent`. Lớp `TestModelFactoryConfig` (5 test về model factory của backend) được giữ lại.
+Đã xóa 4 lớp test trong `tests/unit/common/test_supplier_config.py` vì chúng đọc file của `frontend/` và `docs/README.en.md` (đều đã xóa): `TestMiniMaxSupplierConfig`, `TestMiniMaxI18nTranslations`, `TestMiniMaxIconFile`, `TestReadmeContent`. Lớp `TestModelFactoryConfig` (5 test về model factory của backend) được giữ lại.
 
 ## 5. Đã xóa
 

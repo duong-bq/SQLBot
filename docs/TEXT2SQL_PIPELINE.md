@@ -276,7 +276,7 @@ nhau về sự thật, nên prompt phải nói khác nhau:
 Cơ chế: khối `answer.fallback_variants` trong `template.yaml` giữ hai mảnh chữ (`situation` và
 `insufficient_rule`), `answer_fallback_sys_question()` chọn mảnh theo `fallback_kind` rồi ghép vào
 cùng một `fallback_system`. Phần luật chung chỉ có **một bản** — tách đôi cả prompt thì hai bản sẽ
-trôi khỏi nhau. Có test khoá cả hai rủi ro đó ở `tests/test_answer_fallback_kind.py`: giọng kể sự cố
+trôi khỏi nhau. Có test khoá cả hai rủi ro đó ở `tests/unit/chat/test_answer_fallback_kind.py`: giọng kể sự cố
 không được rò sang biến thể `no_query`, và bộ luật chung phải còn nguyên ở cả hai.
 
 ---
@@ -869,5 +869,5 @@ sàng — không có datasource cụ thể thì không có `queries[]` nào đ�
 **Không có biến cấu hình nào** bật/tắt tính năng này. Quyền là quyền: một cái cờ tắt được trong
 `.env` chỉ tạo ra một cách vô hiệu hoá phân quyền mà không ai thấy trong log.
 
-Unit test: [backend/tests/test_sw_permission.py](../tests/test_sw_permission.py) (18 ca,
+Unit test: [backend/tests/unit/chat/test_sw_permission.py](../tests/test_sw_permission.py) (18 ca,
 phủ cả chuỗi sàng lẫn phép viết lại SQL).

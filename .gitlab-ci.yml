@@ -63,10 +63,9 @@ test:
   stage: test
   rules:
     - if: '$CI_COMMIT_BRANCH =~ /^(test|staging|master)$/'
-  # The torch CPU wheel is about 900 MB: the default 30 s uv timeout and 3 retries fail on a slow download.
   script:
     - |
-      docker run --rm -e UV_HTTP_TIMEOUT=600 -e UV_HTTP_RETRIES=5 -e UV_CONCURRENT_DOWNLOADS=4 -v "${CI_PROJECT_DIR}:/src:ro" dockerhub.elcomlab.com/wolfi/python:v3.11.17@sha256:029ed0b6837fb507feaf505b586708d7ba6c2c0857440b015fffeebbae0b6e57 sh -c '
+      docker run --rm -v "${CI_PROJECT_DIR}:/src:ro" dockerhub.elcomlab.com/wolfi/python:v3.11.17@sha256:029ed0b6837fb507feaf505b586708d7ba6c2c0857440b015fffeebbae0b6e57 sh -c '
         cp -r /src /home/appuser/work && cd /home/appuser/work &&
         uv sync -q --frozen --python /usr/bin/python3 &&
         .venv/bin/python -m pytest tests -q -p no:cacheprovider'

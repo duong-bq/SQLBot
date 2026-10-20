@@ -700,7 +700,7 @@ Hai lý do bẫy này khó phát hiện:
 | | |
 |---|---|
 | Lỗi vẫn "đúng" format | `ResponseMiddleware` bỏ qua mọi response **ngoài dải 2xx**, nên 4xx/5xx thoát envelope sẵn. Test một vài ca lỗi rồi kết luận "không bị bọc" là sai — chỉ nhánh thành công mới lộ vấn đề |
-| Test không bắt được | Fixture e2e ở [tests/test_ai_sync_e2e.py:56](../tests/test_ai_sync_e2e.py#L56) chỉ gắn `RequestContextMiddleware` + auth giả, **không** có `ResponseMiddleware` — về cấu trúc không thể phát hiện lớp lỗi này. Thêm endpoint đối tác mới thì phải kiểm bằng request thật vào app đã chạy |
+| Test không bắt được | Fixture e2e ở [tests/integration/hooks/test_ai_sync_e2e.py:56](../tests/test_ai_sync_e2e.py#L56) chỉ gắn `RequestContextMiddleware` + auth giả, **không** có `ResponseMiddleware` — về cấu trúc không thể phát hiện lớp lỗi này. Thêm endpoint đối tác mới thì phải kiểm bằng request thật vào app đã chạy |
 
 ### 7.9. Quản trị người dùng và định danh theo `account`
 

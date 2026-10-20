@@ -131,3 +131,11 @@ ignore = [
 [tool.ruff.lint.pyupgrade]
 # Preserve types, even if a file imports `from __future__ import annotations`.
 keep-runtime-typing = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "unit: needs no database; the fakes and mocks are enough",
+    "integration: needs the test PostgreSQL (SQLBOT_TEST_DB_URL)",
+    "e2e: calls an external service with a real key, not run in CI",
+]

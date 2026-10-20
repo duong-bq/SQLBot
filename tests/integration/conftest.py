@@ -1,0 +1,40 @@
+"""Fixture Postgres thật cho test tích hợp: các test cần JSONB / partial unique index / ON CONFLICT nên không chạy được trên SQLite.
+
+Fixture `pg_url` skip (không fail) khi thiếu SQLBOT_TEST_DB_URL để `pytest tests/` vẫn xanh trên máy không dựng Postgres.
+"""
+
+import os
+
+import pytest
+
+
+@pytest.fixture(scope="session")
+def pg_url() -> str:
+    """URL Postgres dùng cho test tích hợp; skip cả test nếu chưa cấu hình."""
+    url = os.getenv("SQLBOT_TEST_DB_URL")
+    if not url:
+        pytest.skip("Chưa đặt SQLBOT_TEST_DB_URL nên bỏ qua test cần Postgres thật")
+    return url
+
+
+@pytest.fixture()
+def db_session(pg_url: str):
+    """Session sạch cho mỗi test: tạo 2 bảng của module hook nếu chưa có rồi TRUNCATE.
+
+    Tạo bảng bằng metadata của SQLModel thay vì chạy alembic để test không phụ thuộc toàn bộ
+    lịch sử migration của repo. Vì index được khai ngay trong `__table_args__` nên bản tạo bằng
+    metadata có đủ partial unique index như migration.
+    """
+    from sqlalchemy import create_engine, text
+    from sqlmodel import Session
+
+    from apps.hooks.models.ai_sync_model import AiSyncHookLog, AiUserPermission
+
+    engine = create_engine(pg_url)
+    AiSyncHookLog.__table__.create(engine, checkfirst=True)
+    AiUserPermission.__table__.create(engine, checkfirst=True)
+    with Session(engine) as session:
+        session.execute(text("TRUNCATE ai_sync_hook_logs, ai_user_permissions"))
+        session.commit()
+        yield session
+    engine.dispose()

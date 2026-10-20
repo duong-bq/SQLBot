@@ -22,7 +22,7 @@ from pathlib import Path
 
 import openpyxl
 
-ROOT_DIR = Path(__file__).resolve().parents[1]
+ROOT_DIR = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(ROOT_DIR))
 
 from apps.datasource.task.excel_import_task import (  # noqa: E402
