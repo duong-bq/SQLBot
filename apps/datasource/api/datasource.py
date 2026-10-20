@@ -794,58 +794,59 @@ async def upload_ds_schema(session: SessionDep, id: int = Path(..., description=
         raise HTTPException(status_code=500, detail=f"Parse Excel Failed: {str(e)}")
 
 
-@router.post("/parseExcel", response_model=None, summary=f"{PLACEHOLDER_PREFIX}ds_parse_excel")
-@require_permissions(permission=SqlbotPermission(role=['ws_admin']))
-async def parse_excel(file: UploadFile = File(..., description=f"{PLACEHOLDER_PREFIX}ds_excel")):
-    """
-    Tải file Excel/CSV lên và phân tích trước (preview) cấu trúc từng sheet — quyền ws_admin.
-
-    Chỉ nhận .xlsx/.xls/.csv (sai định dạng trả 400). Lưu file tạm và trả về ``filePath`` cùng dữ liệu
-    xem trước (tên sheet, cột, kiểu, vài dòng mẫu). Bước 1 của luồng import: người dùng xác nhận/chỉnh
-    kiểu cột trước khi gọi /importToDb.
-    """
-    ALLOWED_EXTENSIONS = {".xlsx", ".xls", ".csv"}
-    if not file.filename.lower().endswith(tuple(ALLOWED_EXTENSIONS)):
-        raise HTTPException(400, "Only support .xlsx/.xls/.csv")
-
-    os.makedirs(path, exist_ok=True)
-    filename = f"{file.filename.split('.')[0].split('/')[-1]}_{hashlib.sha256(uuid.uuid4().bytes).hexdigest()[:10]}.{file.filename.split('.')[-1]}"
-    save_path = os.path.join(path, filename)
-    with open(save_path, "wb") as f:
-        f.write(await file.read())
-
-    def inner():
-        sheets_data = parse_excel_preview(save_path)
-        return {
-            "filePath": filename,
-            "data": sheets_data
-        }
-
-    return await asyncio.to_thread(inner)
-
-
-@router.post("/importToDb", response_model=None, summary=f"{PLACEHOLDER_PREFIX}ds_import_to_db")
-@require_permissions(permission=SqlbotPermission(role=['ws_admin']))
-async def import_to_db(session: SessionDep, trans: Trans, import_req: ImportRequest):
-    """
-    Nạp dữ liệu từ file đã parse vào PostgreSQL nội bộ thành các bảng — quyền ws_admin.
-
-    Body ``ImportRequest`` gồm ``filePath`` (từ /parseExcel) và danh sách sheet kèm cấu hình cột (tên,
-    kiểu). File không tồn tại trả 400. Mỗi sheet tạo một bảng ``excel_<tên>_<hash>`` và nạp dữ liệu bằng
-    COPY. Bước 2 của luồng import. Trả về danh sách bảng đã tạo kèm số dòng.
-    """
-    save_path = os.path.join(path, import_req.filePath)
-    if not os.path.exists(save_path):
-        raise HTTPException(400, "File not found")
-
-    def inner():
-        try:
-            results = import_sheets_to_db(save_path, import_req.sheets)
-        except ExcelImportError as e:
-            raise HTTPException(500, f"{trans('i18n_ds_upload_error')}: {e.message}")
-        return {"filename": import_req.filePath, "sheets": results}
-
-    return await asyncio.to_thread(inner)
+# parseExcel and importToDb (the two-step web import) are not used: they stay here commented out; the live import routes are createFromExcel and createFromExcelAsync.
+# @router.post("/parseExcel", response_model=None, summary=f"{PLACEHOLDER_PREFIX}ds_parse_excel")
+# @require_permissions(permission=SqlbotPermission(role=['ws_admin']))
+# async def parse_excel(file: UploadFile = File(..., description=f"{PLACEHOLDER_PREFIX}ds_excel")):
+#     """
+#     Tải file Excel/CSV lên và phân tích trước (preview) cấu trúc từng sheet — quyền ws_admin.
+#
+#     Chỉ nhận .xlsx/.xls/.csv (sai định dạng trả 400). Lưu file tạm và trả về ``filePath`` cùng dữ liệu
+#     xem trước (tên sheet, cột, kiểu, vài dòng mẫu). Bước 1 của luồng import: người dùng xác nhận/chỉnh
+#     kiểu cột trước khi gọi /importToDb.
+#     """
+#     ALLOWED_EXTENSIONS = {".xlsx", ".xls", ".csv"}
+#     if not file.filename.lower().endswith(tuple(ALLOWED_EXTENSIONS)):
+#         raise HTTPException(400, "Only support .xlsx/.xls/.csv")
+#
+#     os.makedirs(path, exist_ok=True)
+#     filename = f"{file.filename.split('.')[0].split('/')[-1]}_{hashlib.sha256(uuid.uuid4().bytes).hexdigest()[:10]}.{file.filename.split('.')[-1]}"
+#     save_path = os.path.join(path, filename)
+#     with open(save_path, "wb") as f:
+#         f.write(await file.read())
+#
+#     def inner():
+#         sheets_data = parse_excel_preview(save_path)
+#         return {
+#             "filePath": filename,
+#             "data": sheets_data
+#         }
+#
+#     return await asyncio.to_thread(inner)
+#
+#
+# @router.post("/importToDb", response_model=None, summary=f"{PLACEHOLDER_PREFIX}ds_import_to_db")
+# @require_permissions(permission=SqlbotPermission(role=['ws_admin']))
+# async def import_to_db(session: SessionDep, trans: Trans, import_req: ImportRequest):
+#     """
+#     Nạp dữ liệu từ file đã parse vào PostgreSQL nội bộ thành các bảng — quyền ws_admin.
+#
+#     Body ``ImportRequest`` gồm ``filePath`` (từ /parseExcel) và danh sách sheet kèm cấu hình cột (tên,
+#     kiểu). File không tồn tại trả 400. Mỗi sheet tạo một bảng ``excel_<tên>_<hash>`` và nạp dữ liệu bằng
+#     COPY. Bước 2 của luồng import. Trả về danh sách bảng đã tạo kèm số dòng.
+#     """
+#     save_path = os.path.join(path, import_req.filePath)
+#     if not os.path.exists(save_path):
+#         raise HTTPException(400, "File not found")
+#
+#     def inner():
+#         try:
+#             results = import_sheets_to_db(save_path, import_req.sheets)
+#         except ExcelImportError as e:
+#             raise HTTPException(500, f"{trans('i18n_ds_upload_error')}: {e.message}")
+#         return {"filename": import_req.filePath, "sheets": results}
+#
+#     return await asyncio.to_thread(inner)
 
 
 @router.post(

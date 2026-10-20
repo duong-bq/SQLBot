@@ -1074,6 +1074,8 @@ URL-encode nếu có dấu hoặc khoảng trắng.
 
 ## 8. Tạo nguồn dữ liệu từ file Excel / CSV
 
+> **Đã tắt:** `POST /datasource/parseExcel` và `POST /datasource/importToDb` (8.1, 8.2) đang được comment trong mã vì không còn ai dùng; dùng `createFromExcel` hoặc `createFromExcelAsync`. Mục này giữ lại để tham khảo luồng cũ.
+
 Nguồn dữ liệu loại `excel` được tạo qua ba bước: **8.1 → 8.2 → 8.3**.
 
 Cả ba bước này gộp được thành một lời gọi duy nhất — xem
