@@ -20,6 +20,7 @@ from apps.chat.curd.chat import delete_chat_with_user, get_chart_data_with_user,
 from apps.chat.models.chat_model import CreateChat, ChatRecord, RenameChat, ChatQuestion, AxisObj, QuickCommand, \
     ChatInfo, Chat, ChatFinishStep, ChatQuestionBase, SimpleChat, ChatItem, ChatAskQuestion
 from apps.chat.task.llm import LLMService
+from apps.chat.utils.gateway_prompts import pick_gateway_prompts
 from apps.chat.utils.attachment import (
     ERR_TOO_MANY_FILES, dedupe_file_urls,
     docx_download_executor, fetch_docx_attachment,
@@ -710,6 +711,10 @@ async def ask(
     response thêm ``datasource: {id, name}``, ``answer``, ``chart`` theo cờ; ``answer``/``chart`` là
     ``null`` khi được xin mà pha đó hỏng (lượt vẫn thành công, dữ liệu vẫn có).
 
+    ``prompts`` là bộ prompt AI Gateway resolve theo kho của datasource: ``[SQLBot] SQL Playbook``
+    vào khe quy tắc bổ sung của pha SQL, ``[SQLBot] Answer Persona`` thay câu vai trò của pha answer
+    (cả fallback). Vắng hoặc thiếu tên nào thì phần đó dùng bản mặc định — xem ``pick_gateway_prompts``.
+
     Trả về khi thành công (HTTP 200): ``{"success": true, "record_id", "sql",
     "data": {"fields", "fields_info", "data": [...rows], "limit"?}}`` — đúng hợp đồng JSON đã dùng
     cho nhánh MCP không-stream (``run_task``/``_sql_phase``, qua ``get_chat_chart_data``); ``limit``
@@ -725,6 +730,8 @@ async def ask(
             question.datasource_id = question.datasource_ids[0]
     question.include_answer = request_question.include_answer
     question.include_chart = request_question.include_chart
+    if request_question.prompts is not None:
+        question.sql_playbook, question.answer_persona = pick_gateway_prompts(request_question.prompts)
     return await question_answer_inner(
         session,
         current_user,

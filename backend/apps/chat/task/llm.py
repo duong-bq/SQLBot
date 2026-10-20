@@ -475,7 +475,7 @@ class LLMService:
             AIPromptMessage(content='Tôi đã xác nhận thông tin cơ sở dữ liệu và schema cấu trúc bảng mà bạn cung cấp, SQL tôi sinh ra sẽ không vượt ra ngoài phạm vi bạn cung cấp.'))
         if _system_templates.get('custom_prompt'):
             self.sql_message.append(HumanPromptMessage(content=_system_templates['custom_prompt']))
-            self.sql_message.append(AIPromptMessage(content='Tôi đã xác nhận thông tin bổ sung bạn cung cấp, tôi sẽ tham khảo.'))
+            self.sql_message.append(AIPromptMessage(content='Tôi đã nắm các quy tắc bổ sung bạn cung cấp và sẽ tuân thủ khi sinh SQL, trong phạm vi các quy tắc trong <Rules>, định dạng đầu ra và giới hạn bảo mật.'))
         if _system_templates.get('terminologies'):
             self.sql_message.append(HumanPromptMessage(content=_system_templates['terminologies']))
             self.sql_message.append(AIPromptMessage(content='Tôi đã xác nhận thông tin thuật ngữ bạn cung cấp, tôi sẽ tham khảo.'))

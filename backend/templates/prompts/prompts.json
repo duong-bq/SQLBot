@@ -1,0 +1,18 @@
+{
+  "prompts": [
+    {
+      "name": "[SQLBot] SQL Playbook",
+      "file": "sql_playbook.md",
+      "type": "service",
+      "component": "datasource-query",
+      "editable": true
+    },
+    {
+      "name": "[SQLBot] Answer Persona",
+      "file": "answer_persona.md",
+      "type": "service",
+      "component": "datasource-query",
+      "editable": true
+    }
+  ]
+}

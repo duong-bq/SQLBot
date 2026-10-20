@@ -11,6 +11,8 @@ from sqlalchemy.dialects.postgresql import JSONB
 from sqlmodel import SQLModel, Field
 
 from apps.chat.utils.attachment import AttachmentContent
+from apps.chat.utils.gateway_prompts import GatewayPrompt
+from apps.chat.utils.gateway_prompts import strip_prompt_comments
 from apps.db.constant import DB
 from apps.template.filter.generator import get_permissions_template
 from apps.template.generate_analysis.generator import get_analysis_template
@@ -22,6 +24,7 @@ from apps.template.generate_guess_question.generator import get_guess_question_t
 from apps.template.generate_predict.generator import get_predict_template
 from apps.template.generate_sql.generator import get_sql_template, get_sql_example_template
 from apps.template.select_datasource.generator import get_datasource_template
+from apps.template.template import get_prompt_default
 
 
 def enum_values(enum_class: type[Enum]) -> list:
@@ -305,6 +308,11 @@ class AiModelQuestion(BaseModel):
     terminologies: str = ""
     data_training: str = ""
     custom_prompt: str = ""
+    # Hai prompt người dùng sửa được qua Gateway (`[SQLBot] SQL Playbook`, `[SQLBot] Answer
+    # Persona`), chỉ `/chat/ask` đặt. Tách khỏi `custom_prompt` vì `filter_custom_prompts` của
+    # xpack ghi đè trường đó sau bước chọn datasource, và nó còn chảy sang answer/analysis.
+    sql_playbook: str = ""
+    answer_persona: str = ""
     error_msg: str = ""
     regenerate_record_id: Optional[int] = None
     sample_data: str = ""
@@ -384,11 +392,30 @@ class AiModelQuestion(BaseModel):
             templates['data_training'] = _base_template['generate_data_training_info'].format(
                 data_training=self.data_training)
 
-        if self.custom_prompt:
+        _sql_rules = self.sql_rules_for_prompt()
+        if _sql_rules:
             templates['custom_prompt'] = _base_template['generate_custom_prompt_info'].format(
-                custom_prompt=self.custom_prompt)
+                custom_prompt=_sql_rules)
 
         return templates
+
+    def sql_rules_for_prompt(self) -> str:
+        """Nội dung khe quy tắc bổ sung của pha SQL: SQL Playbook thắng `custom_prompt` của xpack.
+
+        Playbook đã bỏ chú thích mà rỗng thì lùi về `custom_prompt`; cả hai rỗng thì pha SQL không
+        có cặp tin nhắn quy tắc bổ sung, như trước khi có playbook. Nội dung luôn đi vào template
+        dưới dạng giá trị của `format()`, nên dấu `{}` người dùng viết không làm vỡ template.
+        """
+        return strip_prompt_comments(self.sql_playbook) or self.custom_prompt
+
+    def answer_persona_for_prompt(self) -> str:
+        """Persona của pha answer (cả nhánh fallback): bản từ Gateway, rỗng thì bản mặc định.
+
+        Persona thay câu vai trò ở đầu `<Instruction>`, nên không bao giờ được rỗng: thiếu nó thì
+        prompt mất luôn danh tính và các quy tắc giọng văn đã chuyển sang persona.
+        """
+        return (strip_prompt_comments(self.answer_persona)
+                or strip_prompt_comments(get_prompt_default('answer_persona.md')))
 
     def sql_user_question(self, current_time: str, change_title: bool):
         """Dựng user prompt của pha sinh SQL. Câu hỏi lấy qua ``question_for_prompt`` để lượt có
@@ -432,10 +459,12 @@ class AiModelQuestion(BaseModel):
         """Dựng system prompt cho pha sinh câu trả lời chữ cuối cùng.
 
         Dùng chung `terminologies`/`custom_prompt` với analysis để câu trả lời hiểu đúng thuật ngữ
-        nghiệp vụ đã khai báo trong workspace.
+        nghiệp vụ đã khai báo trong workspace. Persona (`answer_persona_for_prompt`) đứng đầu
+        `<Instruction>`; `<Rules>` vẫn thắng khi hai bên mâu thuẫn.
         """
         return get_answer_template()['system'].format(lang=self.lang, terminologies=self.terminologies,
                                                       custom_prompt=self.custom_prompt,
+                                                      answer_persona=self.answer_persona_for_prompt(),
                                                       sqlbot_name=self.sqlbot_name)
 
     def answer_user_question(self):
@@ -467,6 +496,8 @@ class AiModelQuestion(BaseModel):
         `fallback_kind` chọn hai mảnh chữ khác nhau giữa các trường hợp không-có-dữ-liệu (xem
         `answer.fallback_variants`). Giá trị lạ thì rơi về "failed": thà thừa một lời xin lỗi còn
         hơn ném KeyError giữa lúc đang dựng prompt cho chính nhánh cứu hộ.
+
+        Dùng chung persona với `answer_sys_question`: người dùng chỉnh giọng văn một lần cho cả hai.
         """
         template = get_answer_template()
         variants = template['fallback_variants']
@@ -474,6 +505,7 @@ class AiModelQuestion(BaseModel):
         return template['fallback_system'].format(lang=self.lang,
                                                   terminologies=self.terminologies,
                                                   custom_prompt=self.custom_prompt,
+                                                  answer_persona=self.answer_persona_for_prompt(),
                                                   sqlbot_name=self.sqlbot_name,
                                                   situation=variant['situation'],
                                                   insufficient_rule=variant['insufficient_rule'])
@@ -639,6 +671,11 @@ class ChatAskQuestion(ChatQuestionBase):
         default=None)
     include_answer: bool = Body(description='Trả thêm câu trả lời bằng lời (answer)', default=False)
     include_chart: bool = Body(description='Trả thêm cấu hình biểu đồ (chart)', default=False)
+    # Bộ prompt do AI Gateway resolve theo kho của datasource (`[SQLBot] SQL Playbook`,
+    # `[SQLBot] Answer Persona`). Vắng = chạy bằng bản mặc định; xem `pick_gateway_prompts`.
+    prompts: Optional[list[GatewayPrompt]] = Body(
+        description='Prompt người dùng sửa được, do AI Gateway gửi kèm',
+        default=None)
 
 
 class McpQuestion(ChatQuestionBase):
