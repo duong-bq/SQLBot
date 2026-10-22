@@ -11,7 +11,6 @@ from fastapi.responses import JSONResponse
 from fastapi.routing import APIRoute
 from fastapi.staticfiles import StaticFiles
 from fastapi_mcp import FastApiMCP
-from sqlmodel import Session
 from starlette.datastructures import MutableHeaders
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.middleware.cors import CORSMiddleware
@@ -24,12 +23,11 @@ from apps.swagger.i18n import PLACEHOLDER_PREFIX, tags_metadata, i18n_list
 from apps.swagger.i18n import get_translation, DEFAULT_LANG
 from apps.system.crud.aimodel_manage import async_model_info
 from apps.system.crud.assistant import init_dynamic_cors
-from apps.system.crud.user import set_admin_password
 from apps.system.middleware.auth import TokenMiddleware
 from apps.system.schemas.permission import RequestContextMiddleware
 from common.audit.schemas.request_context import RequestContextMiddlewareCommon
+from common.core.admin_password import sync_admin_password
 from common.core.config import settings
-from common.core.db import engine
 from common.core.health import QuietProbeAccessLog, router as health_router
 from common.core.response_middleware import ResponseMiddleware, exception_handler
 from common.core.sqlbot_cache import init_sqlbot_cache
@@ -45,15 +43,6 @@ from common.utils.utils import SQLBotLogUtil
 def run_migrations():
     alembic_cfg = Config("alembic.ini")
     command.upgrade(alembic_cfg, "head")
-
-
-@SingleWorkerGuard.once
-def init_admin_password():
-    if not settings.ADMIN_PASSWORD:
-        return
-    with Session(engine) as session:
-        if set_admin_password(session=session, password=settings.ADMIN_PASSWORD):
-            SQLBotLogUtil.info("Admin password updated from ADMIN_PASSWORD")
 
 
 @SingleWorkerGuard.once
@@ -87,7 +76,7 @@ def shutdown_resources() -> None:
 async def lifespan(app: FastAPI):
     if settings.MIGRATE_ON_STARTUP:
         run_migrations()
-    init_admin_password()
+        sync_admin_password()
     init_sqlbot_cache()
     init_dynamic_cors(app)
     init_terminology_embedding_data()

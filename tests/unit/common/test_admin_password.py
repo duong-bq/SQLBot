@@ -40,3 +40,40 @@ def test_noop_without_admin_row():
     session = FakeSession(None)
     assert set_admin_password(session=session, password="Adminelc@123") is False
     assert session.commits == 0
+
+
+def test_sync_skips_when_admin_password_is_not_set(monkeypatch):
+    from common.core import admin_password
+
+    def no_session(*_args, **_kwargs):
+        raise AssertionError("must not open a session without ADMIN_PASSWORD")
+
+    monkeypatch.setattr(admin_password.settings, "ADMIN_PASSWORD", "")
+    monkeypatch.setattr(admin_password, "Session", no_session)
+    assert admin_password.sync_admin_password() is False
+
+
+def test_sync_writes_the_configured_password(monkeypatch):
+    from common.core import admin_password
+
+    calls = []
+
+    class FakeSessionContext:
+        def __init__(self, _engine):
+            pass
+
+        def __enter__(self):
+            return "session"
+
+        def __exit__(self, *_exc):
+            return False
+
+    def fake_set(*, session, password):
+        calls.append((session, password))
+        return True
+
+    monkeypatch.setattr(admin_password.settings, "ADMIN_PASSWORD", "Adminelc@123")
+    monkeypatch.setattr(admin_password, "Session", FakeSessionContext)
+    monkeypatch.setattr(admin_password, "set_admin_password", fake_set)
+    assert admin_password.sync_admin_password() is True
+    assert calls == [("session", "Adminelc@123")]
