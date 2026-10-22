@@ -6,7 +6,7 @@ from apps.system.models.system_model import UserWsModel, WorkspaceModel
 from apps.system.schemas.auth import CacheName, CacheNamespace
 from apps.system.schemas.system_schema import EMAIL_REGEX, PWD_REGEX, BaseUserDTO, UserInfoDTO, UserWs
 from common.core.deps import SessionDep
-from common.core.security import verify_md5pwd
+from common.core.security import md5pwd, verify_md5pwd
 from common.core.sqlbot_cache import cache, clear_cache
 from common.utils.locale import I18n, I18nHelper
 from common.utils.utils import SQLBotLogUtil
@@ -16,6 +16,16 @@ from ..models.user import UserModel, UserPlatformModel
 def get_db_user(*, session: Session, user_id: int) -> UserModel:
     db_user = session.get(UserModel, user_id)
     return db_user
+
+
+def set_admin_password(*, session: Session, password: str) -> bool:
+    admin = session.exec(select(UserModel).where(UserModel.id == 1, UserModel.account == "admin")).first()
+    if admin is None or verify_md5pwd(password, admin.password):
+        return False
+    admin.password = md5pwd(password)
+    session.add(admin)
+    session.commit()
+    return True
 
 
 def get_user_by_account(*, session: Session, account: str) -> BaseUserDTO | None:

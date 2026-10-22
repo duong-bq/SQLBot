@@ -70,6 +70,8 @@ class Settings(BaseSettings):
 
     TOKEN_KEY: str = "X-SQLBOT-TOKEN"
     DEFAULT_PWD: str = "SQLBot@123456"
+    # Mật khẩu của tài khoản admin do migration 001 chèn cứng; nếu đặt thì mỗi lần khởi động ghi đè mật khẩu đó.
+    ADMIN_PASSWORD: str = ""
     ASSISTANT_TOKEN_KEY: str = "X-SQLBOT-ASSISTANT-TOKEN"
 
     # Tắt khi migration chạy bằng một Job riêng trước khi pod lên (Kubernetes); bật thì mỗi tiến trình tự
