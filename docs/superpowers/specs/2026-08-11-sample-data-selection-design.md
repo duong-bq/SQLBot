@@ -5,6 +5,10 @@
 > `backend/apps/chat/task/llm.py`. **Không** đụng tới việc nối `ai_user_permissions` (AI Sync Hook)
 > vào pipeline — đó là gap riêng, đã biết (`docs/AI_ONBOARDING.md:40-42`), làm ở spec khác.
 
+> **Cập nhật 2026-10-23:** vấn đề (1) `fields[:10]` đã được thay bằng cách lấy mọi cột có
+> `custom_comment` rồi bù cột khác cho đủ 10 (`get_table_sample_data`) — không chọn theo câu hỏi.
+> Phần chọn theo mức liên quan tới câu hỏi và các vấn đề còn lại bên dưới vẫn mở.
+
 ## 1. Vấn đề hiện tại
 
 Đọc code thật tại `backend/apps/datasource/crud/datasource.py` (nhánh trước khi sửa):

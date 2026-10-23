@@ -122,7 +122,7 @@ sinh khi merge nhánh), `072_add_chat_external_id.py`.
 | Sửa vòng retry / hạ cấp | [llm.py:1613-1780](../backend/apps/chat/task/llm.py#L1613) |
 | Thêm/sửa event SSE | `run_task` ([llm.py:1538](../backend/apps/chat/task/llm.py#L1538)) — **rồi cập nhật `API_SPEC.md` §6.3** |
 | Đổi điểm dừng pipeline | [chat_model.py:54](../backend/apps/chat/models/chat_model.py#L54) `ChatFinishStep` |
-| Sửa M-Schema đưa vào prompt | [datasource.py:638](../backend/apps/datasource/crud/datasource.py#L638) `get_table_schema` |
+| Sửa M-Schema đưa vào prompt | [datasource.py:806](../backend/apps/datasource/crud/datasource.py#L806) `get_table_schema` |
 | Đổi cách chọn bảng theo embedding | [table_embedding.py:43](../backend/apps/datasource/embedding/table_embedding.py#L43) |
 | Sửa kiểm tra an toàn SQL | [llm.py:102](../backend/apps/chat/task/llm.py#L102) (whitelist bảng) + [db.py:1084](../backend/apps/db/db.py#L1084) (`check_sql_read`) |
 | Thêm một loại database | [db/constant.py](../backend/apps/db/constant.py) enum `DB` + [db.py](../backend/apps/db/db.py) + một file `templates/sql_examples/*.yaml` |

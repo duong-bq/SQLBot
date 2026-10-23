@@ -249,7 +249,7 @@ RAG (terminology, data_training, chọn bảng) **không gọi LLM** — chỉ g
 ### Định dạng
 
 M-Schema là cách serialize schema dạng bán cấu trúc (nguồn: XiYan-SQL của Alibaba), token-hiệu quả
-hơn DDL thô. Sinh tại [datasource.py:638](../backend/apps/datasource/crud/datasource.py#L638)
+hơn DDL thô. Sinh tại [datasource.py:806](../backend/apps/datasource/crud/datasource.py#L806)
 `get_table_schema`:
 
 ```
@@ -287,7 +287,10 @@ bảng đã đưa vào prompt, lưu ở `self.table_name_list`. Danh sách này 
 tới nó cũng bị từ chối.
 
 Cùng chỗ đó, `get_tables_sample_data` lấy vài dòng dữ liệu mẫu nhét vào prompt để LLM biết định
-dạng giá trị thật (ví dụ mã tỉnh viết thế nào).
+dạng giá trị thật (ví dụ mã tỉnh viết thế nào). Mỗi bảng 3 dòng; cột được chọn là **mọi cột có
+`custom_comment`**, bù thêm cột không chú thích cho đủ 10
+([datasource.py:718](../backend/apps/datasource/crud/datasource.py#L718)). Vì vậy chú thích cột
+quyết định cả M-Schema lẫn việc LLM có thấy giá trị thật của cột đó hay không.
 
 ---
 

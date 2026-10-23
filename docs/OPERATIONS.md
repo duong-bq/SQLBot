@@ -390,6 +390,8 @@ hiện tại (sau khi đã áp snapshot) nằm ở `ai_user_permissions`, lọc 
 |---|---|
 | **`source.cell` / `target.cell` phải là số nguyên** | Trong `POST /table_relation/save/{ds_id}`. Truyền chuỗi thì API trả **200 OK, không lỗi, không log**, nhưng quan hệ bị vô hiệu hoàn toàn → mọi câu hỏi cần JOIN sẽ sai. Xem `DATASOURCE_API_SPEC.md` §6.2 |
 | **`editTable` / `editField` thiếu `custom_comment` là xóa mất chú thích** | Hai endpoint này ghi đè toàn bộ record, không phải PATCH. Chú thích là đầu vào trực tiếp của M-Schema nên mất là chất lượng SQL tụt ngay |
+| **Chú thích cột đang trống không tự đi theo comment nguồn** | Khi đồng bộ lại, `custom_comment` chỉ đi theo comment gốc mới nếu nó còn trùng comment gốc cũ ([datasource.py:436](../backend/apps/datasource/crud/datasource.py#L436) `resync_custom_comment`). Không có cờ "admin đã sửa" nên trống + nguồn có comment bị hiểu là admin cố ý xóa → giữ trống, LLM không thấy mô tả. Phải ghi tay qua `editField` |
+| **Chú thích cột quyết định cột nào vào dữ liệu mẫu** | Khối `<sample-data>` lấy mọi cột có `custom_comment`, chỉ bù cột không chú thích cho đủ 10 ([datasource.py:718](../backend/apps/datasource/crud/datasource.py#L718)). Cột nghiệp vụ không chú thích nằm sau khối cột hệ thống sẽ không có giá trị mẫu → LLM dễ chọn nhầm cột mã với cột nhãn (`X` vs `X_valuedanhmuc`) và đoán sai hoa/thường của literal |
 | **`chooseTables` thay thế toàn bộ danh sách** | Không phải "thêm bảng". Gửi thiếu một bảng đang dùng là bỏ chọn nó |
 | **Lỗi thường trả 500 thay vì 403/404** | Không suy ra được nguyên nhân từ status code; phải đọc body |
 

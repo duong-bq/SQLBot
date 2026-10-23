@@ -414,10 +414,10 @@ def build_relation_graph(session: SessionDep, ds: CoreDatasource) -> list:
 
 
 def seed_table_relation(session: SessionDep, ds: CoreDatasource):
-    """Seed core_datasource.table_relation from declared FK, only when it is currently empty.
+    """Khởi tạo core_datasource.table_relation từ các FK khai báo ở nguồn, chỉ khi nó đang rỗng.
 
-    Never overwrites a graph the user has already edited (same one-time seeding contract as
-    custom_comment). Failures are swallowed so datasource creation is never blocked.
+    Không bao giờ ghi đè đồ thị quan hệ user đã chỉnh. Lỗi bị nuốt (chỉ log warning) để việc tạo
+    datasource không bao giờ bị chặn.
     """
     try:
         record = session.query(CoreDatasource).filter(CoreDatasource.id == ds.id).first()
@@ -433,16 +433,38 @@ def seed_table_relation(session: SessionDep, ds: CoreDatasource):
         SQLBotLogUtil.warning(f"seed_table_relation failed for ds {ds.id}: {e}")
 
 
+def resync_custom_comment(old_original: str | None, new_original: str | None, current_custom: str | None):
+    """Tính lại custom_comment khi sync lại comment gốc (table_comment/field_comment) từ nguồn.
+
+    Lần sync đầu custom_comment được copy từ comment gốc, và M-Schema lẫn embedding chỉ đọc
+    custom_comment. Nếu sync sau chỉ cập nhật comment gốc thì thay đổi ở nguồn không bao giờ tới
+    được LLM. Quy tắc: custom_comment còn trùng comment gốc cũ → coi như admin chưa sửa, cho đi theo
+    comment gốc mới; đã khác → admin đã chủ động sửa (kể cả xoá trắng), giữ nguyên.
+    So sánh sau strip, coi None và chuỗi rỗng là như nhau.
+    """
+    if (current_custom or '').strip() == (old_original or '').strip():
+        return new_original
+    return current_custom
+
+
 def sync_table(session: SessionDep, ds: CoreDatasource, tables: List[CoreTable]):
+    """Đồng bộ danh sách bảng (và cột của từng bảng) từ nguồn vào core_table/core_field.
+
+    Bảng đã có: cập nhật table_comment, custom_comment đi theo nếu admin chưa sửa
+    (xem resync_custom_comment). Bảng mới: custom_comment khởi tạo bằng table_comment.
+    Bảng không còn ở nguồn bị xoá cùng cột của nó. Cuối cùng tính lại embedding cho mọi bảng.
+    """
     id_list = []
     for item in tables:
         statement = select(CoreTable).where(and_(CoreTable.ds_id == ds.id, CoreTable.table_name == item.table_name))
         record = session.exec(statement).first()
-        # update exist table, only update table_comment
+        # update exist table: table_comment, and custom_comment if it still mirrors the old table_comment
         if record is not None:
             item.id = record.id
             id_list.append(record.id)
 
+            record.custom_comment = resync_custom_comment(record.table_comment, item.table_comment,
+                                                          record.custom_comment)
             record.table_comment = item.table_comment
             session.add(record)
             session.commit()
@@ -481,6 +503,12 @@ def sync_table(session: SessionDep, ds: CoreDatasource, tables: List[CoreTable])
 
 
 def sync_fields(session: SessionDep, ds: CoreDatasource, table: CoreTable, fields: List[ColumnSchema]):
+    """Đồng bộ cột của một bảng từ nguồn vào core_field.
+
+    Cột đã có: cập nhật field_comment/field_type/field_index, custom_comment đi theo comment gốc
+    nếu admin chưa sửa (xem resync_custom_comment). Cột mới: custom_comment khởi tạo bằng
+    field_comment. Cột không còn ở nguồn bị xoá. Embedding do sync_table tính lại sau đó.
+    """
     id_list = []
     for index, item in enumerate(fields):
         statement = select(CoreField).where(
@@ -490,6 +518,8 @@ def sync_fields(session: SessionDep, ds: CoreDatasource, table: CoreTable, field
             item.id = record.id
             id_list.append(record.id)
 
+            record.custom_comment = resync_custom_comment(record.field_comment, item.fieldComment,
+                                                          record.custom_comment)
             record.field_comment = item.fieldComment
             record.field_index = index
             record.field_type = item.fieldType
@@ -686,7 +716,16 @@ def get_table_obj_by_ds(session: SessionDep, current_user: CurrentUser, ds: Core
 
 
 def get_table_sample_data(ds: CoreDatasource, table_name: str, fields: list) -> str:
-    """Get 3 sample rows from a table in JSON format to help AI understand the data"""
+    """Lấy 3 dòng mẫu của bảng dưới dạng JSON để LLM thấy giá trị thực khi sinh SQL.
+
+    Chọn cột: lấy TẤT CẢ cột có mô tả (custom_comment), rồi bù thêm cột không mô tả cho đủ 10.
+    Trước đây cắt cứng 10 cột đầu — với các bảng có khối cột hệ thống ở đầu (id, uuid,
+    key_form_id, ..., is_deleted) thì mẫu không chạm tới cột nghiệp vụ nào, nên LLM không
+    phân biệt được cột mã danh mục (vd "1") với cột nhãn tương ứng (vd "Nghị quyết").
+    Có mô tả là dấu hiệu admin coi cột đó là cột nghiệp vụ, nên không giới hạn số lượng;
+    đổi lại bảng mô tả nhiều cột sẽ làm khối sample-data trong prompt dài hơn.
+    Cột trong SELECT giữ đúng thứ tự gốc của bảng.
+    """
     if not fields:
         return ""
 
@@ -695,9 +734,15 @@ def get_table_sample_data(ds: CoreDatasource, table_name: str, fields: list) -> 
     prefix = db.prefix if hasattr(db, 'prefix') else '"'
     suffix = db.suffix if hasattr(db, 'suffix') else '"'
 
+    described = [f for f in fields if f.custom_comment and f.custom_comment.strip()]
+    undescribed = [f for f in fields if not (f.custom_comment and f.custom_comment.strip())]
+    chosen = {id(f) for f in (described + undescribed)[:max(10, len(described))]}
+
     # Build field list with proper quoting
     field_names = []
-    for field in fields[:10]:  # Limit to first 10 fields to avoid too wide results
+    for field in fields:
+        if id(field) not in chosen:
+            continue
         field_name = f"{prefix}{field.field_name}{suffix}"
         field_names.append(field_name)
 
