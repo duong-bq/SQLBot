@@ -5,7 +5,7 @@ from dataclasses import replace
 from typing import List, Optional
 
 from fastapi import HTTPException
-from sqlalchemy import and_, delete, or_, text
+from sqlalchemy import and_, delete, insert, or_, text, update
 from sqlbot_xpack.permissions.models.ds_rules import DsRules
 from sqlmodel import select
 
@@ -595,7 +595,7 @@ def snapshot_ds(ds: CoreDatasource) -> CoreDatasource:
 
     Lý do tồn tại là ``expire_on_commit`` (mặc định bật) của SQLAlchemy: mỗi ``commit()`` đánh dấu
     mọi object đang gắn session là hết hạn, và lần chạm thuộc tính kế tiếp âm thầm bắn một SELECT
-    nạp lại NGUYÊN dòng. Vòng đồng bộ metadata commit hàng nghìn lần rồi lần nào cũng đọc lại
+    nạp lại NGUYÊN dòng. Vòng đồng bộ metadata commit mỗi bảng một lần rồi lần nào cũng đọc lại
     ``ds.type``/``ds.configuration``/``ds.id``, nên mỗi vòng kéo về cả cột ``table_relation`` —
     với nguồn 537 bảng là ~1.5 MB mỗi lần, tổng ~1.7 GB cho một lượt resync mà không ai dùng tới.
 
@@ -649,37 +649,59 @@ def sync_table(session: SessionDep, ds: CoreDatasource, tables: List[CoreTable])
     sửa (xem resync_custom_comment). Bảng mới: custom_comment khởi tạo bằng
     table_comment. Bảng không còn ở nguồn bị xoá kèm cột. Cuối cùng đối soát
     đồ thị quan hệ và tính lại embedding cho mọi bảng.
+
+    Bảng hiện có được đọc MỘT lần cho cả datasource, chỉ các cột cần so sánh
+    (không kéo ``embedding``); bảng không đổi thì không ghi. Mỗi bảng đúng một
+    commit, chung với cột của nó (commit nằm cuối ``sync_fields``): lỗi giữa
+    chừng vẫn giữ các bảng đã xong, và không có transaction nào mở trong lúc
+    chờ DB nguồn trả danh sách cột.
     """
     id_list = []
     # Bản đọc rời session: mọi lần chạm ds bên trong vòng lặp đều đi qua đây, xem `snapshot_ds`.
     ds_ro = snapshot_ds(ds)
     ds_id = ds_ro.id
-    for item in tables:
-        statement = select(CoreTable).where(and_(CoreTable.ds_id == ds_id, CoreTable.table_name == item.table_name))
-        record = session.exec(statement).first()
-        # update exist table, only update table_comment
-        if record is not None:
-            item.id = record.id
-            id_list.append(record.id)
+    rows = session.execute(
+        select(CoreTable.id, CoreTable.table_name,
+               CoreTable.table_comment, CoreTable.custom_comment)
+        .where(CoreTable.ds_id == ds_id)
+        .order_by(CoreTable.id)
+    ).all()
+    current = {}
+    for row in rows:
+        current.setdefault(row.table_name, row._asdict())
 
-            record.custom_comment = resync_custom_comment(
-                record.table_comment, item.table_comment, record.custom_comment)
-            record.table_comment = item.table_comment
-            session.add(record)
-            session.commit()
-        else:
-            # save new table
-            table = CoreTable(ds_id=ds_id, checked=True, table_name=item.table_name, table_comment=item.table_comment,
+    for item in tables:
+        # Hỏi DB nguồn trước khi ghi: transaction của bảng chỉ mở khi đã đủ dữ liệu.
+        fields = getFieldsByDs(session, ds_ro, item.table_name)
+        record = current.get(item.table_name)
+        if record is None:
+            table = CoreTable(ds_id=ds_id, checked=True, table_name=item.table_name,
+                              table_comment=item.table_comment,
                               custom_comment=item.table_comment)
             session.add(table)
             session.flush()
-            session.refresh(table)
-            item.id = table.id
-            id_list.append(table.id)
-            session.commit()
+            record = current[item.table_name] = dict(
+                id=table.id, table_name=item.table_name,
+                table_comment=item.table_comment,
+                custom_comment=item.table_comment)
+        else:
+            values = dict(
+                table_comment=item.table_comment,
+                custom_comment=resync_custom_comment(
+                    record['table_comment'], item.table_comment,
+                    record['custom_comment']),
+            )
+            if any(record[key] != value for key, value in values.items()):
+                session.execute(
+                    update(CoreTable)
+                    .where(CoreTable.id == record['id'])
+                    .values(**values)
+                    .execution_options(synchronize_session=False))
+                record.update(values)
+        item.id = record['id']
+        id_list.append(record['id'])
 
-        # sync field
-        fields = getFieldsByDs(session, ds_ro, item.table_name)
+        # sync field, commit chung cho dòng bảng và các cột
         sync_fields(session, ds_ro, item, fields)
 
     if len(id_list) > 0:
@@ -703,44 +725,82 @@ def sync_table(session: SessionDep, ds: CoreDatasource, tables: List[CoreTable])
 
 
 def sync_fields(session: SessionDep, ds: CoreDatasource, table: CoreTable, fields: List[ColumnSchema]):
-    """Đồng bộ cột của một bảng từ nguồn vào core_field.
+    """Đồng bộ cột của một bảng từ nguồn vào core_field, kết thúc bằng một commit.
 
     Cột đã có: cập nhật field_comment/field_type/field_index, custom_comment đi
     theo comment gốc nếu admin chưa sửa (xem resync_custom_comment). Cột mới:
     custom_comment khởi tạo bằng field_comment. Cột không còn ở nguồn bị xoá.
     Embedding do sync_table tính lại sau đó.
+
+    Làm theo lô thay vì từng cột: đọc mọi cột của bảng một lần, so trong bộ
+    nhớ, rồi ghi tối đa ba câu lệnh gộp (DELETE cột thừa, UPDATE cột đổi,
+    INSERT cột mới). Cột không đổi thì không ghi, nên resync một nguồn không
+    đổi gần như chỉ còn chi phí đọc. Commit cuối hàm cũng chốt thay đổi mà
+    caller đã ghi cho dòng bảng (xem sync_table).
+
+    Nhiều dòng trùng ``field_name`` trong một bảng: giữ dòng id nhỏ nhất, xoá
+    các dòng còn lại. Nguồn trả về 0 cột thì giữ nguyên cột hiện có, như trước.
     """
-    id_list = []
+    ds_id = ds.id
+    rows = session.execute(
+        select(CoreField.id, CoreField.field_name, CoreField.field_type,
+               CoreField.field_comment, CoreField.custom_comment,
+               CoreField.field_index)
+        .where(CoreField.table_id == table.id)
+        .order_by(CoreField.id)
+    ).all()
+    current = {}
+    for row in rows:
+        current.setdefault(row.field_name, row._asdict())
+
+    # Dict dùng như tập có thứ tự. Tên lặp lại trong danh sách nguồn rơi vào
+    # cùng một dòng (lần sau đè lần trước), giống khi còn tra DB từng cột.
+    seen, dirty = {}, {}
     for index, item in enumerate(fields):
-        statement = select(CoreField).where(
-            and_(CoreField.table_id == table.id, CoreField.field_name == item.fieldName))
-        record = session.exec(statement).first()
-        if record is not None:
-            item.id = record.id
-            id_list.append(record.id)
+        name = item.fieldName
+        seen[name] = None
+        record = current.get(name)
+        if record is None:
+            current[name] = dict(
+                id=None, field_name=name, field_type=item.fieldType,
+                field_comment=item.fieldComment,
+                custom_comment=item.fieldComment, field_index=index)
+            dirty[name] = None
+            continue
+        values = dict(
+            custom_comment=resync_custom_comment(
+                record['field_comment'], item.fieldComment,
+                record['custom_comment']),
+            field_comment=item.fieldComment,
+            field_index=index,
+            field_type=item.fieldType,
+        )
+        if any(record[key] != value for key, value in values.items()):
+            record.update(values)
+            dirty[name] = None
 
-            record.custom_comment = resync_custom_comment(
-                record.field_comment, item.fieldComment, record.custom_comment)
-            record.field_comment = item.fieldComment
-            record.field_index = index
-            record.field_type = item.fieldType
-            session.add(record)
-            session.commit()
+    if fields:
+        keep_ids = [current[name]['id'] for name in seen
+                    if current[name]['id'] is not None]
+        session.execute(
+            delete(CoreField)
+            .where(CoreField.table_id == table.id,
+                   CoreField.id.not_in(keep_ids))
+            .execution_options(synchronize_session=False))
+
+    updates, inserts = [], []
+    for name in dirty:
+        record = dict(current[name])
+        if record.pop('id') is None:
+            inserts.append(dict(record, ds_id=ds_id, table_id=table.id,
+                                checked=True))
         else:
-            field = CoreField(ds_id=ds.id, table_id=table.id, checked=True, field_name=item.fieldName,
-                              field_type=item.fieldType, field_comment=item.fieldComment,
-                              custom_comment=item.fieldComment, field_index=index)
-            session.add(field)
-            session.flush()
-            session.refresh(field)
-            item.id = field.id
-            id_list.append(field.id)
-            session.commit()
-
-    if len(id_list) > 0:
-        session.query(CoreField).filter(and_(CoreField.table_id == table.id, CoreField.id.not_in(id_list))).delete(
-            synchronize_session=False)
-        session.commit()
+            updates.append(dict(record, id=current[name]['id']))
+    if updates:
+        session.execute(update(CoreField), updates)
+    if inserts:
+        session.execute(insert(CoreField), inserts)
+    session.commit()
 
 
 def resync_ds_metadata(session: SessionDep, ds: CoreDatasource) -> tuple:

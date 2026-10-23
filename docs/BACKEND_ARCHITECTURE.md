@@ -109,8 +109,8 @@ Migration mới nhất: `086_excel_import_jobs_delivery.py` (cột `excel_import
 §5). Trước đó: `085_ai_model_config.py` (bảng `ai_model_config` — model của từng workspace và
 datasource do Gateway đẩy sang), `084_ai_user_permissions_table_key.py` (khoá dòng quyền đổi sang
 `(user_id, database_table_name)`), `083_core_field_lookup_index.py` (index `(table_id, field_name)`
-trên `core_field`). Index này **không thừa, đừng xoá**: vòng đồng bộ metadata tra từng cột một để quyết
-định INSERT hay UPDATE, nên không có index thì mỗi lần tra là seq scan toàn bảng — chi phí tỉ lệ với
+trên `core_field`). Index này **không thừa, đừng xoá**: vòng đồng bộ metadata đọc rồi xoá cột theo `table_id` cho
+từng bảng, nên không có index thì mỗi bảng là một lần seq scan toàn `core_field` — chi phí tỉ lệ với
 tổng số cột của **toàn hệ thống**, tức là càng thêm datasource thì đồng bộ nguồn nào cũng chậm đi.
 Cố ý không đặt UNIQUE vì dữ liệu cũ chưa chắc sạch. Trước đó: `082_chat_record_domain_code.py`
 (thêm cột `chat_record.domain_code` — mã lĩnh vực giới hạn phạm vi của lượt hỏi),
@@ -139,7 +139,7 @@ sinh khi merge nhánh), `072_add_chat_external_id.py`.
 | Sửa pha gợi ý câu hỏi tiếp theo (chạy trong lượt hỏi) | [llm.py:963](../apps/chat/task/llm.py#L963) `generate_inline_recommend` + [chat.py:1429](../apps/chat/curd/chat.py#L1429) `get_user_old_questions`. Endpoint rời `/chat/recommend_questions` là **đường khác**, đừng sửa nhầm |
 | Thêm/sửa event SSE | `run_task` ([llm.py:2255](../apps/chat/task/llm.py#L2255)) — **rồi cập nhật `API_SPEC.md` §6.3** |
 | Đổi điểm dừng pipeline | [chat_model.py:60](../apps/chat/models/chat_model.py#L60) `ChatFinishStep` |
-| Sửa M-Schema đưa vào prompt | [datasource.py:1250](../apps/datasource/crud/datasource.py#L1250) `get_table_m_schema` (dựng) + [m_schema.py](../apps/datasource/m_schema.py) (cấu trúc, render). `get_table_schema` ([datasource.py:1333](../apps/datasource/crud/datasource.py#L1333)) chỉ bọc lại |
+| Sửa M-Schema đưa vào prompt | [datasource.py:1310](../apps/datasource/crud/datasource.py#L1310) `get_table_m_schema` (dựng) + [m_schema.py](../apps/datasource/m_schema.py) (cấu trúc, render). `get_table_schema` ([datasource.py:1393](../apps/datasource/crud/datasource.py#L1393)) chỉ bọc lại |
 | Sửa cách rút gọn prompt khi vượt context | [apps/chat/task/prompt_budget.py](../apps/chat/task/prompt_budget.py) (các nấc, thứ tự) + [llm.py:1434](../apps/chat/task/llm.py#L1434) `_stream_sql_with_schema_reduction` (điều kiện lên nấc). **Rồi cập nhật `TEXT2SQL_PIPELINE.md` §8** |
 | Đổi cách chọn bảng theo embedding | [table_embedding.py:43](../apps/datasource/embedding/table_embedding.py#L43) |
 | Sửa kiểm tra an toàn SQL | [llm.py:114](../apps/chat/task/llm.py#L114) (whitelist bảng) + [db.py:1080](../apps/db/db.py#L1080) (`check_sql_read`) |
