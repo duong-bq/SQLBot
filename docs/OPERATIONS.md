@@ -133,7 +133,7 @@ nghĩa, `run_task` bỏ qua bất kể biến này.
 |---|---|---|
 | `LLM_DISABLE_THINKING` | `True` | Tắt pha reasoning. Model như Qwen3 có thể kẹt trong vòng lặp suy luận, đốt hết token mà không xuất `content` nào → pipeline nhận chuỗi rỗng rồi chết |
 | `LLM_DISABLE_THINKING_EXTRA_BODY` | `{"chat_template_kwargs": {"enable_thinking": false}}` | Payload tiêm vào `extra_body`. Chuẩn vLLM/SGLang. API kiểu DashScope cần `{"enable_thinking": false}` — **đổi biến này, đừng sửa code** |
-| `PARSE_REASONING_BLOCK_ENABLED` | `True` | Tách khối `<think>…</think>` khỏi `content` |
+| `PARSE_REASONING_BLOCK_ENABLED` | `True` | Tách khối `<think>…</think>` khỏi `content`. Chỉ có tác dụng khi model tự viết thẻ mà server không bóc trước; prompt hiện không yêu cầu thẻ này nữa (xem bẫy ở §7.4) |
 
 ### 2.6. Embedding và top-K
 
@@ -155,7 +155,7 @@ vector cũ và mới không cùng không gian.
 | Nơi | Giá trị | Ghi chú |
 |---|---|---|
 | `GENERATE_SQL_QUERY_LIMIT_ENABLED` | `True` | Ép LLM thêm `LIMIT` vào SQL |
-| `ANSWER_MAX_ROWS` (**hằng số trong code**, [llm.py:79](../apps/chat/task/llm.py#L79)) | `100` | Trần số dòng nhồi vào prompt answer. Sửa thì **bắt buộc** giữ nguyên cặp với `build_data_scope_note` |
+| `ANSWER_MAX_ROWS` (**hằng số trong code**, [llm.py:86](../apps/chat/task/llm.py#L86)) | `100` | Trần số dòng nhồi vào prompt answer. Sửa thì **bắt buộc** giữ nguyên cặp với `build_data_scope_note` |
 
 ### 2.8. Bảo mật và mạng
 
@@ -474,7 +474,7 @@ Một dòng cho mỗi thao tác, phân biệt bằng cột `operate` (`Operation
 | Cột | Nội dung |
 |---|---|
 | `messages` (JSONB) | **Đây là chỗ có giá trị nhất.** Xem §"hai bản messages" bên dưới |
-| `reasoning_content` | Phần suy luận. Rỗng ở hầu hết bước, **trừ `GENERATE_SQL`**: prompt pha đó yêu cầu model suy luận trong khối `<think>`. `LLM_DISABLE_THINKING` chỉ tắt thinking native của provider, không tắt khối này |
+| `reasoning_content` | Phần suy luận gốc (native) của model; rỗng khi tắt thinking. Prompt `GENERATE_SQL` yêu cầu suy luận văn xuôi **ngay trong câu trả lời**, nên phần đó nằm trong `messages`, không ở đây. Nếu cột này có nội dung mà câu trả lời rỗng thì model đã viết lạc đáp án sang phần suy luận (xem bẫy ở §7.4) |
 | `token_usage` | Số token vào/ra |
 | `local_operation` | `True` = bước không gọi LLM (chọn bảng, lọc thuật ngữ, chạy SQL) |
 | `error` | Bước này có hỏng không |
@@ -560,7 +560,9 @@ hoa-thường, scope query hỏng cú pháp, bảng có nhiều scope mâu thu�
 | **`source.cell` / `target.cell` phải là số nguyên** | Trong `POST /table_relation/save/{ds_id}`. Truyền chuỗi thì API trả **200 OK, không lỗi, không log**, nhưng quan hệ bị vô hiệu hoàn toàn → mọi câu hỏi cần JOIN sẽ sai. Xem `DATASOURCE_API_SPEC.md` §6.2 |
 | **`editTable` / `editField` thiếu `custom_comment` là xóa mất chú thích** | Hai endpoint này ghi đè toàn bộ record, không phải PATCH. Chú thích là đầu vào trực tiếp của M-Schema nên mất là chất lượng SQL tụt ngay |
 | **`chooseTables` thay thế toàn bộ danh sách** | Không phải "thêm bảng". Gửi thiếu một bảng đang dùng là bỏ chọn nó |
-| **`chooseTables` bỏ chọn bảng nhưng KHÔNG dọn đồ thị quan hệ** | `sync_table` chỉ gọi `seed_table_relation` ([datasource.py:640](../apps/datasource/crud/datasource.py#L640)), mà hàm seed **no-op khi đồ thị đã khác rỗng**. Hệ quả: bỏ chọn bảng để lại node/port/edge trỏ vào id đã xoá, và chọn lại thì bảng mang **id mới** trong khi seed vẫn từ chối chạy. Triệu chứng ở tầng trên là khối `Foreign keys` của M-Schema có dòng `None.None=...` — LLM đọc phải rác đó khi cần JOIN. Không có đường phục hồi từ UI. Hiện chỉ `DATASOURCE_SYNC` (hook actionType 4) là dọn, vì nó gọi thêm `reconcile_table_relation` ([datasource.py:454](../apps/datasource/crud/datasource.py#L454)). Kiểm tồn đọng bằng cách so `table_relation` với `core_table`/`core_field` của cùng `ds_id` |
+| **Đồ thị quan hệ tồn đọng từ trước 2026-09-25** | Trước commit `61a34fb22`, `sync_table` chỉ seed đồ thị khi còn rỗng, nên `chooseTables` bỏ chọn bảng để lại node/port/edge trỏ vào id đã xoá → khối `Foreign keys` của M-Schema có dòng `None.None=...`. Nay `sync_table` gọi `reconcile_table_relation` ([datasource.py:479](../apps/datasource/crud/datasource.py#L479)) mỗi lần đồng bộ nên lỗi không phát sinh thêm, nhưng datasource cũ **chỉ được dọn khi đồng bộ lại lần kế tiếp**. Kiểm tồn đọng bằng cách so `table_relation` với `core_table`/`core_field` của cùng `ds_id` |
+| **Chú thích cột đang trống không tự đi theo comment nguồn** | Khi đồng bộ lại, `custom_comment` chỉ đi theo comment gốc mới nếu nó còn trùng comment gốc cũ ([datasource.py:622](../apps/datasource/crud/datasource.py#L622) `resync_custom_comment`). Không có cờ "admin đã sửa", nên trống + nguồn có comment bị hiểu là admin cố ý xóa → giữ trống, LLM không thấy mô tả. Phải ghi tay qua `editField` hoặc API sửa chú thích theo tên |
+| **Chú thích cột quyết định cột nào vào dữ liệu mẫu** | Khối `<sample-data>` (khi không có phạm vi quyền SW) lấy mọi cột có `custom_comment`, chỉ bù cột không chú thích cho đủ 10 ([datasource.py:1075](../apps/datasource/crud/datasource.py#L1075) `pick_sample_fields`). Cột nghiệp vụ không chú thích nằm sau khối cột hệ thống sẽ không có giá trị mẫu → LLM dễ chọn nhầm cột mã với cột nhãn (`X` vs `X_valuedanhmuc`) và đoán sai hoa/thường của literal |
 | **Lỗi thường trả 500 thay vì 403/404** | Không suy ra được nguyên nhân từ status code; phải đọc body |
 
 ### 7.2. Rò rỉ thông tin
@@ -607,6 +609,8 @@ kỳ tài liệu, log hay issue nào; nếu cần xoay vòng mật khẩu thì p
 | Pha gợi ý câu hỏi hỏng **không** giết lượt hỏi | Giống pha biểu đồ: chỉ phát `info: recommended question failed` rồi đi tiếp. LLM trả rác thì lưu `[]`, client nhận `content: "[]"` chứ không phải thiếu event |
 | Pha biểu đồ hỏng **không** giết lượt hỏi | Phát `info: chart failed` rồi đi tiếp; vẫn có `answer` + `finish`. Cố ý không gọi `save_error` vì web UI hiện khối lỗi đỏ với mọi record có `error` khác rỗng |
 | Lỗi giữa stream vẫn là **HTTP 200** | Phải đọc event `error`, không dựa vào status code |
+| Log `model rejected SQL prompt, retry with reduced schema (step …)` | Datasource quá lớn so với context của model; SQLBot đang tự bớt khối schema (TEXT2SQL_PIPELINE.md §8). Thỉnh thoảng thấy thì bình thường, thấy ở mọi lượt thì nên thu hẹp bảng của datasource hoặc dùng model context lớn hơn. Embedding lỗi hoặc tắt sẽ đưa **mọi** bảng vào prompt và dễ chạm trần kể cả ở nấc cuối — khi đó người dùng nhận lỗi "vượt quá context của model kể cả khi đã rút gọn tối đa", không retry |
+| Prompt yêu cầu model viết thẻ `<think>` khi đã tắt thinking → **content rỗng** | Qwen tắt thinking vẫn mở `<think>` theo lời prompt nhưng không đóng; reasoning parser của vLLM bóc thẻ ở server và dồn toàn bộ phần sau, kể cả JSON đáp án, sang `reasoning_content`. Ca thật ds159 (15/10/2026): pha SQL báo `LLM returned empty content`, qua Gateway là `datasource_query_failed`. Prompt sinh SQL vì thế dùng suy luận văn xuôi không bọc thẻ, và pha SQL lấy JSON đáp án từ phần reasoning khi content không có (TEXT2SQL_PIPELINE.md §5.3). Viết prompt mới thì **đừng yêu cầu thẻ suy luận**. Log `SQL answer JSON found only in reasoning_content` nghĩa là lưới an toàn vừa cứu một lượt; thấy thường xuyên thì model đang bỏ qua lời dặn về định dạng |
 | Cắt dòng dữ liệu mà không kèm `build_data_scope_note` → LLM bịa số tổng | Xem [TEXT2SQL_PIPELINE.md §6](TEXT2SQL_PIPELINE.md) |
 | Không có cơ chế hủy | `AbortController` phía client chỉ ngắt kết nối; backend vẫn chạy tới hết và vẫn tính token |
 | Không chạy song song nhiều câu hỏi trên cùng `chat_id` | Xem `API_SPEC.md` §7.4 |
@@ -737,7 +741,7 @@ session bị đánh dấu hết hạn, và lần chạm thuộc tính kế tiế
 
 | Bẫy | Chi tiết |
 |---|---|
-| **Commit trong vòng lặp + đọc lại object = N+1 vô hình** | `sync_table` commit theo từng bảng/cột rồi vòng nào cũng đọc `ds.type`/`ds.configuration`, nên mỗi vòng kéo về cả cột `table_relation`. Với nguồn 537 bảng, cột đó ~1,5 MB → một lượt resync tải ~1,7 GB qua dây mà không ai dùng tới. Cách chữa là `snapshot_ds` ([datasource.py:591](../apps/datasource/crud/datasource.py#L591)): bản sao transient, không gắn session nên không bao giờ hết hạn |
+| **Commit trong vòng lặp + đọc lại object = N+1 vô hình** | `sync_table` commit theo từng bảng/cột rồi vòng nào cũng đọc `ds.type`/`ds.configuration`, nên mỗi vòng kéo về cả cột `table_relation`. Với nguồn 537 bảng, cột đó ~1,5 MB → một lượt resync tải ~1,7 GB qua dây mà không ai dùng tới. Cách chữa là `snapshot_ds` ([datasource.py:593](../apps/datasource/crud/datasource.py#L593)): bản sao transient, không gắn session nên không bao giờ hết hạn |
 | **`model_dump()` trên object đã hết hạn trả về toàn `None`** | Thuộc tính hết hạn bị **gỡ khỏi `__dict__`**, mà `model_dump()` đọc thẳng `__dict__` — nên nó trả bản sao rỗng, không exception, không cảnh báo. `getattr` mới kích hoạt cơ chế nạp lại của ORM. Bẫy này có thật: `create_ds` và luồng nhập Excel đều commit ngay trước khi gọi `sync_table`, nên bản sao hỏng sẽ khiến mọi bảng được ghi với `ds_id=None` |
 | **`table_relation` nặng hơn nhiều so với tưởng tượng** | Nó **không phải** danh sách cạnh: nó là ảnh chụp canvas của sơ đồ ER (node, port, layout, style theo định dạng AntV/X6). Nguồn 537 bảng có 936 cell, trong đó riêng phần `ports` chiếm 86% dung lượng, còn cạnh chỉ 5%. Bảng không có quan hệ nào vẫn tốn node. `pg_column_size` báo số **đã nén** (TOAST) nên nhìn qua tưởng nhẹ, nhưng đọc ra là bản giải nén |
 

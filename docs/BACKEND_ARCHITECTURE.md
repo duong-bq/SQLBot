@@ -130,18 +130,19 @@ sinh khi merge nhánh), `072_add_chat_external_id.py`.
 
 | Muốn | Mở |
 |---|---|
-| Sửa cách sinh SQL / thứ tự message | [llm.py:404](../apps/chat/task/llm.py#L404) `init_messages` + [llm.py:1275](../apps/chat/task/llm.py#L1275) `generate_sql` |
+| Sửa cách sinh SQL / thứ tự message | [llm.py:448](../apps/chat/task/llm.py#L448) `init_messages` + [llm.py:1354](../apps/chat/task/llm.py#L1354) `generate_sql` |
 | Sửa nội dung prompt (bất kỳ pha nào) | [templates/template.yaml](../templates/template.yaml) — bản đồ khối ở [TEXT2SQL_PIPELINE.md §10](TEXT2SQL_PIPELINE.md) |
 | Sửa prompt riêng cho một loại DB | [templates/sql_examples/](../templates/sql_examples/) |
-| Sửa pha trả lời bằng lời | [llm.py:708](../apps/chat/task/llm.py#L708) + khối `answer` ở [template.yaml:630](../templates/template.yaml#L630) |
-| Sửa vòng retry / hạ cấp | [llm.py:1781-2112](../apps/chat/task/llm.py#L1781) `_sql_phase` |
-| Sửa cổng định tuyến câu hỏi (bỏ pha SQL khi không cần) | [apps/chat/task/question_gate.py](../apps/chat/task/question_gate.py) + khối `route` ở [template.yaml:794](../templates/template.yaml#L794). Điểm nối duy nhất vào pipeline: [llm.py:2178](../apps/chat/task/llm.py#L2178) |
-| Sửa pha gợi ý câu hỏi tiếp theo (chạy trong lượt hỏi) | [llm.py:895](../apps/chat/task/llm.py#L895) `generate_inline_recommend` + [chat.py:1429](../apps/chat/curd/chat.py#L1429) `get_user_old_questions`. Endpoint rời `/chat/recommend_questions` là **đường khác**, đừng sửa nhầm |
-| Thêm/sửa event SSE | `run_task` ([llm.py:2113](../apps/chat/task/llm.py#L2113)) — **rồi cập nhật `API_SPEC.md` §6.3** |
-| Đổi điểm dừng pipeline | [chat_model.py:57](../apps/chat/models/chat_model.py#L57) `ChatFinishStep` |
-| Sửa M-Schema đưa vào prompt | [datasource.py:1180](../apps/datasource/crud/datasource.py#L1180) `get_table_schema` |
+| Sửa pha trả lời bằng lời | [llm.py:764](../apps/chat/task/llm.py#L764) + khối `answer` ở [template.yaml:630](../templates/template.yaml#L630) |
+| Sửa vòng retry / hạ cấp | [llm.py:1918-2254](../apps/chat/task/llm.py#L1918) `_sql_phase` |
+| Sửa cổng định tuyến câu hỏi (bỏ pha SQL khi không cần) | [apps/chat/task/question_gate.py](../apps/chat/task/question_gate.py) + khối `route` ở [template.yaml:786](../templates/template.yaml#L786). Điểm nối duy nhất vào pipeline: [llm.py:2339](../apps/chat/task/llm.py#L2339) |
+| Sửa pha gợi ý câu hỏi tiếp theo (chạy trong lượt hỏi) | [llm.py:963](../apps/chat/task/llm.py#L963) `generate_inline_recommend` + [chat.py:1429](../apps/chat/curd/chat.py#L1429) `get_user_old_questions`. Endpoint rời `/chat/recommend_questions` là **đường khác**, đừng sửa nhầm |
+| Thêm/sửa event SSE | `run_task` ([llm.py:2255](../apps/chat/task/llm.py#L2255)) — **rồi cập nhật `API_SPEC.md` §6.3** |
+| Đổi điểm dừng pipeline | [chat_model.py:60](../apps/chat/models/chat_model.py#L60) `ChatFinishStep` |
+| Sửa M-Schema đưa vào prompt | [datasource.py:1250](../apps/datasource/crud/datasource.py#L1250) `get_table_m_schema` (dựng) + [m_schema.py](../apps/datasource/m_schema.py) (cấu trúc, render). `get_table_schema` ([datasource.py:1333](../apps/datasource/crud/datasource.py#L1333)) chỉ bọc lại |
+| Sửa cách rút gọn prompt khi vượt context | [apps/chat/task/prompt_budget.py](../apps/chat/task/prompt_budget.py) (các nấc, thứ tự) + [llm.py:1434](../apps/chat/task/llm.py#L1434) `_stream_sql_with_schema_reduction` (điều kiện lên nấc). **Rồi cập nhật `TEXT2SQL_PIPELINE.md` §8** |
 | Đổi cách chọn bảng theo embedding | [table_embedding.py:43](../apps/datasource/embedding/table_embedding.py#L43) |
-| Sửa kiểm tra an toàn SQL | [llm.py:107](../apps/chat/task/llm.py#L107) (whitelist bảng) + [db.py:1080](../apps/db/db.py#L1080) (`check_sql_read`) |
+| Sửa kiểm tra an toàn SQL | [llm.py:114](../apps/chat/task/llm.py#L114) (whitelist bảng) + [db.py:1080](../apps/db/db.py#L1080) (`check_sql_read`) |
 | Sửa quyền dữ liệu theo user (bảng / cột / hàng) | [apps/chat/permission/sw_permission.py](../apps/chat/permission/sw_permission.py) — suy diễn quyền và viết lại SQL; hai điểm cưỡng chế nằm ở `choose_table_schema` và ngay trước `execute_sql` trong `llm.py`. **Rồi cập nhật `TEXT2SQL_PIPELINE.md` §13** |
 | Thêm một loại database | [db/constant.py](../apps/db/constant.py) enum `DB` + [db.py](../apps/db/db.py) + một file `templates/sql_examples/*.yaml` |
 | Sửa endpoint hỏi đáp | [chat.py:485](../apps/chat/api/chat.py#L485) |
@@ -195,7 +196,7 @@ xem [OPERATIONS.md §6](OPERATIONS.md).
 
 ### `chat.external_id` — vì sao tồn tại
 
-[chat_model.py:102](../apps/chat/models/chat_model.py#L102). Khóa chính `chat.id` khai
+[chat_model.py:105](../apps/chat/models/chat_model.py#L105). Khóa chính `chat.id` khai
 `Identity(always=True)`, tức Postgres **luôn tự sinh**, client không chèn giá trị riêng vào được.
 Nhưng đối tác tích hợp cần tự đặt định danh hội thoại phía họ. `external_id` là cột UUID riêng,
 `UNIQUE` (để hai lần hỏi cùng UUID chắc chắn rơi vào đúng một hội thoại) và `NULL` với hội thoại tạo
@@ -203,7 +204,7 @@ từ web (Postgres cho phép nhiều NULL trong ràng buộc UNIQUE).
 
 Việc quy đổi `external_id` → id nội bộ nằm ở `resolve_chat_id`
 ([curd/chat.py:946](../apps/chat/curd/chat.py#L946)), gọi qua dependency
-`resolve_chat_for_question` ([chat.py:440](../apps/chat/api/chat.py#L440)). **Phải là
+`resolve_chat_for_question` ([chat.py:441](../apps/chat/api/chat.py#L441)). **Phải là
 dependency**, không được gọi trong thân route, vì `require_permissions` cần thấy id nội bộ.
 
 ### Cụm datasource — [datasource.py](../apps/datasource/models/datasource.py)
@@ -390,7 +391,7 @@ Hai cái bẫy đi kèm nằm ở [OPERATIONS.md §7.9](OPERATIONS.md).
    ([permission.py:49](../apps/system/schemas/permission.py#L49)) dùng làm FastAPI dependency
    trên route.
 3. **Row/column permission của xpack** — cấu hình bằng tay trên UI SQLBot, sinh điều kiện `WHERE` bổ
-   sung chèn vào SQL của LLM (`generate_filter`, [llm.py:1457](../apps/chat/task/llm.py#L1457)).
+   sung chèn vào SQL của LLM (`generate_filter`, [llm.py:1594](../apps/chat/task/llm.py#L1594)).
 4. **Quyền dữ liệu đồng bộ từ SW** — lọc bảng/cột khỏi M-Schema và bọc phạm vi dòng vào SQL, dữ liệu
    lấy từ `ai_user_permissions` (`apps/chat/permission/sw_permission.py`).
 
@@ -449,7 +450,7 @@ Nó cung cấp:
 | `sqlbot_xpack.file_utils` | Upload file |
 
 Nhiều tính năng bị chặn sau `SQLBotLicenseUtil.valid()` — ví dụ custom prompt
-([llm.py:529](../apps/chat/task/llm.py#L529)). Không có license hợp lệ thì các nhánh đó im
+([llm.py:574](../apps/chat/task/llm.py#L574)). Không có license hợp lệ thì các nhánh đó im
 lặng không chạy, **không báo lỗi**.
 
 ---

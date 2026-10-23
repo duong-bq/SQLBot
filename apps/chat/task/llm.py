@@ -43,9 +43,14 @@ from apps.chat.curd.chat import save_question, save_sql_answer, save_sql, \
 from apps.chat.models.chat_model import ChatQuestion, ChatRecord, Chat, RenameChat, ChatLog, OperationEnum, \
     ChatFinishStep, AxisObj, SystemPromptMessage, HumanPromptMessage, AIPromptMessage
 from apps.chat.permission.sw_permission import resolve_sw_permission, apply_scope_to_sql
+from apps.chat.task.prompt_budget import SchemaPrompt
+from apps.chat.task.prompt_budget import SchemaReductionExhausted
+from apps.chat.task.prompt_budget import is_prompt_rejection
+from apps.chat.task.prompt_budget import next_reduction
 from apps.chat.task.question_gate import decide_route, fail_open
 from apps.data_training.curd.data_training import get_training_template
 from apps.datasource.crud.datasource import get_table_schema, get_tables_sample_data, usable_ds_condition
+from apps.datasource.crud.datasource import get_table_m_schema
 from apps.datasource.crud.permission import get_row_permission_filters, is_normal_user
 from apps.datasource.embedding.ds_embedding import get_ds_embedding
 from apps.datasource.models.datasource import CoreDatasource
@@ -170,6 +175,28 @@ def _cap_history_answer(text: str) -> str:
     return stripped[:limit] + '\n...[nội dung quá dài, đã cắt bớt]'
 
 
+def _pick_sql_answer(content: str, reasoning: str) -> str:
+    """Chọn văn bản làm đáp án sinh SQL: `content`, hoặc JSON đáp án lạc sang phần reasoning.
+
+    Đáp án chuẩn nằm ở `content`, nhưng phần reasoning có thể nuốt luôn khối JSON. Gặp thật ở
+    ds159 ngày 15/10/2026: prompt cũ bảo Qwen (đã tắt thinking) viết trong <think>, model sinh
+    token <think> nhưng không bao giờ sinh </think>. Bộ reasoning parser của vLLM bắt token mở rồi
+    dồn mọi thứ phía sau, kể cả JSON, sang trường `reasoning_content` — chữ <think> không hề tới
+    tay SQLBot. Content rỗng, cả hai lượt thử đều hỏng, trong khi SQL đúng nằm sẵn ở đó (replay
+    40 lượt: 18/20 lượt prompt cũ rơi vào ca này). Prompt đã bỏ <think>, nhưng model vẫn có thể
+    tự sinh token đó theo thói quen, và model có reasoning thật cũng có thể đặt JSON vào kênh này.
+
+    Content có JSON đáp án thì content luôn thắng: JSON trong reasoning khi đó có thể chỉ là bản
+    nháp. Lùi sang reasoning thì trả về riêng khối JSON chứ không phải cả đoạn reasoning, để lịch
+    sử hội thoại và các bước parse phía sau chỉ thấy đáp án. Không tìm được ở đâu thì trả nguyên
+    `content` để `check_sql` báo đúng loại lỗi như trước.
+    """
+    if extract_json_object(content, required_keys=('success',)) is not None:
+        return content
+    json_str = extract_json_object(reasoning, required_keys=('success',))
+    return json_str if json_str is not None else content
+
+
 def _humanize_error(message: str) -> str:
     """Rút chuỗi lỗi nội bộ về đúng phần người đọc hiểu được, bỏ traceback.
 
@@ -246,6 +273,13 @@ class LLMService:
 
     enable_sql_row_limit: bool = settings.GENERATE_SQL_QUERY_LIMIT_ENABLED
     base_message_round_count_limit: int = settings.GENERATE_SQL_QUERY_HISTORY_ROUND_COUNT
+
+    # Trạng thái thang rút gọn khối thông tin CSDL của lượt này — xem `_reduce_schema_prompt`.
+    # None = không rút gọn được (datasource của assistant bên ngoài chỉ có schema dạng chuỗi).
+    schema_prompt: Optional[SchemaPrompt] = None
+    schema_reduction_index: int = 0
+    schema_reductions: tuple[str, ...] = ()
+    sql_schema_message: Optional[HumanPromptMessage] = None
 
     def __init__(self, session: Session, current_user: CurrentUser, chat_question: ChatQuestion,
                  current_assistant: Optional[CurrentAssistant] = None, no_reasoning: bool = False,
@@ -435,12 +469,13 @@ class LLMService:
         self.sql_message.append(HumanPromptMessage(content=_system_templates['rules']))
         self.sql_message.append(
             AIPromptMessage(content='Tôi đã nắm rõ tất cả quy tắc, bao gồm cấu trúc bảng, chuẩn SQL, giới hạn bảo mật và định dạng đầu ra, tôi sẽ tuân thủ nghiêm ngặt các quy tắc này.'))
-        self.sql_message.append(HumanPromptMessage(content=_system_templates['schema']))
+        self.sql_schema_message = HumanPromptMessage(content=_system_templates['schema'])
+        self.sql_message.append(self.sql_schema_message)
         self.sql_message.append(
             AIPromptMessage(content='Tôi đã xác nhận thông tin cơ sở dữ liệu và schema cấu trúc bảng mà bạn cung cấp, SQL tôi sinh ra sẽ không vượt ra ngoài phạm vi bạn cung cấp.'))
         if _system_templates.get('custom_prompt'):
             self.sql_message.append(HumanPromptMessage(content=_system_templates['custom_prompt']))
-            self.sql_message.append(AIPromptMessage(content='Tôi đã xác nhận thông tin bổ sung bạn cung cấp, tôi sẽ tham khảo.'))
+            self.sql_message.append(AIPromptMessage(content='Tôi đã nắm các quy tắc bổ sung bạn cung cấp và sẽ tuân thủ khi sinh SQL, trong phạm vi các quy tắc trong <Rules>, định dạng đầu ra và giới hạn bảo mật.'))
         if _system_templates.get('terminologies'):
             self.sql_message.append(HumanPromptMessage(content=_system_templates['terminologies']))
             self.sql_message.append(AIPromptMessage(content='Tôi đã xác nhận thông tin thuật ngữ bạn cung cấp, tôi sẽ tham khảo.'))
@@ -608,6 +643,9 @@ class LLMService:
         whitelist AST (dùng chính danh sách trả về của hàm này), và sample data. Phễu bảng rỗng
         thì chặn sớm bằng SingleMessageError — trước mọi lời gọi LLM — kèm danh sách lĩnh vực
         user thực có để client sửa `domainCode`.
+
+        Ngoài chuỗi schema, M-Schema dạng cấu trúc cùng sample data được giữ lại (`schema_prompt`)
+        để `generate_sql` rút gọn khi model từ chối prompt vì vượt context.
         """
         self.current_logs[OperationEnum.CHOOSE_TABLE] = start_log(session=_session,
                                                                   operate=OperationEnum.CHOOSE_TABLE,
@@ -630,14 +668,19 @@ class LLMService:
                     f"Bạn chưa được cấp quyền khai thác bảng nào trên nguồn dữ liệu này. "
                     f"Lĩnh vực bạn được cấp: {domain_list}.")
 
-        self.chat_question.db_schema, tables = self.out_ds_instance.get_db_schema(
-            self.ds.id, self.chat_question.question) if self.out_ds_instance else get_table_schema(
-            session=_session,
-            current_user=self.current_user,
-            ds=self.ds,
-            question=self.chat_question.question,
-            table_list=sw_permission.allowed_tables if restricted else None,
-            column_filter=sw_permission.allowed_columns if restricted else None)
+        m_schema = None
+        if self.out_ds_instance:
+            self.chat_question.db_schema, tables = self.out_ds_instance.get_db_schema(
+                self.ds.id, self.chat_question.question)
+        else:
+            m_schema, tables = get_table_m_schema(
+                session=_session,
+                current_user=self.current_user,
+                ds=self.ds,
+                question=self.chat_question.question,
+                table_list=sw_permission.allowed_tables if restricted else None,
+                column_filter=sw_permission.allowed_columns if restricted else None)
+            self.chat_question.db_schema = m_schema.render() if m_schema else ""
 
         if restricted and not tables:
             # Tên bảng trong quyền không khớp exact với core_table (đã có warning chi tiết trong
@@ -654,6 +697,9 @@ class LLMService:
                 ds=self.ds,
                 table_list=tables,
                 scope_queries=sw_permission.scope_queries if restricted else None)
+        self.schema_prompt = SchemaPrompt(m_schema, self.chat_question.sample_data) if m_schema else None
+        self.schema_reduction_index = 0
+        self.schema_reductions = ()
 
         self.current_logs[OperationEnum.CHOOSE_TABLE] = end_log(session=_session,
                                                                 log=self.current_logs[OperationEnum.CHOOSE_TABLE],
@@ -1317,6 +1363,12 @@ class LLMService:
         đáp án dùng được) cho các lượt sau — trước đây một lượt có retry để lại bốn message, trong
         đó có cả lời khiển trách "câu trả lời vừa rồi KHÔNG dùng được" mà lượt sau đọc thấy sẽ hiểu
         sai là đang nói về chính nó.
+
+        Model từ chối prompt (400) thì khối thông tin CSDL được rút gọn dần rồi gọi lại — xem
+        `_reduce_schema_prompt`.
+
+        Content không có JSON đáp án mà reasoning có thì lịch sử ghi khối JSON lấy từ reasoning
+        (xem `_pick_sql_answer`); `save_sql_answer` vẫn lưu nguyên content như model trả về.
         """
         # append current question
         if retry_reason:
@@ -1348,7 +1400,7 @@ class LLMService:
         full_thinking_text = ''
         full_sql_text = ''
         token_usage = {}
-        res = process_stream(self.llm.stream(messages), token_usage)
+        res = self._stream_sql_with_schema_reduction(messages, token_usage)
         for chunk in res:
             if chunk.get('content'):
                 full_sql_text += chunk.get('content')
@@ -1359,7 +1411,12 @@ class LLMService:
         # Lịch sử chỉ nhận bản đã rút gọn. `end_log` bên dưới cũng lưu `self.sql_message` chứ không
         # lưu `messages`: chính field này là thứ `init_messages` của lượt sau đọc để phát lại, nên
         # nó phải là lịch sử sạch. Prompt thật của lần gọi (kèm lần thử hỏng) đã nằm ở `start_log`.
-        self.sql_message.append(AIMessage(_cap_history_answer(full_sql_text)))
+        sql_answer = _pick_sql_answer(full_sql_text, full_thinking_text)
+        if sql_answer != full_sql_text:
+            SQLBotLogUtil.warning(
+                f'SQL answer JSON found only in reasoning_content (record {self.record.id}); '
+                f'using it as the answer')
+        self.sql_message.append(AIMessage(_cap_history_answer(sql_answer)))
 
         self.current_logs[OperationEnum.GENERATE_SQL] = end_log(session=_session,
                                                                 log=self.current_logs[OperationEnum.GENERATE_SQL],
@@ -1373,6 +1430,53 @@ class LLMService:
                                                                 token_usage=token_usage)
         self.record = save_sql_answer(session=_session, record_id=self.record.id,
                                       answer=orjson.dumps({'content': full_sql_text}).decode())
+
+    def _stream_sql_with_schema_reduction(self, messages: list, token_usage: Dict[str, Any]):
+        """Stream câu trả lời sinh SQL; model từ chối prompt (400) thì rút gọn schema rồi gọi lại.
+
+        Chỉ rút gọn khi chưa nhận được chunk nào: đã stream ra rồi thì lỗi không phải do độ dài
+        prompt, và phần đã gửi đi không thu hồi được. `token_usage` chỉ phản ánh lần gọi cuối.
+        """
+        while True:
+            started = False
+            try:
+                for chunk in process_stream(self.llm.stream(messages), token_usage):
+                    started = True
+                    yield chunk
+                return
+            except Exception as e:
+                if started or not is_prompt_rejection(e):
+                    raise
+                self._reduce_schema_prompt(e)
+
+    def _reduce_schema_prompt(self, error: Exception):
+        """Lên nấc rút gọn kế tiếp có tác dụng và cập nhật khối thông tin CSDL của prompt tại chỗ.
+
+        Message schema được sửa nội dung TẠI CHỖ: `self.sql_message` và danh sách tạm của lần thử
+        lại pha SQL cùng trỏ tới đối tượng đó. `chat_question.db_schema`/`sample_data` cũng đổi
+        theo, nên vòng thử lại SQL và các prompt chạy sau trong lượt (chart, answer, gợi ý) dùng
+        luôn bản đã rút gọn. Khối schema không vào lịch sử nên lượt sau bắt đầu lại từ bản đủ.
+
+        Không còn nấc nào: chưa rút gọn lần nào thì ném lại lỗi gốc (400 có thể vì lý do khác, và
+        datasource không rút gọn được), đã rút gọn thì ném `SchemaReductionExhausted`.
+        """
+        step = next_reduction(self.schema_prompt, self.schema_reduction_index) \
+            if self.schema_prompt is not None and self.sql_schema_message is not None else None
+        if step is None:
+            if not self.schema_reductions:
+                raise error
+            raise SchemaReductionExhausted(list(self.schema_reductions)) from error
+        self.schema_reduction_index, name, self.schema_prompt = step
+        self.schema_reductions += (name,)
+        self.chat_question.db_schema = self.schema_prompt.m_schema.render()
+        self.chat_question.sample_data = self.schema_prompt.sample_data
+        self.sql_schema_message.content = self.chat_question.sql_sys_question(
+            self.ds.type, self.enable_sql_row_limit)['schema']
+        SQLBotLogUtil.warning(
+            f"datasource {self.ds.id}: model rejected SQL prompt, retry with reduced schema "
+            f"(step {name}, schema block {len(self.sql_schema_message.content)} chars): "
+            f"{sanitize_secret(str(error))[:300]}"
+        )
 
     def generate_with_sub_sql(self, session: Session, sql, sub_mappings: list):
         sub_query = json.dumps(sub_mappings, ensure_ascii=False)
@@ -1874,8 +1978,10 @@ class LLMService:
                 # generate sql
                 sql_res = self.generate_sql(_session, retry_reason=retry_reason)
                 full_sql_text = ""
+                full_reasoning_text = ""
                 for chunk in sql_res:
                     full_sql_text += chunk.get("content")
+                    full_reasoning_text += chunk.get("reasoning_content") or ""
                     if in_chat:
                         yield "data:" + orjson.dumps(
                             {
@@ -1888,6 +1994,9 @@ class LLMService:
                     yield "data:" + orjson.dumps(
                         {"type": "info", "msg": "sql generated"}
                     ).decode() + "\n\n"
+                # Từ đây mọi bước parse đọc đáp án đã chọn, kể cả khi JSON lạc sang reasoning:
+                # cùng một lựa chọn với lịch sử mà `generate_sql` vừa ghi.
+                full_sql_text = _pick_sql_answer(full_sql_text, full_reasoning_text)
                 # filter sql
                 SQLBotLogUtil.info(full_sql_text)
 
@@ -2455,7 +2564,7 @@ class LLMService:
         except Exception as e:
             traceback.print_exc()
             error_msg: str
-            if isinstance(e, SingleMessageError):
+            if isinstance(e, (SingleMessageError, SchemaReductionExhausted)):
                 error_msg = str(e)
             elif isinstance(e, SQLBotDBConnectionError):
                 error_msg = orjson.dumps(
@@ -2790,8 +2899,10 @@ def process_stream(res: Iterator[BaseMessageChunk],
     - **Trường riêng của provider** (``additional_kwargs['reasoning_content']``): đường sạch, chỉ
       việc chuyển tiếp. Hệ thống đang tắt đường này bằng ``LLM_DISABLE_THINKING``, nhưng model nào
       không tôn trọng cờ đó thì vẫn rơi vào đây.
-    - **Thẻ ``<think>...</think>`` nằm lẫn trong ``content``**: prompt sinh SQL chủ động yêu cầu
-      model suy luận trong khối này (templates/template.yaml), nên đây mới là đường đang chạy thật.
+    - **Thẻ ``<think>...</think>`` nằm lẫn trong ``content``**: prompt sinh SQL từng yêu cầu model
+      suy luận trong khối này, nay đã chuyển sang văn xuôi không thẻ vì Qwen tắt thinking không
+      đóng được thẻ (xem ``_pick_sql_answer``). Lưu ý: sau vLLM có reasoning parser, thẻ bị server
+      bóc trước và nội dung về qua trường riêng ở trên, nên nhánh này chỉ chạy khi server không bóc.
       Cần tự bóc thẻ ra khỏi ``content``, kể cả khi thẻ bị cắt đôi giữa hai chunk — đó là việc của
       ``pending_start_tag`` và ``pending_end_tag``: mẩu đuôi khớp tiền tố của thẻ được giữ lại,
       chờ chunk sau ghép vào rồi mới xét. Thiếu bộ đệm cho thẻ ĐÓNG thì một stream cắt kiểu

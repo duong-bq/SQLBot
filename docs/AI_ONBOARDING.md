@@ -28,7 +28,7 @@ mạng) sẽ dẫn bạn đi sai ở đúng sáu chỗ này:
 | Phân quyền dữ liệu | Row/column permission cấu hình tay trên UI, nhờ LLM viết lại điều kiện lọc | Thêm một lớp **độc lập**: quyền bảng/cột/hàng đồng bộ từ hệ SW, cưỡng chế **tất định** bằng `sqlglot` |
 
 Hệ quả cụ thể: `ChatFinishStep` đã bị **đánh số lại** để chèn `GENERATE_ANSWER` vào giữa
-`QUERY_DATA` và `GENERATE_CHART`. Xem [chat_model.py:57](../apps/chat/models/chat_model.py#L57).
+`QUERY_DATA` và `GENERATE_CHART`. Xem [chat_model.py:60](../apps/chat/models/chat_model.py#L60).
 
 ## 3. Trạng thái hiện tại
 
@@ -36,7 +36,7 @@ Hệ quả cụ thể: `ChatFinishStep` đã bị **đánh số lại** để ch
 - Đối tác tích hợp: HĐND TP Hà Nội. Họ gọi API, không dùng web UI.
 - `finish_step` mặc định của `POST /chat/question` là `GENERATE_CHART`, do `GENERATE_CHART_ENABLED`
   quyết định (mặc định bật) qua `default_finish_step`
-  ([chat.py:465](../apps/chat/api/chat.py#L465)); nhánh MCP truyền `QUERY_DATA`
+  ([chat.py:466](../apps/chat/api/chat.py#L466)); nhánh MCP truyền `QUERY_DATA`
   ([mcp.py:258](../apps/mcp/mcp.py#L258)).
 - Số lần gọi LLM cho một lượt hỏi bình thường: **4** (sinh SQL + answer + chart + gợi ý câu hỏi
   tiếp theo; ba lần sau chạy song song). Tắt chart còn 3, tắt cả gợi ý
@@ -135,17 +135,17 @@ lại harness và kèm số liệu. Chi tiết trong [OPERATIONS.md](OPERATIONS.
 **2. Chú thích trong code là nguồn sự thật về "tại sao".**
 [llm.py](../apps/chat/task/llm.py) và [config.py](../common/core/config.py) có
 chú thích rất dày, nhiều chỗ ghi cả kết quả đo được và cảnh báo *"cố ý giữ nhánh này khi merge từ
-upstream"* (ví dụ [llm.py:107](../apps/chat/task/llm.py#L107)). Trước khi "dọn dẹp" một
+upstream"* (ví dụ [llm.py:132](../apps/chat/task/llm.py#L132)). Trước khi "dọn dẹp" một
 đoạn trông thừa, đọc chú thích của nó — phần lớn là vá lỗi đã đo được.
 
 **3. Mọi chỗ cắt bớt dữ liệu đưa vào prompt đều phải nói cho LLM biết đã cắt.**
 Cắt im lặng thì LLM đếm số dòng nó nhận được rồi báo đó là tổng. Ca đo thật: SQL trả 136 dòng,
 câu trả lời khẳng định "tổng cộng 72 nghị quyết". Cặp `ANSWER_MAX_ROWS` +
-`build_data_scope_note` ([llm.py:79-82](../apps/chat/task/llm.py#L79)) tồn tại vì lý do
+`build_data_scope_note` ([llm.py:86-89](../apps/chat/task/llm.py#L86)) tồn tại vì lý do
 đó và **phải luôn đi cùng nhau**.
 
 ## 6. Đi tiếp
 
 Muốn sửa pha answer → [TEXT2SQL_PIPELINE.md](TEXT2SQL_PIPELINE.md) §5, rồi mở
-[llm.py:708](../apps/chat/task/llm.py#L708) và khối `answer` trong
+[llm.py:764](../apps/chat/task/llm.py#L764) và khối `answer` trong
 [templates/template.yaml:630](../templates/template.yaml#L630).

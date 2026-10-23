@@ -10,6 +10,9 @@ PROJECT_ROOT = Path(__file__).parent.parent.parent
 TEMPLATES_DIR = PROJECT_ROOT / 'templates'
 BASE_TEMPLATE_PATH = TEMPLATES_DIR / 'template.yaml'
 SQL_TEMPLATES_DIR = TEMPLATES_DIR / 'sql_examples'
+# Bản mặc định của các prompt người dùng sửa được qua Gateway (SQL Playbook, Answer Persona).
+# Cùng thư mục với manifest `prompts.json` mà công cụ sync của Gateway đẩy thành v0.
+PROMPT_DEFAULTS_DIR = TEMPLATES_DIR / 'prompts'
 
 
 @cache
@@ -22,6 +25,17 @@ def _load_template_file(file_path: Path):
         raise FileNotFoundError(f"Template file not found at {file_path}")
     except yaml.YAMLError as e:
         raise ValueError(f"Error parsing YAML file {file_path}: {e}")
+
+
+@cache
+def get_prompt_default(file_name: str) -> str:
+    """Đọc bản mặc định của một prompt sửa được trong `templates/prompts/` (có cache).
+
+    Đây là nguồn duy nhất của bản mặc định: SQLBot dùng nó khi request không mang prompt từ
+    Gateway, và công cụ sync của Gateway đẩy đúng file này thành v0. Sửa nội dung ở đây thì phải
+    sync lại, nếu không bản v0 trên Gateway lệch với bản SQLBot tự dùng.
+    """
+    return (PROMPT_DEFAULTS_DIR / file_name).read_text(encoding='utf-8')
 
 
 def get_base_template():
@@ -60,5 +74,6 @@ def get_all_sql_templates():
 def reload_all_templates():
     """清空所有模板缓存"""
     _load_template_file.cache_clear()
+    get_prompt_default.cache_clear()
 
 

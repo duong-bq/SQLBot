@@ -631,9 +631,19 @@ Mỗi bảng và cột có hai trường chú thích:
 - `table_comment` / `field_comment` — comment đọc từ DDL của DB nguồn, Backend AI làm mới mỗi lần đồng bộ, chỉ đọc.
 - `custom_comment` — chú thích do bạn ghi.
 
-Chỉ `custom_comment` được đưa vào ngữ cảnh gửi cho LLM. Comment gốc trong DB nguồn **không bao giờ**
-tới tay LLM; nó chỉ được copy sang `custom_comment` một lần lúc bảng/cột được đồng bộ lần đầu, và
-từ đó về sau đồng bộ lại không ghi đè lên nội dung bạn đã sửa.
+Chỉ `custom_comment` được đưa vào ngữ cảnh gửi cho LLM. Comment gốc trong DB nguồn **không** tới
+thẳng LLM; nó tới được nhờ được copy sang `custom_comment`:
+
+- Lần đồng bộ đầu: `custom_comment` = comment gốc.
+- Các lần đồng bộ sau: nếu `custom_comment` vẫn trùng comment gốc **cũ** (bạn chưa sửa) thì nó được
+  cập nhật theo comment gốc mới. Nếu bạn đã sửa khác đi — kể cả xóa trắng — thì nội dung của bạn
+  được giữ nguyên.
+- Hệ quả: `custom_comment` đang trống trong khi nguồn có comment thì sẽ **không** tự được điền. Muốn
+  dùng lại comment gốc, ghi nó vào `custom_comment` qua các endpoint bên dưới.
+
+`custom_comment` của cột còn quyết định cột đó có được lấy giá trị mẫu đưa vào ngữ cảnh LLM hay không
+(mọi cột có chú thích đều được lấy). Nên chú thích rõ các cột nghiệp vụ, nhất là cặp cột mã / cột
+tên của cùng một danh mục — ghi rõ cột nào chứa mã, cột nào chứa tên hiển thị.
 
 Với DB không khai comment và tên bảng/cột mã hóa, đây là thứ duy nhất cho LLM biết dữ liệu là gì.
 Bỏ trống bước này thì chất lượng sinh SQL giảm rõ rệt.
