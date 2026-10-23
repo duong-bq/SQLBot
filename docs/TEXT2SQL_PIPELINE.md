@@ -432,10 +432,10 @@ lấy phân bố rồi quyết.
 ### Định dạng
 
 M-Schema là cách serialize schema dạng bán cấu trúc (nguồn: XiYan-SQL của Alibaba), token-hiệu quả
-hơn DDL thô. Dựng dạng cấu trúc tại [datasource.py:1184](../backend/apps/datasource/crud/datasource.py#L1184)
+hơn DDL thô. Dựng dạng cấu trúc tại [datasource.py:1250](../backend/apps/datasource/crud/datasource.py#L1250)
 `get_table_m_schema` (đối tượng `MSchema` trong [m_schema.py](../backend/apps/datasource/m_schema.py):
 bảng, cột, FK, kèm cờ bảng nào được kéo theo quan hệ) rồi mới render ra chuỗi.
-`get_table_schema` ([datasource.py:1267](../backend/apps/datasource/crud/datasource.py#L1267)) giữ
+`get_table_schema` ([datasource.py:1333](../backend/apps/datasource/crud/datasource.py#L1333)) giữ
 nguyên chữ ký cũ, chỉ bọc hàm dựng rồi render — các chỗ gọi cũ không đổi. Bất biến: bản render khớp
 từng byte chuỗi mà code cũ nối tay. Chuỗi render có dạng:
 
@@ -474,7 +474,11 @@ bảng đã đưa vào prompt, lưu ở `self.table_name_list`. Danh sách này 
 tới nó cũng bị từ chối.
 
 Cùng chỗ đó, `get_tables_sample_data` lấy vài dòng dữ liệu mẫu nhét vào prompt để LLM biết định
-dạng giá trị thật (ví dụ mã tỉnh viết thế nào).
+dạng giá trị thật (ví dụ mã tỉnh viết thế nào). Mỗi bảng 3 dòng. Không có phạm vi quyền SW thì cột
+được chọn là **mọi cột có `custom_comment`**, bù thêm cột không chú thích cho đủ 10
+([datasource.py:1075](../backend/apps/datasource/crud/datasource.py#L1075) `pick_sample_fields`);
+có phạm vi thì lấy mọi cột trong projection của phạm vi. Vì vậy chú thích cột quyết định cả M-Schema
+lẫn việc LLM có thấy giá trị thật của cột đó hay không.
 
 **Với người dùng có quyền SW, danh sách này bị thu hẹp trước khi M-Schema được dựng** — một phép
 thu hẹp duy nhất kéo theo cả ba thứ: prompt, whitelist và dữ liệu mẫu. Xem §13.
