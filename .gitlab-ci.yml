@@ -145,7 +145,8 @@ build:
         if [ -n "${TAG_PREFIX}" ]; then TAG_REGEX="^${TAG_PREFIX}[0-9]+\\.[0-9]+\\.[0-9]+$"; else TAG_REGEX="^[0-9]+\\.[0-9]+\\.[0-9]+$"; fi
         API_URL="https://${HARBOR_URL}/api/v2.0/projects/${HARBOR_PROJECT}/repositories/${HARBOR_REPO}/artifacts?with_tag=true&page_size=50&sort=-push_time"
         RAW_JSON=$(curl -sf -u "${HARBOR_USER}:${HARBOR_PASSWORD}" "${API_URL}" || echo "")
-        PREVIOUS_SEMVER_TAG=$(echo "${RAW_JSON}" | jq -r --arg re "${TAG_REGEX}" '[.[].tags[]?.name | select(test($re))][0] // empty')
+        # The highest version among all matching tags, not the tag of the newest artifact: an artifact pushed late under a lower tag would otherwise make the next build reuse an existing tag and overwrite its image.
+        PREVIOUS_SEMVER_TAG=$(echo "${RAW_JSON}" | jq -r --arg re "${TAG_REGEX}" --arg prefix "${TAG_PREFIX}" '[.[].tags[]?.name | select(test($re)) | ltrimstr($prefix) | split(".") | map(tonumber)] | max // empty | $prefix + (map(tostring) | join("."))')
         if [ -z "${PREVIOUS_SEMVER_TAG}" ] || [ "${PREVIOUS_SEMVER_TAG}" = "null" ]; then
           NEW_TAG="${TAG_PREFIX}1.0.1"
         else
