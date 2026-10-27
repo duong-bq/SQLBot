@@ -132,6 +132,19 @@ def test_chat_chua_co_datasource_dung_dong_workspace(session):
     assert _resolve(session, _chat(session, 1)).model_name == "mc-ws"
 
 
+def test_danh_sach_datasource_dung_dong_cua_datasource_dau(session):
+    """S2: hỏi theo ``datasource_ids`` thì dùng model của datasource đầu danh sách."""
+    question = _chat(session, 1)
+    question.datasource_ids = [10, 11]
+    assert _resolve(session, question).model_name == "mc-ds10"
+
+
+def test_danh_sach_datasource_chua_co_dong_dung_model_chung(session):
+    question = _chat(session, 1)
+    question.datasource_ids = [11, 10]
+    assert _resolve(session, question) is DEFAULT
+
+
 def test_datasource_khac_workspace_bi_bo_qua(session):
     question = _chat(session, 1)
     question.datasource_id = 20

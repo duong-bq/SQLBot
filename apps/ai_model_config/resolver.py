@@ -24,17 +24,23 @@ from apps.datasource.models.datasource import CoreDatasource
 
 
 def _scoped_llm_row(session: Session, chat_question) -> AiModelConfig | None:
-    """Dòng LLM áp cho lượt hỏi: của datasource nếu chat đã có datasource, không thì của workspace.
+    """Dòng LLM áp cho lượt hỏi: của datasource nếu biết datasource, không thì của workspace.
 
     Datasource lấy giống ``LLMService.__init__``: datasource đã gắn vào chat thắng
-    ``datasource_id`` của câu hỏi. Datasource không có dòng thì trả None (dùng model chung), KHÔNG
-    lấy dòng workspace: datasource tạo trước tính năng này phải chạy y như cũ. Chat hay datasource
-    không hợp lệ cũng trả None, để ``__init__`` báo lỗi theo cách sẵn có.
+    ``datasource_id`` của câu hỏi. Hỏi theo danh sách ``datasource_ids`` thì chưa biết datasource
+    nào được chọn, nên lấy datasource đầu danh sách: Gateway chỉ gửi datasource cùng một kho, và
+    datasource cùng kho có cùng model (plan-workspace-danh-sach-model.md S2). Model này dùng cho
+    cả bước chọn datasource lẫn bước sinh SQL. Datasource không có dòng thì trả None (dùng model
+    chung), KHÔNG lấy dòng workspace: datasource tạo trước tính năng này phải chạy y như cũ. Chat
+    hay datasource không hợp lệ cũng trả None, để ``__init__`` báo lỗi theo cách sẵn có.
     """
     chat = session.get(Chat, chat_question.chat_id)
     if chat is None:
         return None
     ds_id = chat.datasource or chat_question.datasource_id
+    if not ds_id:
+        ds_ids = getattr(chat_question, "datasource_ids", None)
+        ds_id = ds_ids[0] if ds_ids else None
     if ds_id:
         ds = session.get(CoreDatasource, ds_id)
         if ds is None or ds.oid != chat.oid:

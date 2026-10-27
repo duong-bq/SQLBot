@@ -48,6 +48,7 @@ PostgreSQL phải có sẵn bên ngoài và có extension pgvector; Redis là ca
 | `DEFAULT_PWD` | Mật khẩu mặc định của người dùng mới (mặc định `SQLBot@123456`); ai-gateway đăng nhập tài khoản workspace bằng đúng giá trị này |
 | `AI_CALLBACK_URL`, `AI_CALLBACK_ACTION_TYPE` | Callback khi nạp Excel bất đồng bộ xong |
 | `CORS_ALLOW_ALL_ORIGINS`, `BACKEND_CORS_ORIGINS`, `FILE_DOWNLOAD_ALLOWED_HOSTS` | CORS và danh sách host được phép tải file |
+| `LLM_GATEWAY_BASE_URL` | LiteLLM của môi trường, cùng giá trị với biến cùng tên của ai-gateway; model ai-gateway cấp cho datasource chỉ được trỏ tới host:port này |
 
 Danh sách đầy đủ cùng giá trị mặc định nằm trong `.env.example` và `docs/OPERATIONS.md` (mục 2).
 

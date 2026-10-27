@@ -268,3 +268,89 @@ def test_record_dim_chi_ghi_lan_dau(session):
     crud.record_dim(session, row.id, 768)
     session.expire_all()
     assert _rows(session, "datasource", 10)["embedding"].dim == 1024
+
+
+@pytest.fixture()
+def litellm(monkeypatch):
+    """Giả lập ``LLM_GATEWAY_BASE_URL`` đã khai cho môi trường (S1)."""
+    monkeypatch.setattr(crud, "settings", SimpleNamespace(
+        model_fields_set={"SECRET_KEY"}, LLM_GATEWAY_BASE_URL=f"{GW}/v1"))
+
+
+class TestHostTheoLiteLLM:
+    """S1: khối model so với host LiteLLM của môi trường, không cần cấu hình workspace."""
+
+    def test_workspace_trong_van_nhan_khoi_tro_toi_litellm(self, session, litellm):
+        crud.pin_datasource_models(session, 10, OID, _blocks())
+        assert {r.origin for r in _rows(session, "datasource", 10).values()} == {"custom"}
+
+    def test_host_khac_litellm_thi_422(self, session, litellm):
+        with pytest.raises(ModelConfigError) as info:
+            crud.pin_datasource_models(session, 10, OID, _blocks(host="http://evil:4000"))
+        assert info.value.field == "models.llm.base_url"
+        assert _rows(session, "datasource", 10) == {}
+
+
+class TestPutDatasources:
+    """S3, S4: đổi llm/rerank cho nhiều datasource; dòng ghi ra luôn là ``custom``."""
+
+    def test_doi_nhieu_datasource_chi_loai_co_gui(self, session, litellm):
+        crud.pin_datasource_models(session, 10, OID, _blocks())
+        new = _blocks(emb=None, rerank=None, llm="sk-llm-000000000002", model_suffix="2")
+
+        assert crud.put_datasources_models(session, {10: OID, 11: OID}, new) == 2
+
+        ds10, ds11 = _rows(session, "datasource", 10), _rows(session, "datasource", 11)
+        assert ds10["llm"].model == "mc-l2" and ds10["embedding"].model == "mc-e1"
+        assert set(ds11) == {"llm"} and ds11["llm"].origin == "custom"
+        assert sqlbot_aes_decrypt(ds11["llm"].api_key_enc) == "sk-llm-000000000002"
+
+    def test_gui_lai_y_nguyen_khong_ghi(self, session, litellm):
+        new = _blocks(emb=None)
+        crud.put_datasources_models(session, {10: OID}, new)
+        stamp = _rows(session, "datasource", 10)["llm"].updated_at
+
+        assert crud.put_datasources_models(session, {10: OID}, new) == 0
+        assert _rows(session, "datasource", 10)["llm"].updated_at == stamp
+
+    def test_doi_khoa_thi_ghi_lai(self, session, litellm):
+        crud.put_datasources_models(session, {10: OID}, _blocks(emb=None))
+        assert crud.put_datasources_models(
+            session, {10: OID}, _blocks(emb=None, llm="sk-llm-000000000009", rerank=None)) == 1
+
+    def test_dong_di_theo_workspace_thanh_custom(self, session, litellm):
+        crud.put_workspace_models(session, OID, _blocks())
+        crud.pin_datasource_models(session, 10, OID, parse_model_set(None))
+
+        assert crud.put_datasources_models(session, {10: OID}, _blocks(emb=None, rerank=None)) == 1
+
+        assert _rows(session, "datasource", 10)["llm"].origin == "custom"
+        crud.put_workspace_models(session, OID, _blocks(model_suffix="2"))
+        assert _rows(session, "datasource", 10)["llm"].model == "mc-l1"
+
+    def test_host_la_khong_ghi_datasource_nao(self, session, litellm):
+        with pytest.raises(ModelConfigError):
+            crud.put_datasources_models(
+                session, {10: OID, 11: OID}, _blocks(emb=None, host="http://evil:4000"))
+        assert _rows(session, "datasource", 10) == {} and _rows(session, "datasource", 11) == {}
+
+
+class TestReplaceEmbedding:
+    """S5: thay embedding của một datasource; đổi model thì xoá ``dim``."""
+
+    def test_doi_model_xoa_dim(self, session, litellm):
+        crud.pin_datasource_models(session, 10, OID, _blocks())
+        row = _rows(session, "datasource", 10)["embedding"]
+        crud.record_dim(session, row.id, 1024)
+        session.expire_all()
+
+        changed = crud.replace_datasource_embedding(
+            session, 10, OID, _blocks(llm=None, rerank=None, model_suffix="2"))
+
+        row = _rows(session, "datasource", 10)["embedding"]
+        assert changed and row.model == "mc-e2" and row.dim is None
+        assert _rows(session, "datasource", 10)["llm"].model == "mc-l1"
+
+    def test_cung_gia_tri_khong_doi(self, session, litellm):
+        crud.pin_datasource_models(session, 10, OID, _blocks())
+        assert crud.replace_datasource_embedding(session, 10, OID, _blocks(llm=None, rerank=None)) is False

@@ -167,6 +167,7 @@ vector cũ và mới không cùng không gian.
 | `CORS_ALLOW_ALL_ORIGINS` | `False` | Không khai được bằng `BACKEND_CORS_ORIGINS='*'` vì kiểu là `AnyUrl`. Bật cờ này thì `main.py` dùng `allow_origin_regex='.*'`, vẫn hoạt động với credentials |
 | `BACKEND_CORS_ORIGINS` | `[]` | Danh sách origin, ngăn bằng dấu phẩy. Starlette so khớp **chuỗi chính xác** — khác scheme/host/port là bị chặn, không có wildcard theo domain |
 | `SQLBOT_DOC_ENABLED` | `True` | Bật `/docs` và `/openapi.json` |
+| `LLM_GATEWAY_BASE_URL` | `''` | Base URL của LiteLLM trong môi trường, cùng tên và giá trị với biến của AI Gateway (môi trường test: `http://litellm-gateway.llm-d.svc.cluster.local:4000`). Khối model Gateway gửi cho datasource chỉ được trỏ tới host:port này, xem [BACKEND_ARCHITECTURE.md §8](BACKEND_ARCHITECTURE.md#model-do-ai-gateway-cấp--appsai_model_config). Rỗng thì chỉ còn nhận host của cấu hình workspace cũ |
 
 ### 2.9. Nạp Excel bất đồng bộ và callback
 
@@ -591,6 +592,7 @@ kỳ tài liệu, log hay issue nào; nếu cần xoay vòng mật khẩu thì p
 | Biến khai trong `.env` mà **không** khai trong env của repo gitops | Pod chỉ nhận các biến liệt kê trong `products/h04-sqlbot/<môi trường>.yaml`; thiếu khóa thì app chạy bằng giá trị mặc định của `config.py`, **không có triệu chứng** |
 | Sửa `template.yaml` mà không restart | `apps/template/template.py` có `@cache` |
 | Đổi cấu hình model trong DB mà không restart | `LLMFactory.create_llm` có `@lru_cache(maxsize=32)` |
+| `LLM_GATEWAY_BASE_URL` khác **chuỗi** host với URL Gateway gửi | Kiểm host so chuỗi, không phân giải DNS: `litellm-gateway.llm-d.svc.cluster.local:4000` và IP của cùng máy là hai host khác nhau. Triệu chứng là tạo datasource hoặc đổi model bị `422 MODEL_CONFIG_INVALID` ở trường `models.<loại>.base_url`/`url`. Cấu hình workspace cũ còn lưu host IP thì host đó vẫn được nhận cho tới đợt dọn |
 | `FILE_DOWNLOAD_ALLOWED_HOSTS` rỗng làm chết **cả** đính kèm `.docx` của chat | Một biến chi phối hai tính năng (§2.10). Triệu chứng phía client là `400 URL_HOST_NOT_ALLOWED` chứ không phải lỗi cấu hình — dễ đi tìm nhầm phía đối tác |
 
 ### 7.4. Hành vi pipeline

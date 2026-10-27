@@ -293,6 +293,13 @@ class Settings(BaseSettings):
     # xác thực, nên mặc định rỗng; giữ lại biến để sau này họ đổi ý thì không phải sửa code.
     AI_CALLBACK_AUTH_HEADER: str = ''
 
+    # Base URL của LiteLLM trong môi trường (plan-workspace-danh-sach-model.md S1), cùng tên và
+    # cùng giá trị với LLM_GATEWAY_BASE_URL của AI Gateway, ví dụ
+    # http://litellm-gateway.llm-d.svc.cluster.local:4000. Khối model do Gateway gửi chỉ được trỏ
+    # tới host:port này: SQLBot sẽ gửi schema và câu hỏi tới URL được khai, nên đây là lớp chống
+    # SSRF. Rỗng thì chỉ còn host của cấu hình workspace cũ được nhận.
+    LLM_GATEWAY_BASE_URL: str = ''
+
     # --- Tải file nguồn từ presigned URL: phần DÙNG CHUNG cho mọi luồng tải ---
     # Ba biến FILE_DOWNLOAD_* dưới đây chi phối CẢ HAI tính năng đang tải file từ presigned URL:
     # import excel bất đồng bộ (POST /datasource/createFromExcelAsync) và tài liệu .docx đính kèm

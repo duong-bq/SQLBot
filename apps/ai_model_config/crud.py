@@ -205,26 +205,39 @@ def _host_port(url: str) -> tuple[str | None, int | None]:
     return parts.hostname, port
 
 
+def _allowed_hosts(session: Session, oid: int) -> set[tuple[str | None, int | None]]:
+    """Các cặp (host, port) mà khối model được phép trỏ tới.
+
+    Gồm host của ``LLM_GATEWAY_BASE_URL`` và host của cấu hình workspace còn lưu. Cấu hình workspace
+    chỉ còn để nhận datasource tạo trong lúc Gateway cũ còn chạy; bỏ ở đợt dọn.
+    """
+    allowed = {_host_port(row.base_url) for row in list_rows(session, SCOPE_WORKSPACE, oid)}
+    gateway = getattr(settings, "LLM_GATEWAY_BASE_URL", "")
+    if gateway:
+        allowed.add(_host_port(gateway))
+    return allowed
+
+
 def check_custom_hosts(session: Session, oid: int, model_set: ModelSetIn) -> None:
-    """Cấu hình tuỳ chỉnh chỉ được trỏ tới host mà cấu hình workspace đang dùng.
+    """Khối model chỉ được trỏ tới LiteLLM của môi trường, xem ``_allowed_hosts``.
 
     Không cho trỏ ra host lạ: SQLBot sẽ gửi dữ liệu nghiệp vụ (schema, câu hỏi) tới bất kỳ URL
-    nào được khai, nên tuỳ chỉnh chỉ được đổi model và khoá trên cùng cổng LLM. Workspace chưa có
-    cấu hình thì không có gì để so, nên từ chối luôn.
+    nào được khai. Không có host nào để so (chưa đặt ``LLM_GATEWAY_BASE_URL`` và workspace chưa có
+    cấu hình) thì từ chối luôn.
     """
     if model_set.is_empty():
         return
-    allowed = {_host_port(row.base_url) for row in list_rows(session, SCOPE_WORKSPACE, oid)}
+    allowed = _allowed_hosts(session, oid)
     if not allowed:
         raise invalid(
-            "models", "Workspace chưa có cấu hình model nên không nhận cấu hình tuỳ chỉnh."
+            "models", "SQLBot chưa khai LLM_GATEWAY_BASE_URL nên không nhận cấu hình model."
         )
     for model_type, block in model_set.blocks():
         if _host_port(block.endpoint) not in allowed:
             url_key = "url" if model_type == "rerank" else "base_url"
             raise invalid(
                 f"models.{model_type}.{url_key}",
-                "Host của cấu hình tuỳ chỉnh phải trùng host cấu hình workspace.",
+                "Host của cấu hình model phải là LiteLLM của môi trường.",
             )
 
 
@@ -275,6 +288,83 @@ def pin_datasource_models(
         row.updated_at = now
         session.add(row)
     session.flush()
+
+
+def _upsert_datasource_row(
+    session: Session, ds_id: int, oid: int, model_type: str, block, now: datetime
+) -> bool:
+    """Ghi một khối vào dòng của datasource, ``origin=custom``; trả True nếu có ghi.
+
+    Giá trị không đổi thì không ghi, để cache giải mã và cache embedder không bị xoá oan. Dòng
+    ``origin=workspace`` cũ được chuyển thành ``custom`` dù giá trị trùng: từ nay model của
+    datasource do Gateway quyết định theo kho, ``PUT`` workspace không còn kéo nó đi theo.
+    Đổi ``base_url`` hoặc ``model`` thì xoá ``dim`` vì có thể đã sang model khác số chiều.
+    """
+    plain = block.api_key.get_secret_value()
+    row = get_row(session, SCOPE_DATASOURCE, ds_id, model_type)
+    if row is None:
+        session.add(AiModelConfig(
+            scope=SCOPE_DATASOURCE,
+            scope_id=ds_id,
+            oid=oid,
+            model_type=model_type,
+            base_url=block.endpoint,
+            model=block.model,
+            api_key_enc=encrypt_key(plain),
+            api_key_hint=mask_key(plain),
+            origin=ORIGIN_CUSTOM,
+            created_at=now,
+            updated_at=now,
+        ))
+        return True
+    same_target = row.base_url == block.endpoint and row.model == block.model
+    if same_target and row.origin == ORIGIN_CUSTOM and _key_matches(row, plain):
+        return False
+    if not same_target:
+        row.dim = None
+    row.base_url = block.endpoint
+    row.model = block.model
+    row.api_key_enc = encrypt_key(plain)
+    row.api_key_hint = mask_key(plain)
+    row.origin = ORIGIN_CUSTOM
+    row.updated_at = now
+    session.add(row)
+    return True
+
+
+def put_datasources_models(
+    session: Session, oids: dict[int, int], model_set: ModelSetIn
+) -> int:
+    """Đổi llm/rerank cho nhiều datasource trong một transaction; trả số dòng đã ghi.
+
+    ``oids`` là ``{ds_id: oid}`` của các datasource đã khoá. Chỉ đụng loại có gửi; datasource
+    chưa có dòng loại đó thì tạo mới. Không nhận embedding: vector đã lưu do model cũ tính, đổi
+    embedding đi đường ``replace_datasource_embedding``. Kiểm host hết mọi datasource trước khi
+    ghi, để lỗi không để lại một nửa kho đã đổi.
+    """
+    for oid in set(oids.values()):
+        check_custom_hosts(session, oid, model_set)
+    now = _now()
+    written = 0
+    for ds_id in sorted(oids):
+        for model_type, block in model_set.blocks():
+            written += _upsert_datasource_row(session, ds_id, oids[ds_id], model_type, block, now)
+    session.flush()
+    return written
+
+
+def replace_datasource_embedding(
+    session: Session, ds_id: int, oid: int, model_set: ModelSetIn
+) -> bool:
+    """Thay model embedding của một datasource; trả True nếu dòng đổi.
+
+    Bên gọi phải tính lại vector của datasource sau khi commit: vector cũ do model cũ tính, so
+    với vector câu hỏi của model mới thì sai mà không báo lỗi.
+    """
+    check_custom_hosts(session, oid, model_set)
+    changed = _upsert_datasource_row(session, ds_id, oid, MODEL_EMBEDDING, model_set.embedding, _now())
+    session.flush()
+    return changed
 
 
 def delete_scope(session: Session, scope: str, scope_id: int) -> None:

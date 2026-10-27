@@ -430,6 +430,35 @@ Mọi nhà cung cấp đều đi qua giao diện OpenAI-compatible.
 locking để nhiều thread không cùng nạp model. `EMBEDDING_PROVIDER='api'` → `OpenAIEmbeddings`; khác
 đi → `HuggingFaceEmbeddings` tải model về `LOCAL_MODEL_PATH`.
 
+### Model do AI Gateway cấp — `apps/ai_model_config/`
+
+Bảng `ai_model_config` giữ model `llm` / `embedding` / `rerank` riêng cho từng datasource (và cấu
+hình cấp workspace của luồng cũ). Có dòng thì dùng đúng dòng đó, gọi model hỏng thì báo lỗi chứ
+**không** rơi về model chung; không có dòng thì chạy như SQLBot gốc
+([resolver.py](../apps/ai_model_config/resolver.py)).
+
+Từ plan-workspace-danh-sach-model của Gateway, model đi theo **kho** của Gateway (mọi datasource
+trong một kho dùng cùng ba model), không còn theo workspace:
+
+| Đường vào | Tác dụng |
+|---|---|
+| trường `models` khi tạo datasource ([hooks.py](../apps/ai_model_config/hooks.py)) | Chốt ba model cho datasource mới, kiểm host trước mọi tác dụng phụ |
+| `PUT /ai-model-config/datasources` | Đổi llm/rerank cho nhiều datasource của một kho trong một transaction. Không nhận embedding. Gửi lại cùng giá trị là no-op |
+| `PUT /ai-model-config/datasource/{ds_id}/embedding` | Thay embedding của một datasource, commit rồi tính lại vector bảng và datasource ở thread nền; response không đợi tính xong |
+| `PUT /ai-model-config/workspace/{oid}` | Luồng cũ, chỉ giữ cho Gateway bản trước; gỡ ở đợt dọn |
+| `GET /ai-model-config/workspace/{oid}`, `GET /ai-model-config/datasource/{ds_id}` | Xem lại để đối soát; khoá chỉ trả bản che |
+
+**Kiểm host.** Mọi khối model chỉ được trỏ tới host:port của `LLM_GATEWAY_BASE_URL` (cùng giá trị với
+biến cùng tên của Gateway) hoặc host trong cấu hình workspace còn lưu
+([crud.py](../apps/ai_model_config/crud.py) `_allowed_hosts`). Lý do: SQLBot gửi schema và câu hỏi
+tới URL được khai, nên đây là lớp chống SSRF. So khớp **chuỗi** host, cổng mặc định lấy theo
+scheme.
+
+**Hỏi trên nhiều datasource.** Câu hỏi gửi danh sách `datasource_ids` thì lấy LLM của datasource
+đầu danh sách cho cả bước chọn datasource lẫn bước sinh SQL: Gateway chỉ gửi datasource cùng một
+kho, nên chúng cùng model. Xếp hạng datasource bằng embedding thì nhóm theo model trước rồi mới so
+cosine trong từng nhóm ([embedding.py](../apps/ai_model_config/embedding.py) `rank_ds_by_embedding`).
+
 ---
 
 ## 9. `sqlbot_xpack` — package ngoài repo
@@ -485,7 +514,7 @@ Router đăng ký ở [apps/api.py](../apps/api.py), prefix `settings.API_V1_STR
 
 `login` · `user` · `workspace` · `assistant` · `aimodel` · `base` (settings) · `terminology` ·
 `data_training` · `datasource` · `chat` · `dashboard` · `mcp` · `table_relation` · `parameter` ·
-`apikey` · `recommended_problem` · `variable_api` · `hooks`
+`apikey` · `recommended_problem` · `variable_api` · `hooks` · `ai_model_config`
 
 Đặc tả chi tiết đã có, **đừng viết lại**:
 
