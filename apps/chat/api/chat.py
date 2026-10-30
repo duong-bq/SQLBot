@@ -935,6 +935,33 @@ async def question_answer_inner(
             )
 
 
+async def _collect_final_chunk(llm_service: LLMService) -> dict:
+    """Chờ task nền xong mà không chặn event loop, rồi lấy mẩu kết quả cuối.
+
+    Dùng cho nhánh ``stream=False``. Trước đây nhánh này duyệt ``await_result()``
+    ngay trên event loop: generator đó chờ đồng bộ (mỗi vòng
+    ``concurrent.futures.wait`` tới 0,5 giây) suốt lúc pipeline chạy, nên cả process
+    đứng yên 5–20 giây mỗi request. Trong lúc đó ``/readyz``, ``/healthz`` không được
+    trả lời, Kubernetes gỡ pod khỏi Service, và request khác cũng không được nhận
+    (concurrency thực tế bằng 1).
+
+    Dùng ``asyncio.wait`` thay vì ``await`` thẳng future để ngoại lệ của task nền
+    không bị ném ra ở đây, giữ đúng hành vi cũ: thiếu mẩu ``success`` thì caller trả
+    500. Future đã xong thì ``await_result()`` chỉ rút các mẩu còn trong hàng đợi.
+    """
+    waiter = asyncio.wrap_future(llm_service.future)
+    await asyncio.wait([waiter])
+    if not waiter.cancelled():
+        # Đánh dấu ngoại lệ (nếu có) là đã đọc, tránh cảnh báo
+        # "exception was never retrieved".
+        waiter.exception()
+    raw_data = {}
+    for chunk in llm_service.await_result():
+        if chunk:
+            raw_data = chunk
+    return raw_data
+
+
 async def stream_sql(
     session: SessionDep,
     current_user: CurrentUser,
@@ -1032,11 +1059,7 @@ async def stream_sql(
             llm_service.await_result(), media_type="text/event-stream"
         )
     else:
-        res = llm_service.await_result()
-        raw_data = {}
-        for chunk in res:
-            if chunk:
-                raw_data = chunk
+        raw_data = await _collect_final_chunk(llm_service)
         status_code = 200
         if not raw_data.get("success"):
             status_code = 500
@@ -1163,11 +1186,7 @@ async def analysis_or_predict(
             llm_service.await_result(), media_type="text/event-stream"
         )
     else:
-        res = llm_service.await_result()
-        raw_data = {}
-        for chunk in res:
-            if chunk:
-                raw_data = chunk
+        raw_data = await _collect_final_chunk(llm_service)
         status_code = 200
         if not raw_data.get("success"):
             status_code = 500
