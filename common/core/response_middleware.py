@@ -7,6 +7,7 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse
 
 from common.core.config import settings
+from common.telemetry import note_error
 from common.utils.utils import SQLBotLogUtil
 
 
@@ -85,7 +86,11 @@ class ResponseMiddleware(BaseHTTPMiddleware):
                     }
                 )
             except Exception as e:
-                SQLBotLogUtil.error(f"Response processing error: {str(e)}", exc_info=True)
+                SQLBotLogUtil.error(
+                    f"Could not wrap the response in the API envelope ({type(e).__name__})",
+                    exc_info=True,
+                    extra={"error": type(e).__name__},
+                )
                 return JSONResponse(
                     status_code=500,
                     content=str(e),
@@ -107,7 +112,8 @@ class ResponseMiddleware(BaseHTTPMiddleware):
 class exception_handler():
     @staticmethod
     async def http_exception_handler(request: Request, exc: HTTPException):
-        SQLBotLogUtil.error(f"HTTP Exception: {exc.detail}", exc_info=True)
+        # Request bị từ chối không có dòng log riêng: dòng request mang mã và thông điệp này.
+        note_error(request, "http_error", exc.detail if isinstance(exc.detail, str) else None)
         return JSONResponse(
             status_code=exc.status_code,
             content=exc.detail,
@@ -116,7 +122,13 @@ class exception_handler():
 
     @staticmethod
     async def global_exception_handler(request: Request, exc: Exception):
-        SQLBotLogUtil.error(f"Unhandled Exception: {str(exc)}", exc_info=True)
+        # Lỗi không lường trước: một dòng ERROR kèm stack. Handler của Exception chạy ở ServerErrorMiddleware, ngoài
+        # dòng request, nên dòng request đã được ghi (mức ERROR, status 500) trước khi tới đây và không mang mã lỗi.
+        SQLBotLogUtil.error(
+            f"Unhandled {type(exc).__name__} while handling {request.method} {request.url.path}",
+            exc_info=True,
+            extra={"error": type(exc).__name__},
+        )
         return JSONResponse(
             status_code=500,
             content=str(exc),

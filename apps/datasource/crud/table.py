@@ -36,19 +36,19 @@ def run_fill_empty_table_and_ds_embedding(session_maker):
 
         session = session_maker()
 
-        SQLBotLogUtil.info('get tables')
+        SQLBotLogUtil.info('Started loading the tables that still need an embedding')
         stmt = select(CoreTable.id).where(and_(CoreTable.embedding.is_(None)))
         results = session.execute(stmt).scalars().all()
-        SQLBotLogUtil.info('table result: ' + str(len(results)))
+        SQLBotLogUtil.info(f'Loaded {len(results)} tables that still need an embedding', extra={'tables': len(results)})
         save_table_embedding(session_maker, results)
 
-        SQLBotLogUtil.info('get datasource')
+        SQLBotLogUtil.info('Started loading the datasources that still need an embedding')
         ds_stmt = select(CoreDatasource.id).where(and_(CoreDatasource.embedding.is_(None)))
         ds_results = session.execute(ds_stmt).scalars().all()
-        SQLBotLogUtil.info('datasource result: ' + str(len(ds_results)))
+        SQLBotLogUtil.info(f'Loaded {len(ds_results)} datasources that still need an embedding', extra={'datasources': len(ds_results)})
         save_ds_embedding(session_maker, ds_results)
     except Exception:
-        traceback.print_exc()
+        SQLBotLogUtil.exception("Unexpected error in run fill empty table and ds embedding", extra={"function": "run_fill_empty_table_and_ds_embedding"})
     finally:
         session_maker.remove()
 
@@ -65,7 +65,7 @@ def save_table_embedding(session_maker, ids: List[int]):
     if not ids or len(ids) == 0:
         return
     try:
-        SQLBotLogUtil.info('start table embedding')
+        SQLBotLogUtil.info('Started computing the embeddings of the tables')
         start_time = time.time()
         embedder = DsEmbedder()
         session = session_maker()
@@ -106,9 +106,12 @@ def save_table_embedding(session_maker, ids: List[int]):
             session.commit()
 
         end_time = time.time()
-        SQLBotLogUtil.info('table embedding finished in: ' + str(end_time - start_time) + ' seconds')
+        SQLBotLogUtil.info(
+            f'Finished computing the embeddings of the tables in {end_time - start_time:.1f} seconds',
+            extra={'duration_s': round(end_time - start_time, 1)},
+        )
     except Exception:
-        traceback.print_exc()
+        SQLBotLogUtil.exception("Unexpected error in save table embedding", extra={"function": "save_table_embedding"})
     finally:
         session_maker.remove()
 
@@ -125,7 +128,7 @@ def save_ds_embedding(session_maker, ids: List[int]):
     if not ids or len(ids) == 0:
         return
     try:
-        SQLBotLogUtil.info('start datasource embedding')
+        SQLBotLogUtil.info('Started computing the embeddings of the datasources')
         start_time = time.time()
         embedder = DsEmbedder()
         session = session_maker()
@@ -176,8 +179,11 @@ def save_ds_embedding(session_maker, ids: List[int]):
             session.commit()
 
         end_time = time.time()
-        SQLBotLogUtil.info('datasource embedding finished in: ' + str(end_time - start_time) + ' seconds')
+        SQLBotLogUtil.info(
+            f'Finished computing the embeddings of the datasources in {end_time - start_time:.1f} seconds',
+            extra={'duration_s': round(end_time - start_time, 1)},
+        )
     except Exception:
-        traceback.print_exc()
+        SQLBotLogUtil.exception("Unexpected error in save ds embedding", extra={"function": "save_ds_embedding"})
     finally:
         session_maker.remove()

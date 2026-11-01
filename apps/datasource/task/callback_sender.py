@@ -24,6 +24,7 @@ import requests
 from common.core.config import settings
 from common.utils.periodic import PeriodicThread
 from common.utils.utils import SQLBotLogUtil
+from common.metrics import excel_callbacks
 
 from ..crud.excel_job import claim_callback_batch, record_callback_result
 
@@ -85,12 +86,18 @@ def _send_one(item: dict) -> None:
         item["id"], success=ok, error=error,
         max_attempts=settings.AI_CALLBACK_MAX_ATTEMPTS, delay_for=_backoff_seconds,
     )
+    excel_callbacks.add(1, {"outcome": "sent" if ok else ("dead" if status == "dead" else "retry")})
     if ok:
-        SQLBotLogUtil.info(f"excel callback sent, job={item['id']} ds={item['ds_id']}")
+        SQLBotLogUtil.info(
+            f"Sent the Excel callback of job {item['id']} (datasource {item['ds_id']})",
+            extra={'job_id': item['id'], 'ds_id': item['ds_id']},
+        )
     else:
         level = SQLBotLogUtil.error if status == "dead" else SQLBotLogUtil.warning
-        level(f"excel callback failed, job={item['id']} ds={item['ds_id']} "
-              f"status={status} attempts={item['attempts'] + 1}: {error}")
+        level(f"Excel callback of job {item['id']} failed with status {status} "
+              f"after {item['attempts'] + 1} attempts: {error}",
+              extra={'job_id': item['id'], 'ds_id': item['ds_id'], 'callback_status': status,
+                     'attempts': item['attempts'] + 1})
 
 
 def callback_tick() -> int:
@@ -119,7 +126,9 @@ def callback_tick() -> int:
             try:
                 future.result()
             except Exception as e:
-                SQLBotLogUtil.exception(f"excel callback worker crashed: {e}")
+                SQLBotLogUtil.exception(
+                    f"The Excel callback worker crashed ({type(e).__name__})", extra={'error': type(e).__name__}
+                )
     return len(batch)
 
 

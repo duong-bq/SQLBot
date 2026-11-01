@@ -3,6 +3,12 @@
 # Build cần ra mạng tới mirrors.aliyun.com và test.pypi.org: uv.lock ghim URL tuyệt đối của hai host này.
 FROM dockerhub.elcomlab.com/wolfi/python:v3.11.17@sha256:029ed0b6837fb507feaf505b586708d7ba6c2c0857440b015fffeebbae0b6e57
 
+# Giờ Việt Nam. Ảnh nền không có dữ liệu múi giờ (chỉ đặt TZ thì vẫn là UTC), nên cài tzdata bằng root rồi trả lại user thường.
+USER root
+RUN apk add --no-cache tzdata
+USER 10001:10001
+ENV TZ=Asia/Ho_Chi_Minh
+
 ENV UV_PROJECT_ENVIRONMENT=/home/appuser/venv \
     UV_HTTP_TIMEOUT=600 \
     UV_CONCURRENT_DOWNLOADS=4 \

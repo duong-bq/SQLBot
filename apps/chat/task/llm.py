@@ -399,7 +399,9 @@ class LLMService:
                 if args[3].custom_model:
                     if any(str(model.id) == str(args[3].custom_model) for model in _ai_model_list):
                         specialized_model_id = args[3].custom_model
-                        print("use custom model: id[" + specialized_model_id + "]")
+                        SQLBotLogUtil.info(
+                            f"Using the custom model {specialized_model_id}", extra={"model_id": str(specialized_model_id)}
+                        )
         # Model của datasource/workspace do Gateway cấp (nếu có), không thì model mặc định như cũ.
         config: LLMConfig = await resolve_llm_config(
             args[0], args[2], specialized_model_id,
@@ -412,7 +414,9 @@ class LLMService:
                 route_config = await get_default_config(settings.LLM_ROUTE_MODEL_ID)
             except Exception as e:
                 # Cấu hình sai model cho cổng không được giết lượt hỏi: rơi về model chính.
-                SQLBotLogUtil.error(f'[route] load route model failed, use main model: {e}')
+                SQLBotLogUtil.error(
+                    f'Could not load the route model, using the main model: {e}', extra={'error': type(e).__name__}
+                )
         instance = cls(*args, **kwargs, config=config, route_config=route_config)
 
         chat_params: list[SysArgModel] = await get_groups(args[0], "chat")
@@ -906,7 +910,7 @@ class LLMService:
             for chunk in self.generate_answer(_session, sys_prompt, user_prompt):
                 out_queue.put(('chunk', chunk))
         except Exception as e:
-            traceback.print_exc()
+            SQLBotLogUtil.exception("Unexpected error in run answer worker", extra={"function": "run_answer_worker"})
             out_queue.put(('error', e))
         finally:
             out_queue.put(('done', None))
@@ -936,7 +940,7 @@ class LLMService:
                     {'content': payload.get('content'), 'reasoning_content': payload.get('reasoning_content'),
                      'type': 'answer-result'}).decode() + '\n\n'
             elif kind == 'error':
-                SQLBotLogUtil.error(f'Generate answer failed: {payload}')
+                SQLBotLogUtil.error(f'Generating the answer failed: {sanitize_secret(str(payload))[:300]}')
                 state['failed'] = True
             else:
                 state['done'] = True
@@ -1027,7 +1031,7 @@ class LLMService:
             _session = session_maker()
             out_queue.put(('result', self.generate_inline_recommend(_session)))
         except Exception as e:
-            traceback.print_exc()
+            SQLBotLogUtil.exception("Unexpected error in run recommend worker", extra={"function": "run_recommend_worker"})
             out_queue.put(('error', e))
         finally:
             out_queue.put(('done', None))
@@ -1051,7 +1055,9 @@ class LLMService:
             if kind == 'result':
                 state['text'] = payload
             elif kind == 'error':
-                SQLBotLogUtil.error(f'Generate inline recommended questions failed: {payload}')
+                SQLBotLogUtil.error(
+                    f'Generating the inline recommended questions failed: {sanitize_secret(str(payload))[:300]}'
+                )
                 state['failed'] = True
             else:
                 state['done'] = True
@@ -1414,8 +1420,9 @@ class LLMService:
         sql_answer = _pick_sql_answer(full_sql_text, full_thinking_text)
         if sql_answer != full_sql_text:
             SQLBotLogUtil.warning(
-                f'SQL answer JSON found only in reasoning_content (record {self.record.id}); '
-                f'using it as the answer')
+                f'The SQL answer JSON was found only in reasoning_content of record {self.record.id}; using it as the answer',
+                extra={'record_id': self.record.id},
+            )
         self.sql_message.append(AIMessage(_cap_history_answer(sql_answer)))
 
         self.current_logs[OperationEnum.GENERATE_SQL] = end_log(session=_session,
@@ -1473,9 +1480,10 @@ class LLMService:
         self.sql_schema_message.content = self.chat_question.sql_sys_question(
             self.ds.type, self.enable_sql_row_limit)['schema']
         SQLBotLogUtil.warning(
-            f"datasource {self.ds.id}: model rejected SQL prompt, retry with reduced schema "
+            f"The model rejected the SQL prompt of datasource {self.ds.id}, retrying with a reduced schema "
             f"(step {name}, schema block {len(self.sql_schema_message.content)} chars): "
-            f"{sanitize_secret(str(error))[:300]}"
+            f"{sanitize_secret(str(error))[:300]}",
+            extra={'ds_id': self.ds.id, 'step': name, 'schema_chars': len(self.sql_schema_message.content)},
         )
 
     def generate_with_sub_sql(self, session: Session, sql, sub_mappings: list):
@@ -1524,7 +1532,10 @@ class LLMService:
                                                                         reasoning_content=full_thinking_text,
                                                                         token_usage=token_usage)
 
-        SQLBotLogUtil.info(full_dynamic_text)
+        SQLBotLogUtil.info(
+            f'Generated the dynamic SQL ({len(full_dynamic_text)} chars) for record {self.record.id}',
+            extra={'record_id': self.record.id, 'chars': len(full_dynamic_text)},
+        )
         return full_dynamic_text
 
     def generate_assistant_dynamic_sql(self, _session: Session, sql, tables: List):
@@ -1588,7 +1599,10 @@ class LLMService:
                                                                                  reasoning_content=full_thinking_text,
                                                                                  token_usage=token_usage)
 
-        SQLBotLogUtil.info(full_filter_text)
+        SQLBotLogUtil.info(
+            f'Generated the row filter ({len(full_filter_text)} chars) for record {self.record.id}',
+            extra={'record_id': self.record.id, 'chars': len(full_filter_text)},
+        )
         return full_filter_text
 
     def generate_filter(self, _session: Session, sql: str, tables: List):
@@ -1873,7 +1887,10 @@ class LLMService:
         Returns:
             Query results
         """
-        SQLBotLogUtil.info(f"Executing SQL on ds_id {self.ds.id}: {sql}")
+        SQLBotLogUtil.info(
+            f'Executing {len(sql)} chars of SQL on datasource {self.ds.id}', extra={'ds_id': self.ds.id, 'chars': len(sql)}
+        )
+        SQLBotLogUtil.debug(f'SQL text: {sql}')
         try:
             return exec_sql(ds=self.ds, sql=sql, origin_column=False)
         except Exception as e:
@@ -1998,7 +2015,10 @@ class LLMService:
                 # cùng một lựa chọn với lịch sử mà `generate_sql` vừa ghi.
                 full_sql_text = _pick_sql_answer(full_sql_text, full_reasoning_text)
                 # filter sql
-                SQLBotLogUtil.info(full_sql_text)
+                SQLBotLogUtil.info(
+                    f'The model answered the SQL step with {len(full_sql_text)} chars for record {self.record.id}',
+                    extra={'record_id': self.record.id, 'chars': len(full_sql_text)},
+                )
 
                 chart_type = self.get_chart_type_from_sql_answer(full_sql_text)
 
@@ -2090,7 +2110,10 @@ class LLMService:
                         )  # maybe no sql and tables
 
                     if sql_result:
-                        SQLBotLogUtil.info(sql_result)
+                        SQLBotLogUtil.info(
+                            f'Got the SQL with permissions ({len(sql_result)} chars) for record {self.record.id}',
+                            extra={'record_id': self.record.id, 'chars': len(sql_result)},
+                        )
                         sql_operate = OperationEnum.GENERATE_SQL_WITH_PERMISSIONS
                         sql = self.check_save_sql(
                             session=_session, res=sql_result, operate=sql_operate
@@ -2109,7 +2132,10 @@ class LLMService:
                         session=_session, res=full_sql_text, operate=sql_operate
                     )
 
-                SQLBotLogUtil.info("sql: " + sql)
+                SQLBotLogUtil.info(
+                    f'Generated {len(sql)} chars of SQL for record {self.record.id}',
+                    extra={'record_id': self.record.id, 'chat_id': self.record.chat_id, 'chars': len(sql)},
+                )
 
                 if not stream:
                     json_result["sql"] = sql
@@ -2221,7 +2247,8 @@ class LLMService:
                     # Cố ý không phát event SSE nào cho lần sinh lại: hợp đồng stream giữ nguyên
                     # như trước, client không phải biết tới khái niệm retry. Dấu vết nằm ở log.
                     SQLBotLogUtil.warning(
-                        f"SQL phase failed (attempt {sql_attempt}/{max_sql_retry}), retrying: {reason}"
+                        f"The SQL step failed (attempt {sql_attempt} of {max_sql_retry}), retrying: {reason}",
+                        extra={'attempt': sql_attempt, 'max_attempts': max_sql_retry},
                     )
                     continue
                 # Hết lượt thử. Chỉ hạ cấp khi client thực sự chờ pha answer: nhánh MCP và các
@@ -2237,8 +2264,8 @@ class LLMService:
                 # chat_record.error khác rỗng, mà lượt này sắp có câu trả lời tử tế. Lý do hỏng
                 # vẫn nằm đủ trong log ở dòng dưới để truy vết.
                 SQLBotLogUtil.warning(
-                    f"SQL phase failed after {sql_attempt} retry, "
-                    f"falling back to answer-only: {reason}"
+                    f"The SQL step failed after {sql_attempt} retries, falling back to an answer without SQL: {reason}",
+                    extra={'attempt': sql_attempt},
                 )
                 break
             break
@@ -2295,7 +2322,7 @@ class LLMService:
                 ds_res = self.select_datasource(_session)
 
                 for chunk in ds_res:
-                    SQLBotLogUtil.info(chunk)
+                    SQLBotLogUtil.debug('Received a chunk of the datasource answer')
                     if in_chat:
                         yield 'data:' + orjson.dumps(
                             {'content': chunk.get('content'), 'reasoning_content': chunk.get('reasoning_content'),
@@ -2465,7 +2492,10 @@ class LLMService:
                     embedding=False, table_list=tables,
                     column_filter=self.sw_permission.allowed_columns
                     if self.sw_permission and self.sw_permission.restricted else None)
-                SQLBotLogUtil.info('used_tables_schema: \n' + used_tables_schema)
+                SQLBotLogUtil.info(
+                    f'Generating the chart from {len(used_tables_schema)} chars of table schema',
+                    extra={'chars': len(used_tables_schema)},
+                )
                 chart_res = self.generate_chart(_session, chart_type, used_tables_schema)
                 full_chart_text = ''
                 for chunk in chart_res:
@@ -2475,9 +2505,14 @@ class LLMService:
                         yield from self.drain_answer_queue(answer_queue, answer_state, block=False)
 
                 # filter chart
-                SQLBotLogUtil.info(full_chart_text)
+                SQLBotLogUtil.info(
+                    f'The model answered the chart step with {len(full_chart_text)} chars for record {self.record.id}',
+                    extra={'record_id': self.record.id, 'chars': len(full_chart_text)},
+                )
                 chart = self.check_save_chart(session=_session, res=full_chart_text)
-                SQLBotLogUtil.info(chart)
+                SQLBotLogUtil.info(
+                    f'Saved the chart of record {self.record.id}', extra={'record_id': self.record.id}
+                )
             except Exception as e:
                 # Pha biểu đồ hỏng KHÔNG được giết cả lượt hỏi. SQL đã chạy xong, câu trả lời chữ —
                 # thứ client thực sự tiêu thụ — có thể đã sinh xong và đang nằm chờ trong queue; ném
@@ -2492,8 +2527,11 @@ class LLMService:
                 if not in_chat and not want_chart:
                     raise
                 chart_failed = True
-                traceback.print_exc()
-                SQLBotLogUtil.warning(f'Generate chart failed, keeping the answer: {e}')
+                SQLBotLogUtil.exception("Unexpected error in run task", extra={"function": "run_task"})
+                SQLBotLogUtil.warning(
+                    f'Generating the chart failed, keeping the answer: {e}',
+                    extra={'record_id': self.record.id, 'error': type(e).__name__},
+                )
 
             if not stream:
                 json_result['chart'] = chart
@@ -2540,7 +2578,9 @@ class LLMService:
                                                                                       local_operation=True)
                         image_url, error = request_picture(self.record.chat_id, self.record.id, chart,
                                                            format_json_data(result))
-                        SQLBotLogUtil.info(image_url)
+                        SQLBotLogUtil.info(
+                            f'Rendered the chart picture of record {self.record.id}', extra={'record_id': self.record.id}
+                        )
                         if stream:
                             yield f'![{chart.get("type")}]({image_url})'
                         else:
@@ -2562,7 +2602,7 @@ class LLMService:
                 yield json_result
 
         except Exception as e:
-            traceback.print_exc()
+            SQLBotLogUtil.exception("Unexpected error in run task", extra={"function": "run_task"})
             error_msg: str
             if isinstance(e, (SingleMessageError, SchemaReductionExhausted)):
                 error_msg = str(e)
@@ -2614,7 +2654,7 @@ class LLMService:
                         {'content': chunk.get('content'), 'reasoning_content': chunk.get('reasoning_content'),
                          'type': 'recommended_question_result'}).decode() + '\n\n'
         except Exception:
-            traceback.print_exc()
+            SQLBotLogUtil.exception("Unexpected error in run recommend questions task", extra={"function": "run_recommend_questions_task"})
         finally:
             session_maker.remove()
 
@@ -2712,7 +2752,9 @@ class LLMService:
 
                                 image_url, error = request_picture(self.record.chat_id, self.record.id, chart,
                                                                    format_json_data(_data))
-                                SQLBotLogUtil.info(image_url)
+                                SQLBotLogUtil.info(
+                                    f'Rendered the chart picture of record {self.record.id}', extra={'record_id': self.record.id}
+                                )
                                 if stream:
                                     yield f'![{chart.get("type")}]({image_url})'
                                 else:
@@ -2741,7 +2783,7 @@ class LLMService:
             if not stream:
                 yield json_result
         except Exception as e:
-            traceback.print_exc()
+            SQLBotLogUtil.exception("Unexpected error in run analysis or predict task", extra={"function": "run_analysis_or_predict_task"})
             error_msg: str
             if isinstance(e, SingleMessageError):
                 error_msg = str(e)
@@ -2808,7 +2850,9 @@ def execute_sql_with_db(db: SQLDatabase, sql: str) -> str:
 
     except Exception as e:
         error_msg = f"SQL execution failed: {str(e)}"
-        SQLBotLogUtil.exception(error_msg)
+        SQLBotLogUtil.exception(
+            f'SQL execution failed ({type(e).__name__})', extra={'error': type(e).__name__}
+        )
         raise RuntimeError(error_msg)
 
 
@@ -3041,8 +3085,11 @@ def process_stream(res: Iterator[BaseMessageChunk],
         yield {'content': pending_start_tag, 'reasoning_content': ''}
 
     # 流式结束后，统一输出两条日志：思考内容与正式内容
-    SQLBotLogUtil.info(f"reasoning_content: {full_reasoning_log}")
-    SQLBotLogUtil.info(f"content: {full_content_log}")
+    SQLBotLogUtil.info(
+        f'The model streamed {len(full_reasoning_log)} chars of reasoning and {len(full_content_log)} chars of content',
+        extra={'reasoning_chars': len(full_reasoning_log), 'content_chars': len(full_content_log)},
+    )
+    SQLBotLogUtil.debug(f'Model reasoning: {full_reasoning_log}\nModel content: {full_content_log}')
 
 
 def get_lang_name(lang: str):
@@ -3080,7 +3127,9 @@ def trim_history_by_size(messages: List[dict], max_chars: int) -> List[dict]:
         start += 1
     if start > 0:
         SQLBotLogUtil.warning(
-            f'History trimmed: dropped {start} oldest message(s), {total} chars left (cap {max_chars})')
+            f'History trimmed: dropped {start} oldest messages, {total} chars left (cap {max_chars})',
+            extra={'dropped': start, 'chars_left': total, 'cap': max_chars},
+        )
     return messages[start:]
 
 

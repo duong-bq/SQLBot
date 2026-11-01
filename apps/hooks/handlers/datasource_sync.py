@@ -102,8 +102,9 @@ def handle_datasource_sync(
         except Exception as e:  # noqa: BLE001 — lỗi một nguồn không được chặn các nguồn còn lại
             session.rollback()
             SQLBotLogUtil.error(
-                f"[ai-sync] DATASOURCE_SYNC: resync datasource {raw_id} thất bại: {e}",
+                f"ai-sync DATASOURCE_SYNC: resyncing datasource {raw_id} failed ({type(e).__name__})",
                 exc_info=True,
+                extra={'ds_id': raw_id, 'error': type(e).__name__},
             )
             results.append(_failed(raw_id, str(e)))
             continue

@@ -57,7 +57,7 @@ class DistributedLock:
             # End the implicit transaction; the session-level lock remains held.
             connection.commit()
         except SQLAlchemyError:
-            SQLBotLogUtil.exception("Failed to acquire distributed lock: %s", key)
+            SQLBotLogUtil.exception(f"Failed to acquire the distributed lock {key}", extra={'lock_key': str(key)})
             if connection is not None:
                 connection.close()
             return None
@@ -142,15 +142,11 @@ class SingleWorkerGuard:
                 lock = DistributedLock.try_acquire(cls._LOCK_KEY)
                 if lock is None:
                     cls._lock_status = LockStatus.NOT_ACQUIRED
-                    SQLBotLogUtil.info(
-                        "Current process FAILED to acquire the single-worker lock"
-                    )
+                    SQLBotLogUtil.info("This process did not get the single-worker lock, so another process runs the background tasks")
                 else:
                     cls._acquired_lock = lock
                     cls._lock_status = LockStatus.ACQUIRED
-                    SQLBotLogUtil.info(
-                        "Current process acquired the single-worker lock"
-                    )
+                    SQLBotLogUtil.info("This process holds the single-worker lock and runs the background tasks")
             return cls._lock_status is LockStatus.ACQUIRED
 
     @classmethod

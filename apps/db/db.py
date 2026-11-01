@@ -44,11 +44,11 @@ try:
         oracledb.init_oracle_client(
             lib_dir=settings.ORACLE_CLIENT_PATH
         )
-        SQLBotLogUtil.info("init oracle client success, use thick mode")
+        SQLBotLogUtil.info("Initialized the Oracle client in thick mode")
     else:
-        SQLBotLogUtil.info("init oracle client failed, because not found oracle client, use thin mode")
+        SQLBotLogUtil.info("The Oracle client library was not found, so Oracle connections use thin mode")
 except Exception as e:
-    SQLBotLogUtil.error("init oracle client failed, check your client is installed, use thin mode")
+    SQLBotLogUtil.error("Could not initialize the Oracle client, check that it is installed; using thin mode")
 
 
 def get_uri(ds: CoreDatasource) -> str:
@@ -297,10 +297,13 @@ def check_connection(trans: Optional[Trans], ds: CoreDatasource | AssistantOutDs
         conn = get_engine(ds, 10)
         try:
             with conn.connect() as connection:
-                SQLBotLogUtil.info("success")
+                SQLBotLogUtil.info(f"Connected to datasource {ds.id}", extra={'ds_id': ds.id})
                 return True
         except Exception as e:
-            SQLBotLogUtil.error(f"Datasource {ds.id} connection failed: {e}")
+            SQLBotLogUtil.error(
+                f"Connection to datasource {ds.id} failed ({type(e).__name__})",
+                extra={'ds_id': ds.id, 'error': type(e).__name__},
+            )
             if is_raise:
                 raise HTTPException(status_code=500, detail=trans('i18n_ds_invalid') + f': {e.args}')
             return False
@@ -312,10 +315,13 @@ def check_connection(trans: Optional[Trans], ds: CoreDatasource | AssistantOutDs
                                   port=conf.port, **extra_config_dict) as conn, conn.cursor() as cursor:
                 try:
                     cursor.execute('select 1', timeout=10).fetchall()
-                    SQLBotLogUtil.info("success")
+                    SQLBotLogUtil.info(f"Connected to datasource {ds.id}", extra={'ds_id': ds.id})
                     return True
                 except Exception as e:
-                    SQLBotLogUtil.error(f"Datasource {ds.id} connection failed: {e}")
+                    SQLBotLogUtil.error(
+                        f"Connection to datasource {ds.id} failed ({type(e).__name__})",
+                        extra={'ds_id': ds.id, 'error': type(e).__name__},
+                    )
                     if is_raise:
                         raise HTTPException(status_code=500, detail=trans('i18n_ds_invalid') + f': {e.args}')
                     return False
@@ -326,10 +332,13 @@ def check_connection(trans: Optional[Trans], ds: CoreDatasource | AssistantOutDs
                                  read_timeout=10, **extra_config_dict, **ssl_args) as conn, conn.cursor() as cursor:
                 try:
                     cursor.execute('select 1')
-                    SQLBotLogUtil.info("success")
+                    SQLBotLogUtil.info(f"Connected to datasource {ds.id}", extra={'ds_id': ds.id})
                     return True
                 except Exception as e:
-                    SQLBotLogUtil.error(f"Datasource {ds.id} connection failed: {e}")
+                    SQLBotLogUtil.error(
+                        f"Connection to datasource {ds.id} failed ({type(e).__name__})",
+                        extra={'ds_id': ds.id, 'error': type(e).__name__},
+                    )
                     if is_raise:
                         raise HTTPException(status_code=500, detail=trans('i18n_ds_invalid') + f': {e.args}')
                     return False
@@ -340,10 +349,13 @@ def check_connection(trans: Optional[Trans], ds: CoreDatasource | AssistantOutDs
                                             timeout=10, **extra_config_dict) as conn, conn.cursor() as cursor:
                 try:
                     cursor.execute('select 1')
-                    SQLBotLogUtil.info("success")
+                    SQLBotLogUtil.info(f"Connected to datasource {ds.id}", extra={'ds_id': ds.id})
                     return True
                 except Exception as e:
-                    SQLBotLogUtil.error(f"Datasource {ds.id} connection failed: {e}")
+                    SQLBotLogUtil.error(
+                        f"Connection to datasource {ds.id} failed ({type(e).__name__})",
+                        extra={'ds_id': ds.id, 'error': type(e).__name__},
+                    )
                     if is_raise:
                         raise HTTPException(status_code=500, detail=trans('i18n_ds_invalid') + f': {e.args}')
                     return False
@@ -354,10 +366,13 @@ def check_connection(trans: Optional[Trans], ds: CoreDatasource | AssistantOutDs
                                   connect_timeout=10, **extra_config_dict) as conn, conn.cursor() as cursor:
                 try:
                     cursor.execute('select 1')
-                    SQLBotLogUtil.info("success")
+                    SQLBotLogUtil.info(f"Connected to datasource {ds.id}", extra={'ds_id': ds.id})
                     return True
                 except Exception as e:
-                    SQLBotLogUtil.error(f"Datasource {ds.id} connection failed: {e}")
+                    SQLBotLogUtil.error(
+                        f"Connection to datasource {ds.id} failed ({type(e).__name__})",
+                        extra={'ds_id': ds.id, 'error': type(e).__name__},
+                    )
                     if is_raise:
                         raise HTTPException(status_code=500, detail=trans('i18n_ds_invalid') + f': {e.args}')
                     return False
@@ -366,10 +381,13 @@ def check_connection(trans: Optional[Trans], ds: CoreDatasource | AssistantOutDs
                               database=conf.database, **extra_config_dict) as conn, conn.cursor() as cursor:
                 try:
                     cursor.execute('select 1')
-                    SQLBotLogUtil.info("success")
+                    SQLBotLogUtil.info(f"Connected to datasource {ds.id}", extra={'ds_id': ds.id})
                     return True
                 except Exception as e:
-                    SQLBotLogUtil.error(f"Datasource {ds.id} connection failed: {e}")
+                    SQLBotLogUtil.error(
+                        f"Connection to datasource {ds.id} failed ({type(e).__name__})",
+                        extra={'ds_id': ds.id, 'error': type(e).__name__},
+                    )
                     if is_raise:
                         raise HTTPException(status_code=500, detail=trans('i18n_ds_invalid') + f': {e.args}')
                     return False
@@ -377,10 +395,10 @@ def check_connection(trans: Optional[Trans], ds: CoreDatasource | AssistantOutDs
         elif equals_ignore_case(ds.type, 'es'):
             es_conn = get_es_connect(conf)
             if es_conn.ping():
-                SQLBotLogUtil.info("success")
+                SQLBotLogUtil.info(f"Connected to datasource {ds.id}", extra={'ds_id': ds.id})
                 return True
             else:
-                SQLBotLogUtil.info("failed")
+                SQLBotLogUtil.info(f"Could not reach datasource {ds.id}", extra={'ds_id': ds.id})
                 return False
     # else:
     #     conn = get_ds_engine(ds)
@@ -440,7 +458,7 @@ def get_version(ds: CoreDatasource | AssistantOutDsSchema):
             elif equals_ignore_case(ds.type, 'redshift', 'es', 'hive'):
                 version = ''
     except Exception as e:
-        print(e)
+        SQLBotLogUtil.warning(f"Could not read the database version ({type(e).__name__})", extra={'error': type(e).__name__})
         version = ''
     return version.decode() if isinstance(version, bytes) else version
 
@@ -1168,20 +1186,23 @@ class ConnectionPoolManager:
                 # 1. 如果连接池已存在，将其移动到字典末尾（标记为最近使用）
                 if ds.id in self._pools:
                     self._pools.move_to_end(ds.id)
-                    print(f"[LRU] return: {ds.id}")
+                    SQLBotLogUtil.debug(f"Reusing the connection pool of datasource {ds.id}")
                     return self._pools[ds.id]
 
                 # 2. 如果连接池不存在，检查是否达到上限，若达到则淘汰最久未使用的（字典头部）
                 if len(self._pools) >= self.max_pools:
                     oldest_id, oldest_pool = self._pools.popitem(last=False)
                     self._dispose(oldest_pool)  # 安全关闭被驱逐的连接池
-                    print(f"[LRU] remove oldest: {oldest_id}")
+                    SQLBotLogUtil.info(
+                        f"Removed the least recently used connection pool of datasource {oldest_id}",
+                        extra={'ds_id': oldest_id},
+                    )
 
             # 3. 创建新连接池并放入字典末尾
             engine = get_engine(ds, use_pool=True)
             new_pool = sessionmaker(bind=engine)
             self._pools[ds.id] = new_pool
-            print(f"[LRU] create: {ds.id}")
+            SQLBotLogUtil.info(f"Created a connection pool for datasource {ds.id}", extra={'ds_id': ds.id})
             return new_pool
 
     @staticmethod
@@ -1193,7 +1214,7 @@ class ConnectionPoolManager:
         try:
             engine.dispose()
         except Exception as e:
-            SQLBotLogUtil.warning(f'[Manager] dispose engine failed: {e}')
+            SQLBotLogUtil.warning(f'Could not dispose a connection pool engine: {e}')
 
     def remove_pool(self, datasource_id):
         with self._lock:
@@ -1202,9 +1223,14 @@ class ConnectionPoolManager:
                 pool = self._pools.pop(datasource_id)
                 # 2. 安全关闭该连接池，释放底层所有数据库连接和内存
                 self._dispose(pool)
-                print(f"[Manager] Closed pool and remove: {datasource_id}")
+                SQLBotLogUtil.info(
+                    f"Closed and removed the connection pool of datasource {datasource_id}",
+                    extra={'ds_id': datasource_id},
+                )
             else:
-                print(f"[Manager] Warning: ds id {datasource_id} not exist in sqlalchemy")
+                SQLBotLogUtil.warning(
+                    f"Datasource {datasource_id} has no connection pool to remove", extra={'ds_id': datasource_id}
+                )
 
     def close_all(self):
         """stop"""
@@ -1236,19 +1262,22 @@ class DriverConnectionPoolManager:
                 # 1. 如果连接池已存在，将其移动到字典末尾（标记为最近使用）
                 if ds.id in self._pools:
                     self._pools.move_to_end(ds.id)
-                    print(f"[LRU] return: {ds.id}")
+                    SQLBotLogUtil.debug(f"Reusing the connection pool of datasource {ds.id}")
                     return self._pools[ds.id]
 
                 # 2. 如果连接池不存在，检查是否达到上限，若达到则淘汰最久未使用的（字典头部）
                 if len(self._pools) >= self.max_pools:
                     oldest_id, oldest_pool = self._pools.popitem(last=False)
                     oldest_pool.close()  # 安全关闭被驱逐的连接池
-                    print(f"[LRU] remove oldest: {oldest_id}")
+                    SQLBotLogUtil.info(
+                        f"Removed the least recently used connection pool of datasource {oldest_id}",
+                        extra={'ds_id': oldest_id},
+                    )
 
             # 3. 创建新连接池并放入字典末尾
             new_pool = get_driver_connection(ds, db_config, use_pool=True)
             self._pools[ds.id] = new_pool
-            print(f"[LRU] create: {ds.id}")
+            SQLBotLogUtil.info(f"Created a connection pool for datasource {ds.id}", extra={'ds_id': ds.id})
             return new_pool
 
     def remove_pool(self, datasource_id):
@@ -1258,9 +1287,14 @@ class DriverConnectionPoolManager:
                 pool = self._pools.pop(datasource_id)
                 # 2. 安全关闭该连接池，释放底层所有数据库连接和内存
                 pool.close()
-                print(f"[Manager] Closed pool and remove: {datasource_id}")
+                SQLBotLogUtil.info(
+                    f"Closed and removed the connection pool of datasource {datasource_id}",
+                    extra={'ds_id': datasource_id},
+                )
             else:
-                print(f"[Manager] Warning: ds id {datasource_id} not exist in dbutils")
+                SQLBotLogUtil.warning(
+                    f"Datasource {datasource_id} has no connection pool to remove", extra={'ds_id': datasource_id}
+                )
 
     def close_all(self):
         """stop"""

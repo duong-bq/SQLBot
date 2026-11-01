@@ -56,6 +56,13 @@ dependencies = [
     "dbutils>=3.1.2",
     "mcp<2.0.0",
     "python-docx>=1.2.0",
+    # Telemetry: các bản instrumentation chỉ hỗ trợ SQLAlchemy < 2.1 (uv.lock đang 2.0.x), nên đừng nâng SQLAlchemy lên 2.1 khi chưa kiểm.
+    "opentelemetry-sdk==1.45.0",
+    "opentelemetry-exporter-otlp-proto-grpc==1.45.0",
+    "opentelemetry-instrumentation-fastapi==0.66b0",
+    "opentelemetry-instrumentation-sqlalchemy==0.66b0",
+    "opentelemetry-instrumentation-httpx==0.66b0",
+    "opentelemetry-instrumentation-urllib3==0.66b0",
 ]
 
 [[tool.uv.index]]

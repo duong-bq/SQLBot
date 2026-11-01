@@ -410,7 +410,10 @@ def build_relation_graph(session: SessionDep, ds: CoreDatasource) -> list:
     try:
         relations = get_relations(ds)
     except Exception as e:
-        SQLBotLogUtil.warning(f"build_relation_graph: get_relations failed for ds {ds.id}: {e}")
+        SQLBotLogUtil.warning(
+            f"Could not read the relations of datasource {ds.id} to build the relation graph: {e}",
+            extra={'ds_id': ds.id},
+        )
         return []
     if not relations:
         return []
@@ -473,7 +476,10 @@ def seed_table_relation(session: SessionDep, ds: CoreDatasource):
             session.commit()
             ds.table_relation = graph
     except Exception as e:
-        SQLBotLogUtil.warning(f"seed_table_relation failed for ds {ds.id}: {e}")
+        SQLBotLogUtil.warning(
+            f"Could not seed the table relations of datasource {ds.id}: {e}",
+            extra={'ds_id': ds.id},
+        )
 
 
 def reconcile_table_relation(session: SessionDep, ds: CoreDatasource):
@@ -555,7 +561,10 @@ def reconcile_table_relation(session: SessionDep, ds: CoreDatasource):
         try:
             relations = get_relations(record)
         except Exception as e:
-            SQLBotLogUtil.warning(f"reconcile_table_relation: get_relations failed for ds {ds.id}: {e}")
+            SQLBotLogUtil.warning(
+                f"Could not read the relations of datasource {ds.id} to reconcile the table relations: {e}",
+                extra={'ds_id': ds.id},
+            )
             relations = []
         table_by_name = {t.table_name: t for t in tables}
         field_lookup = {(f.table_id, f.field_name): f for f in fields}
@@ -587,7 +596,10 @@ def reconcile_table_relation(session: SessionDep, ds: CoreDatasource):
         session.add(record)
         session.commit()
     except Exception as e:
-        SQLBotLogUtil.warning(f"reconcile_table_relation failed for ds {ds.id}: {e}")
+        SQLBotLogUtil.warning(
+            f"Could not reconcile the table relations of datasource {ds.id}: {e}",
+            extra={'ds_id': ds.id},
+        )
 
 
 def snapshot_ds(ds: CoreDatasource) -> CoreDatasource:
@@ -1357,8 +1369,9 @@ def get_table_m_schema(session: SessionDep, current_user: CurrentUser, ds: CoreD
                 field_list.append(MSchemaField(name=field.field_name, type=field.field_type, comment=field_comment))
             if allowed_columns is not None and not field_list:
                 SQLBotLogUtil.warning(
-                    f"[sw_permission] Lọc cột làm bảng '{obj.table.table_name}' không còn field nào "
-                    f"trong schema — tên cột trong scope query phía SW có thể lệch với core_field."
+                    f"Column filter left table '{obj.table.table_name}' with no field in the schema; the column names in the "
+                    f"SW query scope may differ from core_field",
+                    extra={'table_name': obj.table.table_name},
                 )
 
         m_table = MSchemaTable(name=obj.table.table_name, title=title, comment=table_comment,
@@ -1412,4 +1425,4 @@ async def get_ws_ds(session, oid) -> list:
 
 @clear_cache(namespace=CacheNamespace.AUTH_INFO, cacheName=CacheName.DS_ID_LIST, keyExpression="oid")
 async def clear_ws_ds_cache(oid):
-    SQLBotLogUtil.info(f"ds cache for ws [{oid}] has been cleaned")
+    SQLBotLogUtil.info(f"Cleared the cached datasource list of workspace {oid} because a datasource changed", extra={'workspace_id': oid})

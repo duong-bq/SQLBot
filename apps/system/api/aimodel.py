@@ -44,14 +44,16 @@ async def check_llm(info: AiModelCreator, trans: Trans):
             )
             llm_instance = LLMFactory.create_llm(config)
             async for chunk in llm_instance.llm.astream("1+1=?"):
-                SQLBotLogUtil.info(chunk)
+                SQLBotLogUtil.debug('Received a chunk while checking the LLM')
                 if chunk and isinstance(chunk, str):
                     yield json.dumps({"content": chunk}) + "\n"
                 if chunk and isinstance(chunk, dict) and chunk.content:
                     yield json.dumps({"content": chunk.content}) + "\n"
 
         except Exception as e:
-            SQLBotLogUtil.error(f"Error checking LLM: {e}")
+            SQLBotLogUtil.error(
+                f"Checking the LLM failed ({type(e).__name__})", extra={'error': type(e).__name__}
+            )
             error_msg = trans('i18n_llm.validate_error', msg=str(e))
             yield json.dumps({"error": error_msg}) + "\n"
 

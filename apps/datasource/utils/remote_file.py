@@ -261,7 +261,7 @@ def probe_source(src: RemoteSource) -> int | None:
     except ExcelImportError:
         raise
     except Exception as e:
-        SQLBotLogUtil.warning(f"[remote] probe inconclusive for {src.safe_label}: {e}")
+        SQLBotLogUtil.warning(f"Could not probe the size of {src.safe_label}: {e}")
         return None
 
     if size is not None and size > max_bytes():
@@ -337,7 +337,9 @@ def download_to(src: RemoteSource, dest_path: str) -> int:
         try:
             size = _stream_once(src, part_path, limit)
             os.replace(part_path, dest_path)
-            SQLBotLogUtil.info(f"[remote] downloaded {size} bytes from {src.safe_label}")
+            SQLBotLogUtil.info(
+                f"Downloaded {size} bytes from {src.safe_label}", extra={'bytes': size}
+            )
             return size
         except ExcelImportError:
             _discard(part_path)
@@ -346,8 +348,8 @@ def download_to(src: RemoteSource, dest_path: str) -> int:
             _discard(part_path)
             last_error = f"{type(e).__name__}: {e}"
             SQLBotLogUtil.warning(
-                f"[remote] download attempt {attempt + 1}/{attempts} failed for "
-                f"{src.safe_label}: {last_error}"
+                f"Download attempt {attempt + 1} of {attempts} failed for {src.safe_label}: {last_error}",
+                extra={'attempt': attempt + 1, 'attempts': attempts},
             )
             if attempt + 1 < attempts:
                 time.sleep(min(2 ** attempt, 10))
@@ -407,7 +409,9 @@ def download_bytes(src: RemoteSource, limit: int, connect_timeout: int = 5,
     except httpx.HTTPError as e:
         raise ExcelImportError(ERR_DOWNLOAD_FAILED, f"Cannot download: {type(e).__name__}: {e}")
 
-    SQLBotLogUtil.info(f"[remote] downloaded {written} bytes (in-memory) from {src.safe_label}")
+    SQLBotLogUtil.info(
+        f"Downloaded {written} bytes into memory from {src.safe_label}", extra={'bytes': written}
+    )
     return b"".join(chunks)
 
 
@@ -417,4 +421,4 @@ def _discard(part_path: str) -> None:
         if os.path.exists(part_path):
             os.remove(part_path)
     except Exception as e:
-        SQLBotLogUtil.warning(f"[remote] cannot remove partial file {part_path}: {e}")
+        SQLBotLogUtil.warning(f"Could not remove the partial download {part_path}: {e}")

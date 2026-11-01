@@ -23,6 +23,13 @@ from common.utils.utils import SQLBotLogUtil, get_origin_from_referer, origin_ma
 from common.utils.whitelist import whiteUtils
 from fastapi.security.utils import get_authorization_scheme_param
 from common.core.deps import get_i18n
+from common.telemetry import note_error
+
+
+def _unauthorized(request, message):
+    """Trả 401 và để lại mã lỗi cho dòng request: một request bị từ chối không có dòng log riêng."""
+    note_error(request, "unauthorized", str(message))
+    return JSONResponse(message, status_code=401, headers={"Access-Control-Allow-Origin": "*"})
 
 
 class TokenMiddleware(BaseHTTPMiddleware):
@@ -63,7 +70,7 @@ class TokenMiddleware(BaseHTTPMiddleware):
                 request.state.current_user = data
                 return await call_next(request)
             message = trans('i18n_permission.authenticate_invalid', msg = data)
-            return JSONResponse(message, status_code=401, headers={"Access-Control-Allow-Origin": "*"})
+            return _unauthorized(request, message)
         #if assistantToken and assistantToken.lower().startswith("assistant "):
         if assistantToken:
             validator: tuple[any] = await self.validateAssistant(assistantToken, trans)
@@ -77,7 +84,7 @@ class TokenMiddleware(BaseHTTPMiddleware):
                     request.state.assistant.request_origin = origin
                 return await call_next(request)
             message = trans('i18n_permission.authenticate_invalid', msg = validator[1])
-            return JSONResponse(message, status_code=401, headers={"Access-Control-Allow-Origin": "*"})
+            return _unauthorized(request, message)
         #validate pass
         tokenkey = settings.TOKEN_KEY
         token = request.headers.get(tokenkey)
@@ -87,7 +94,7 @@ class TokenMiddleware(BaseHTTPMiddleware):
             return await call_next(request)
         
         message = trans('i18n_permission.authenticate_invalid', msg = data)
-        return JSONResponse(message, status_code=401, headers={"Access-Control-Allow-Origin": "*"})
+        return _unauthorized(request, message)
     
     def is_options(self, request: Request):
         return request.method == "OPTIONS"
@@ -131,7 +138,7 @@ class TokenMiddleware(BaseHTTPMiddleware):
                 return True, session_user
         except Exception as e:
             msg = str(e)
-            SQLBotLogUtil.exception(f"Token validation error: {msg}")
+            SQLBotLogUtil.exception(f"Rejected the request because the token could not be validated: {msg}")
             if 'expired' in msg:
                 return False, jwt.ExpiredSignatureError(trans('i18n_permission.token_expired')) 
             return False, e
@@ -162,7 +169,7 @@ class TokenMiddleware(BaseHTTPMiddleware):
                 return True, session_user
         except Exception as e:
             msg = str(e)
-            SQLBotLogUtil.exception(f"Token validation error: {msg}")
+            SQLBotLogUtil.exception(f"Rejected the request because the token could not be validated: {msg}")
             if 'expired' in msg:
                 return False, jwt.ExpiredSignatureError(trans('i18n_permission.token_expired')) 
             return False, e
@@ -196,7 +203,7 @@ class TokenMiddleware(BaseHTTPMiddleware):
                         
                 return True, session_user, assistant_info
         except Exception as e:
-            SQLBotLogUtil.exception(f"Assistant validation error: {str(e)}")
+            SQLBotLogUtil.exception(f"Rejected the request because the assistant token could not be validated: {str(e)}")
             # Return False and the exception message
             return False, e
     
@@ -243,7 +250,7 @@ class TokenMiddleware(BaseHTTPMiddleware):
                     assistant_info.oid = int(session_user.oid)
                 return True, session_user, assistant_info
         except Exception as e:
-            SQLBotLogUtil.exception(f"Embedded validation error: {str(e)}")
+            SQLBotLogUtil.exception(f"Rejected the request because the embedded assistant token could not be validated: {str(e)}")
             # Return False and the exception message
             return False, e
     

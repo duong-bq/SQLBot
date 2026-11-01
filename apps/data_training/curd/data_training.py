@@ -14,6 +14,7 @@ from apps.template.generate_chart.generator import get_base_data_training_templa
 from common.core.config import settings
 from common.core.deps import SessionDep, Trans
 from common.utils.dict_to_xml import dict_to_xml
+from common.utils.utils import SQLBotLogUtil
 from common.utils.embedding_threads import run_save_data_training_embeddings
 
 
@@ -408,7 +409,9 @@ def batch_create_training(session: SessionDep, info_list: List[DataTrainingInfo]
                 run_save_data_training_embeddings(inserted_ids)
             except Exception as e:
                 # 如果embedding处理失败，记录错误但不回滚数据
-                print(f"Embedding processing failed: {str(e)}")
+                SQLBotLogUtil.error(
+                    f"Embedding of the training data failed ({type(e).__name__})", extra={"error": type(e).__name__}
+                )
                 # 可以选择将embedding失败的信息记录到日志或返回给调用方
 
     return {
@@ -459,7 +462,7 @@ def run_fill_empty_embeddings(session_maker):
 
         save_embeddings(session_maker, results)
     except Exception:
-        traceback.print_exc()
+        SQLBotLogUtil.exception("Unexpected error in run fill empty embeddings", extra={"function": "run_fill_empty_embeddings"})
     finally:
         session_maker.remove()
 
@@ -487,7 +490,7 @@ def save_embeddings(session_maker, ids: List[int]):
             session.commit()
 
     except Exception:
-        traceback.print_exc()
+        SQLBotLogUtil.exception("Unexpected error in save embeddings", extra={"function": "save_embeddings"})
     finally:
         session_maker.remove()
 
@@ -564,7 +567,7 @@ def select_training_by_question(session: SessionDep, question: str, oid: int, da
                     _list.append(DataTraining(id=row.id, question=row.question))
 
             except Exception:
-                traceback.print_exc()
+                SQLBotLogUtil.exception("Unexpected error in select training by question", extra={"function": "select_training_by_question"})
                 session.rollback()
 
     _map: dict = {}

@@ -116,16 +116,22 @@ class DsEmbedder:
                 if fallback_text is None:
                     raise
                 SQLBotLogUtil.info(
-                    f'datasource {ds_id} embedding text exceeds context length, '
-                    f'retry with table-name-only summary'
+                    f'Embedding text of datasource {ds_id} exceeds the context length, retrying with the table names only',
+                    extra={'ds_id': ds_id},
                 )
                 vector = model.embed_query(fallback_text)
         except BadRequestError as exc:
-            SQLBotLogUtil.error(f'embedding of datasource {ds_id} rejected: {sanitize_secret(str(exc))}')
+            SQLBotLogUtil.error(
+                f'The embedding model rejected datasource {ds_id}: {sanitize_secret(str(exc))}',
+                extra={'ds_id': ds_id},
+            )
             return None
         except Exception as exc:
             self._broken.add(memo)
-            SQLBotLogUtil.error(f'embedding of datasource {ds_id} failed: {sanitize_secret(str(exc))}')
+            SQLBotLogUtil.error(
+                f'Embedding of datasource {ds_id} failed: {sanitize_secret(str(exc))}',
+                extra={'ds_id': ds_id},
+            )
             return None
         if row is not None:
             if row.dim is None:
@@ -135,7 +141,8 @@ class DsEmbedder:
                 row.dim = len(vector)
             elif row.dim != len(vector):
                 SQLBotLogUtil.error(
-                    f'embedding of datasource {ds_id} has dim {len(vector)}, expected {row.dim}; skipped'
+                    f'Embedding of datasource {ds_id} has {len(vector)} dimensions, expected {row.dim}; skipped',
+                    extra={'ds_id': ds_id, 'dimensions': len(vector), 'expected_dimensions': row.dim},
                 )
                 return None
         return json.dumps(vector)

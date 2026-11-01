@@ -377,7 +377,7 @@ def get_chart_data_ds(session: SessionDep, ds_id, sql):
             json_result['data'] = _data
             return json_result
     except Exception as e:
-        SQLBotLogUtil.error(f"Function failed: {e}")
+        SQLBotLogUtil.error(f"A chat helper function failed ({type(e).__name__})", extra={"error": type(e).__name__})
         json_result['status'] = 'failed'
         json_result['message'] = f"{e}"
         pass
@@ -1511,7 +1511,10 @@ def save_record_recommend_questions(session: SessionDep, record_id: int, answer:
         try:
             recommended_question = extract_nested_json(content) or '[]'
         except Exception as e:
-            SQLBotLogUtil.warning(f'Parse inline recommended questions failed, saving empty list: {e}')
+            SQLBotLogUtil.warning(
+                f'Could not parse the inline recommended questions, saving an empty list ({type(e).__name__})',
+                extra={'error': type(e).__name__},
+            )
 
     stmt = update(ChatRecord).where(and_(ChatRecord.id == record_id)).values(
         recommended_question_answer=orjson.dumps(answer).decode(),

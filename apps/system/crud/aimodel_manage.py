@@ -28,7 +28,7 @@ async def async_model_info():
                     session.add(model)
         if any_model_change:
             session.commit()
-            SQLBotLogUtil.info("✅ 异步加密已有模型的密钥和地址完成")
+            SQLBotLogUtil.info('Encrypted the API keys and addresses of the models that were stored in plain text')
 
 
 def get_ai_model_list_by_workspace(session: Session, workspace_id: int, with_default: bool = True):

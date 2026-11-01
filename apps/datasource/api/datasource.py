@@ -248,7 +248,7 @@ async def get_tables_by_conf(session: SessionDep, trans: Trans, ds: CoreDatasour
 
         status = await asyncio.to_thread(inner)
         if status:
-            SQLBotLogUtil.error(f"get table failed: {e}")
+            SQLBotLogUtil.error(f"Could not get the tables ({type(e).__name__})", extra={"error": type(e).__name__})
             raise HTTPException(status_code=500, detail=f'Get table Failed: {e.args}')
 
 
@@ -280,7 +280,7 @@ async def get_schema_by_conf(session: SessionDep, trans: Trans, ds: CoreDatasour
 
         status = await asyncio.to_thread(inner)
         if status:
-            SQLBotLogUtil.error(f"get table failed: {e}")
+            SQLBotLogUtil.error(f"Could not get the tables ({type(e).__name__})", extra={"error": type(e).__name__})
             raise HTTPException(status_code=500, detail=f'Get table Failed: {e.args}')
 
 
@@ -325,9 +325,9 @@ async def exec_sql(session: SessionDep, id: int, obj: TestObj):
         try:
             data_obj = data.get('data')
             # print(orjson.dumps(data, option=orjson.OPT_NON_STR_KEYS).decode())
-            print(orjson.dumps(data_obj).decode())
+            SQLBotLogUtil.debug("Ran the SQL of a datasource test")
         except Exception:
-            traceback.print_exc()
+            SQLBotLogUtil.exception("Unexpected error in the datasource SQL test", extra={"function": "exec_sql"})
 
         return data
 
@@ -472,7 +472,7 @@ async def preview_data(session: SessionDep, trans: Trans, current_user: CurrentU
             # check ds status
             status = check_status(session, trans, ds, True)
             if status:
-                SQLBotLogUtil.error(f"Preview failed: {e}")
+                SQLBotLogUtil.error(f"Table preview failed ({type(e).__name__})", extra={"error": type(e).__name__})
                 raise HTTPException(status_code=500, detail=f'Preview Failed: {e.args}')
 
     return await asyncio.to_thread(inner)
@@ -628,7 +628,7 @@ def insert_pg(df, tableName, engine):
         cursor.copy_expert(sql=query.as_string(cursor.connection), file=output)
         conn.commit()
     except Exception as e:
-        traceback.print_exc()
+        SQLBotLogUtil.exception("Unexpected error in insert pg", extra={"function": "insert_pg"})
         raise HTTPException(400, str(e))
     finally:
         cursor.close()
@@ -920,7 +920,8 @@ async def create_from_excel(
 
     if await request.is_disconnected():
         SQLBotLogUtil.warning(
-            f"createFromExcel: client gone before reserving '{name}' ({src.safe_label})"
+            f"Excel import: the client left before the datasource '{name}' was reserved ({src.safe_label})",
+            extra={'name_of_datasource': name},
         )
         raise HTTPException(499, {"code": "CLIENT_DISCONNECTED",
                                   "message": "Client disconnected before import"})
@@ -949,7 +950,10 @@ async def create_from_excel(
         workbook = None
         await _discard_failed_ds(session, ds_id)
         if not isinstance(e, ExcelImportError):
-            SQLBotLogUtil.exception(f"createFromExcel: import of ds {ds_id} crashed: {e}")
+            SQLBotLogUtil.exception(
+                f"Excel import of datasource {ds_id} crashed ({type(e).__name__})",
+                extra={'ds_id': ds_id, 'error': type(e).__name__},
+            )
             e = ExcelImportError("INTERNAL_ERROR", str(e))
         raise _import_error(e)
     # Thả bytes ngay, trước khi dựng response.
@@ -1008,7 +1012,10 @@ async def _discard_failed_ds(session: SessionDep, ds_id: int) -> None:
             await delete_ds(session, ds_id)
     except Exception as e:
         session.rollback()
-        SQLBotLogUtil.exception(f"createFromExcel: cannot discard failed ds {ds_id}: {e}")
+        SQLBotLogUtil.exception(
+            f"Could not discard the failed datasource {ds_id} after an Excel import ({type(e).__name__})",
+            extra={'ds_id': ds_id, 'error': type(e).__name__},
+        )
 
 
 def _conflict_error(ds: CoreDatasource) -> HTTPException:

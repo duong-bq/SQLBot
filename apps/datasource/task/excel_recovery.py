@@ -35,7 +35,9 @@ def _recover_orphan_jobs() -> int:
     """Nhặt lại các job chưa ai chạy và đẩy vào pool của tiến trình này."""
     job_ids = claim_orphan_jobs(settings.EXCEL_IMPORT_STALE_SECONDS)
     for job_id in job_ids:
-        SQLBotLogUtil.warning(f"excel import job {job_id} was orphaned, re-submitting")
+        SQLBotLogUtil.warning(
+            f"Excel import job {job_id} had no worker, submitting it again", extra={'job_id': job_id}
+        )
         submit_import_job(job_id)
     return len(job_ids)
 
@@ -52,7 +54,8 @@ def _bury_dead_jobs() -> int:
     victims = claim_dead_jobs(settings.EXCEL_IMPORT_STALE_SECONDS)
     for job in victims:
         SQLBotLogUtil.error(
-            f"excel import job {job['id']} abandoned by worker {job['worker_id']}, cleaning up"
+            f"Excel import job {job['id']} was abandoned by worker {job['worker_id']}, cleaning it up",
+            extra={'job_id': job['id'], 'worker_id': job['worker_id'], 'ds_id': job['ds_id']},
         )
         fail_import_job(job["id"], job["ds_id"], job["created_tables"], ERR_JOB_STALE,
                         "Import worker died before finishing")
@@ -62,7 +65,9 @@ def _bury_dead_jobs() -> int:
                 if os.path.exists(leftover):
                     os.remove(leftover)
             except Exception as e:
-                SQLBotLogUtil.warning(f"cannot remove temp file of dead job {job['id']}: {e}")
+                SQLBotLogUtil.warning(
+                    f"Could not remove the temp file of dead job {job['id']}: {e}", extra={'job_id': job['id']}
+                )
     return len(victims)
 
 
@@ -75,7 +80,7 @@ def _recover_stale_callbacks() -> int:
     stale_seconds = max(settings.AI_CALLBACK_TIMEOUT * 3, 60)
     count = requeue_stale_callbacks(stale_seconds)
     if count:
-        SQLBotLogUtil.warning(f"requeued {count} stuck excel callbacks")
+        SQLBotLogUtil.warning(f"Put {count} stuck Excel callbacks back in the queue", extra={'callbacks': count})
     return count
 
 
@@ -107,9 +112,9 @@ def _cleanup_temp_files() -> int:
             os.remove(full_path)
             removed += 1
         except Exception as e:
-            SQLBotLogUtil.warning(f"cannot remove stale temp file {full_path}: {e}")
+            SQLBotLogUtil.warning(f"Could not remove the stale temp file {full_path}: {e}")
     if removed:
-        SQLBotLogUtil.info(f"removed {removed} stale excel temp files")
+        SQLBotLogUtil.info(f"Removed {removed} stale Excel temp files", extra={'files': removed})
     return removed
 
 
@@ -125,7 +130,10 @@ def recovery_tick() -> dict:
         try:
             result[key] = fn()
         except Exception as e:
-            SQLBotLogUtil.exception(f"excel recovery step {key} failed: {e}")
+            SQLBotLogUtil.exception(
+                f"Excel recovery step {key} failed ({type(e).__name__})",
+                extra={'step': key, 'error': type(e).__name__},
+            )
     return result
 
 

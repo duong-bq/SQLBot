@@ -1,3 +1,4 @@
+import logging
 import time
 import functools
 import json
@@ -117,7 +118,7 @@ class SystemLogger:
             return log
         except Exception as e:
             session.rollback()
-            print(f"Failed to create system log: {e}")
+            logging.getLogger(__name__).error(f"Could not create the system log ({type(e).__name__})", extra={"error": type(e).__name__})
             return None
 
     @staticmethod
@@ -482,7 +483,7 @@ class SystemLogger:
                 return log
 
         except Exception as e:
-            print(f"[SystemLogger] Failed to create log: {str(traceback.format_exc())}")
+            logging.getLogger(__name__).error(f"Could not create the system log ({type(e).__name__})", extra={"error": type(e).__name__})
             return None
 
 
@@ -614,7 +615,7 @@ def system_log(config: Union[LogConfig, Dict]):
                         resource_info_list=resource_info_list
                     )
                 except Exception as log_error:
-                    print(f"[SystemLogger] Log creation failed: {log_error}")
+                    logging.getLogger(__name__).error(f"Could not create the system log ({type(log_error).__name__})", extra={"error": type(log_error).__name__})
 
         @functools.wraps(func)
         def sync_wrapper(*args, **kwargs):
@@ -708,7 +709,7 @@ def system_log(config: Union[LogConfig, Dict]):
                             )
                         )
                 except Exception as log_error:
-                    print(f"[SystemLogger] Log creation failed: {log_error}")
+                    logging.getLogger(__name__).error(f"Could not create the system log ({type(log_error).__name__})", extra={"error": type(log_error).__name__})
 
         # Return appropriate wrapper based on function type
         if inspect.iscoroutinefunction(func):

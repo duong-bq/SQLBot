@@ -35,7 +35,10 @@ class PeriodicThread:
             try:
                 self._fn()
             except Exception as e:
-                SQLBotLogUtil.exception(f"periodic task {self._name} failed: {e}")
+                SQLBotLogUtil.exception(
+                    f"Periodic task {self._name} failed ({type(e).__name__})",
+                    extra={'task': self._name, 'error': type(e).__name__},
+                )
             self._stop.wait(self._interval)
 
     def start(self) -> None:
@@ -43,7 +46,10 @@ class PeriodicThread:
             return
         self._thread = threading.Thread(target=self._run, name=self._name, daemon=True)
         self._thread.start()
-        SQLBotLogUtil.info(f"periodic task {self._name} started, interval={self._interval}s")
+        SQLBotLogUtil.info(
+            f"Periodic task {self._name} started, every {self._interval} s",
+            extra={'task': self._name, 'interval_s': self._interval},
+        )
 
     def stop(self, timeout: float = 5.0) -> None:
         """Bật cờ dừng rồi chờ có giới hạn.

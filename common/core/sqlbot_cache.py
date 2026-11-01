@@ -50,7 +50,7 @@ def custom_key_builder(
         return f"{base_key}{args[0] if args else 'default'}"
         
     except Exception as e:
-        SQLBotLogUtil.error(f"Key builder error: {str(e)}")
+        SQLBotLogUtil.error(f"Cache key builder failed ({type(e).__name__})", extra={"error": type(e).__name__})
         raise ValueError(f"Invalid cache key generation: {e}") from e
 
 def cache(
@@ -117,7 +117,7 @@ def clear_cache(
                         await redis.delete(temp_cache_key)
                     else:
                         await backend.clear(key=temp_cache_key)
-                    SQLBotLogUtil.debug(f"Cache cleared: {temp_cache_key}")
+                    SQLBotLogUtil.debug(f"Cleared the cache key {temp_cache_key}")
             return await func(*args, **kwargs)
         
         return wrapper
@@ -167,13 +167,13 @@ def init_sqlbot_cache():
     cache_type: str = settings.CACHE_TYPE
     if cache_type == "memory":
         FastAPICache.init(InMemoryBackend())
-        SQLBotLogUtil.info("SQLBot 使用内存缓存, 仅支持单进程模式")
+        SQLBotLogUtil.info("SQLBot uses the in-memory cache, single-process mode only")
     elif cache_type == "redis":
         from fastapi_cache.backends.redis import RedisBackend
         FastAPICache.init(RedisBackend(build_redis_client()), prefix="sqlbot-cache")
-        SQLBotLogUtil.info(f"SQLBot 使用Redis缓存({settings.REDIS_MODE}), 可使用多进程模式")
+        SQLBotLogUtil.info(f"SQLBot uses the Redis cache ({settings.REDIS_MODE}), multi-process mode is possible")
     else:
-        SQLBotLogUtil.warning("SQLBot 未启用缓存, 可使用多进程模式")
+        SQLBotLogUtil.warning("SQLBot runs without a cache, multi-process mode is possible")
     
 
 def is_cache_initialized() -> bool:
@@ -190,5 +190,5 @@ def is_cache_initialized() -> bool:
         backend = FastAPICache.get_backend()
         return backend is not None
     except (AssertionError, AttributeError, Exception) as e:
-        SQLBotLogUtil.debug(f"缓存初始化检查失败: {str(e)}")
+        SQLBotLogUtil.debug(f"Cache initialization check failed: {str(e)}")
         return False

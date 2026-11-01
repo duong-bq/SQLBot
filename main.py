@@ -28,7 +28,7 @@ from apps.system.schemas.permission import RequestContextMiddleware
 from common.audit.schemas.request_context import RequestContextMiddlewareCommon
 from common.core.admin_password import sync_admin_password
 from common.core.config import settings
-from common.core.health import QuietProbeAccessLog, router as health_router
+from common.core.health import router as health_router
 from common.core.response_middleware import ResponseMiddleware, exception_handler
 from common.core.sqlbot_cache import init_sqlbot_cache
 from common.utils.distributed_lock import SingleWorkerGuard
@@ -37,7 +37,19 @@ from common.utils.embedding_threads import (
     fill_empty_table_and_ds_embeddings,
     fill_empty_terminology_embeddings,
 )
+from common.telemetry import (
+    RequestContextMiddleware as TelemetryRequestContextMiddleware,
+    RequestLineMiddleware,
+    configure_telemetry,
+    instrument_app,
+    instrument_engine,
+    is_noise_span,
+)
 from common.utils.utils import SQLBotLogUtil
+
+# Metric và trace gửi thẳng tới SigNoz; endpoint, tên service và thuộc tính resource lấy từ biến OTEL_* của chart,
+# không có endpoint thì không dựng gì. Log đã được cấu hình khi import common.utils.utils.
+configure_telemetry("sqlbot", exclude_spans=is_noise_span, httpx=True, urllib3=True)
 
 
 def run_migrations():
@@ -65,15 +77,19 @@ def shutdown_resources() -> None:
     try:
         stop_datasource_background_tasks()
     except Exception:
-        SQLBotLogUtil.exception("SQLBot datasource background tasks shutdown failed")
+        SQLBotLogUtil.exception("Stopping the datasource background tasks failed during shutdown")
     try:
         SingleWorkerGuard.release()
     except Exception:
-        SQLBotLogUtil.exception("SQLBot shutdown failed")
+        SQLBotLogUtil.exception("Shutting down SQLBot failed")
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # Engine được tạo lúc import common.core.db, trước khi telemetry dựng xong, nên gắn instrument ở đây.
+    from common.core.db import engine
+
+    instrument_engine(engine)
     if settings.MIGRATE_ON_STARTUP:
         run_migrations()
         sync_admin_password()
@@ -83,7 +99,7 @@ async def lifespan(app: FastAPI):
     init_data_training_embedding_data()
     init_table_and_ds_embedding()
     start_datasource_background_tasks()
-    SQLBotLogUtil.info("✅ SQLBot 初始化完成")
+    SQLBotLogUtil.info("SQLBot finished starting up and is ready to serve requests")
     await sqlbot_xpack.core.clean_xpack_cache()
     await async_model_info()  # 异步加密已有模型的密钥和地址
     await sqlbot_xpack.core.monitor_app(app)
@@ -91,7 +107,7 @@ async def lifespan(app: FastAPI):
         yield
     finally:
         shutdown_resources()
-        SQLBotLogUtil.info("SQLBot 应用关闭")
+        SQLBotLogUtil.info("SQLBot is shutting down and has stopped serving requests")
 
 
 def custom_generate_unique_id(route: APIRoute) -> str:
@@ -289,9 +305,13 @@ app.add_middleware(TokenMiddleware)
 app.add_middleware(ResponseMiddleware)
 app.add_middleware(RequestContextMiddleware)
 app.add_middleware(RequestContextMiddlewareCommon)
+# Thêm sau cùng nên ngoài cùng: dòng request nằm trong span của request và mang trace_id.
+# RequestLineMiddleware thêm trước RequestContextMiddleware của telemetry (cái thêm sau là cái ngoài hơn).
+app.add_middleware(RequestLineMiddleware, logger_name="main.request")
+app.add_middleware(TelemetryRequestContextMiddleware)
+instrument_app(app)
 app.include_router(api_router, prefix=settings.API_V1_STR)
 app.include_router(health_router, prefix=settings.CONTEXT_PATH)
-logging.getLogger("uvicorn.access").addFilter(QuietProbeAccessLog())
 
 # Register exception handlers
 app.add_exception_handler(StarletteHTTPException, exception_handler.http_exception_handler)

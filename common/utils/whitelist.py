@@ -64,7 +64,7 @@ class WhitelistChecker:
                 try:
                     self._compiled_patterns.append(re.compile(regex_pattern))
                 except re.error:
-                    SQLBotLogUtil.error(f"Invalid regex pattern: {regex_pattern}")
+                    SQLBotLogUtil.error(f"Invalid regex pattern in the whitelist: {regex_pattern}")
     
     def is_whitelisted(self, path: str) -> bool:
         prefix = settings.API_V1_STR

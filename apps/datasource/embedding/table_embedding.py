@@ -24,7 +24,10 @@ def get_table_embedding(tables: list[dict], question: str):
             start_time = time.time()
             results = model.embed_documents(text)
             end_time = time.time()
-            SQLBotLogUtil.info(str(end_time - start_time))
+            SQLBotLogUtil.info(
+                f'Embedded {len(text)} table schemas in {end_time - start_time:.2f} seconds',
+                extra={'tables': len(text), 'duration_s': round(end_time - start_time, 2)},
+            )
 
             q_embedding = model.embed_query(question)
             for index in range(len(results)):
@@ -34,10 +37,13 @@ def get_table_embedding(tables: list[dict], question: str):
             _list.sort(key=lambda x: x['cosine_similarity'], reverse=True)
             _list = _list[:settings.TABLE_EMBEDDING_COUNT]
             # print(len(_list))
-            SQLBotLogUtil.info(json.dumps(_list))
+            SQLBotLogUtil.info(
+                f'Ranked the tables by embedding similarity, kept {len(_list)}',
+                extra={'tables': len(_list), 'best_table_ids': [ele.get('id') for ele in _list[:5]]},
+            )
             return _list
         except Exception:
-            traceback.print_exc()
+            SQLBotLogUtil.exception("Unexpected error in get table embedding", extra={"function": "get_table_embedding"})
     return _list
 
 
@@ -74,11 +80,15 @@ def calc_table_embedding(tables: list[dict], question: str, ds_id: int = None):
             _list = _list[:settings.TABLE_EMBEDDING_COUNT]
             # print(len(_list))
             end_time = time.time()
-            SQLBotLogUtil.info(str(end_time - start_time))
-            SQLBotLogUtil.info(json.dumps([{"id": ele.get('id'), "schema_table": ele.get('schema_table'),
-                                            "cosine_similarity": ele.get('cosine_similarity'), "table_name": ele.get('table_name')}
-                                           for ele in _list]))
+            SQLBotLogUtil.info(
+                f'Ranked the tables by stored embedding in {end_time - start_time:.2f} seconds',
+                extra={'duration_s': round(end_time - start_time, 2)},
+            )
+            SQLBotLogUtil.info(
+                f'Kept {len(_list)} tables after ranking, best {[ele.get("table_name") for ele in _list[:5]]}',
+                extra={'tables': len(_list), 'best_table_names': [ele.get('table_name') for ele in _list[:5]]},
+            )
             return _list
         except Exception:
-            traceback.print_exc()
+            SQLBotLogUtil.exception("Unexpected error in calc table embedding", extra={"function": "calc_table_embedding"})
     return _list

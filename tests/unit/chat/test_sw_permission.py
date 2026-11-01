@@ -57,7 +57,7 @@ def patch_rows(monkeypatch):
 def warnings_log(monkeypatch):
     """Bắt các warning log của module để test hành vi cảnh báo."""
     captured = []
-    monkeypatch.setattr(swp.SQLBotLogUtil, "warning", captured.append)
+    monkeypatch.setattr(swp.SQLBotLogUtil, "warning", lambda msg, **_: captured.append(msg))
     return captured
 
 
@@ -137,7 +137,7 @@ def test_scope_khong_parse_duoc_thi_loai_bang(patch_rows, warnings_log):
     patch_rows([make_row("t1", "SELEKT nonsense FROM FROM")])
     decision = resolve_sw_permission(StubSession(), "u1", None, DS)
     assert decision.allowed_tables == []
-    assert any("không" in msg and "parse" in msg for msg in warnings_log)
+    assert any("cannot be parsed" in msg for msg in warnings_log)
 
 
 def test_trung_bang_khac_scope_thi_giu_form_dau_tien(patch_rows, warnings_log):
@@ -147,7 +147,7 @@ def test_trung_bang_khac_scope_thi_giu_form_dau_tien(patch_rows, warnings_log):
     ])
     decision = resolve_sw_permission(StubSession(), "u1", None, DS)
     assert decision.scope_queries["t1"] == "SELECT a FROM t1 WHERE x = 1"
-    assert any("nhiều scope" in msg for msg in warnings_log)
+    assert any("several different query scopes" in msg for msg in warnings_log)
 
 
 def test_projection_tuong_minh_thanh_quyen_cot_ton_trong_alias(patch_rows):
@@ -255,7 +255,7 @@ def test_ten_bang_lech_hoa_thuong_chi_canh_bao_khong_cap_quyen(patch_rows, warni
     # Tên vẫn nằm trong allowed_tables (so khớp exact diễn ra ở get_table_schema và sẽ trượt),
     # nhưng phải có warning để vận hành biết vì sao user không thấy bảng.
     assert "kdl_nhankhau_ROW_VALUES" in decision.allowed_tables
-    assert any("hoa-thường" in msg for msg in warnings_log)
+    assert any("ignored" in msg and "NOT granted" in msg for msg in warnings_log)
 
 
 # ---------- apply_scope_to_sql ----------

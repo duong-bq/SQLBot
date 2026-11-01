@@ -4,7 +4,6 @@ import inspect
 import json
 import logging
 from datetime import datetime, timedelta, timezone
-from logging.handlers import RotatingFileHandler
 from pathlib import Path
 import re
 from urllib.parse import urlparse
@@ -18,6 +17,7 @@ import orjson
 from jwt.exceptions import InvalidTokenError
 
 from common.core import security
+from common.telemetry import configure_logging
 
 
 def generate_password_reset_token(email: str) -> str:
@@ -162,75 +162,25 @@ def _strip_url_query(arg):
 
 
 def setup_logging():
-    # 确保日志目录存在
-    log_dir = Path(settings.LOG_DIR)
-    log_dir.mkdir(parents=True, exist_ok=True)
-    
-    # 日志格式
-    formatter = logging.Formatter(
-        f'{settings.LOG_FORMAT}'
-    )
-    
-    # 控制台日志
-    console_handler = logging.StreamHandler()
-    console_handler.setLevel(settings.LOG_LEVEL)
-    console_handler.setFormatter(formatter)
-    
-    # 文件日志处理器
-    file_handlers = {
-        'debug': logging.DEBUG,
-        'info': logging.INFO,
-        'warn': logging.WARNING,
-        'error': logging.ERROR
-    }
-    
-    # 主日志记录器
-    root_logger = logging.getLogger()
-    root_logger.setLevel(logging.DEBUG)  # 设置最低级别
-    
-    # 添加控制台处理器
-    root_logger.addHandler(console_handler)
-    
-    # 为每个级别创建文件处理器
-    for level_name, level in file_handlers.items():
-        file_path = log_dir / f"{level_name}.log"
-        handler = RotatingFileHandler(
-            file_path,
-            maxBytes=10 * 1024 * 1024,  # 10MB
-            backupCount=5,
-            encoding='utf-8'
-        )
-        handler.setLevel(level)
-        handler.setFormatter(formatter)
-        
-        # 添加过滤器只处理特定级别日志
-        if level_name == 'debug':
-            handler.addFilter(lambda record: record.levelno == logging.DEBUG)
-        elif level_name == 'info':
-            handler.addFilter(lambda record: record.levelno == logging.INFO)
-        elif level_name == 'warn':
-            handler.addFilter(lambda record: record.levelno == logging.WARNING)
-        elif level_name == 'error':
-            handler.addFilter(lambda record: record.levelno >= logging.ERROR)
-        
-        root_logger.addHandler(handler)
+    """Cấu hình log theo chuẩn chung: một dòng JSON mỗi sự kiện ra stdout, agent của cluster đọc và gửi đi.
 
+    Không còn file log xoay vòng trong container (mất khi pod khởi động lại, agent không đọc). Chỉ logger của
+    ứng dụng theo `LOG_LEVEL`; thư viện bên thứ ba ở WARNING, riêng httpx/httpcore vì chúng log URL (presigned URL
+    mang chữ ký trong query string). Bộ lọc cắt query vẫn gắn cho httpx phòng khi ai đó hạ mức của nó.
+    """
+    configure_logging(
+        "sqlbot",
+        level=settings.LOG_LEVEL,
+        logger_names=("apps", "common", "main", "__main__"),
+        quiet_loggers=("httpx", "httpcore"),
+    )
     logging.getLogger("httpx").addFilter(_StripUrlQueryFilter())
 
-    # SQL日志特殊处理
+    # SQL: chỉ bật khi gỡ lỗi; lời gọi SQL đi theo handler chung, cùng định dạng.
     if settings.LOG_LEVEL == "DEBUG" and settings.SQL_DEBUG:
-        sql_logger = logging.getLogger('sqlalchemy.engine')
-        sql_logger.setLevel(logging.DEBUG)
-        
-        sql_handler = RotatingFileHandler(
-            log_dir / "sql.log",
-            maxBytes=10 * 1024 * 1024,
-            backupCount=2,
-            encoding='utf-8'
-        )
-        sql_handler.setFormatter(formatter)
-        sql_logger.addHandler(sql_handler)
-        
+        logging.getLogger('sqlalchemy.engine').setLevel(logging.DEBUG)
+
+
 setup_logging()
 
 
@@ -338,7 +288,7 @@ def get_origin_from_referer(request: Request):
         
         return f"{parsed.scheme}://{parsed.hostname}"
     except Exception as e:
-        SQLBotLogUtil.error(f"解析 Referer 出错: {e}")
+        SQLBotLogUtil.error(f"Could not parse the Referer header: {e}")
         return referer
 
 def origin_match_domain(origin: str, domain: str) -> bool:

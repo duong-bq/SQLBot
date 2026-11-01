@@ -124,7 +124,7 @@ async def single_delete(session: SessionDep, id: int):
 
 @clear_cache(namespace=CacheNamespace.AUTH_INFO, cacheName=CacheName.USER_INFO, keyExpression="id")
 async def clean_user_cache(id: int):
-    SQLBotLogUtil.info(f"User cache for [{id}] has been cleaned")
+    SQLBotLogUtil.info(f"Cleared the cached profile of user {id} because the user changed", extra={'user_id': id})
 
 
 def check_account_exists(*, session: Session, account: str) -> bool:

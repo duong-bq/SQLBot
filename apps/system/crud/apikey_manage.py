@@ -14,4 +14,4 @@ async def get_api_key(session: SessionDep, access_key: str) -> ApiKeyModel | Non
 
 @clear_cache(namespace=CacheNamespace.AUTH_INFO, cacheName=CacheName.ASK_INFO, keyExpression="access_key")
 async def clear_api_key_cache(access_key: str):
-     SQLBotLogUtil.info(f"Api key cache for [{access_key}] has been cleaned")
+     SQLBotLogUtil.info('Cleared the authentication cache of an API key because the key changed')

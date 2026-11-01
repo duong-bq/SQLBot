@@ -270,7 +270,11 @@ async def ai_sync(request: Request, session: SessionDep) -> JSONResponse:
         return fail(e.http_status, e.error_code, e.message)
     except Exception as e:  # noqa: BLE001 — mọi lỗi ngoài dự kiến là bug, vẫn phải để lại vết
         session.rollback()
-        SQLBotLogUtil.error(f"[ai-sync] lỗi không lường trước: {e}", exc_info=True)
+        SQLBotLogUtil.error(
+            f"ai-sync hit an unexpected error ({type(e).__name__})",
+            exc_info=True,
+            extra={"error": type(e).__name__},
+        )
         return fail(500, SyncErrorCode.INTERNAL_ERROR, str(e))
 
     finish_log(session, log, status=result.status.value, sync_version=sync_version)

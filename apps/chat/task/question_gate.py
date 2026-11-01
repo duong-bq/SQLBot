@@ -194,11 +194,16 @@ def decide_route(llm_service: Any, _session: Session) -> RouteDecision:
                 reasoning_content=full_thinking,
                 token_usage=token_usage)
         SQLBotLogUtil.info(
-            f'[route] action={decision.action} category={decision.category} '
-            f'forced={decision.forced or "-"} reason={decision.reason}')
+            f'Question routed to {decision.action} (category {decision.category}, forced {decision.forced or "none"}): '
+            f'{decision.reason}',
+            extra={'action': decision.action, 'category': decision.category, 'forced': decision.forced or None},
+        )
         return decision
     except Exception as e:
-        SQLBotLogUtil.error(f'[route] gate failed, fall back to sql: {e}')
+        SQLBotLogUtil.error(
+            f'Question gate failed, falling back to SQL ({type(e).__name__})',
+            extra={'error': type(e).__name__},
+        )
         if log is not None:
             try:
                 trigger_log_error(session=_session, log=log)

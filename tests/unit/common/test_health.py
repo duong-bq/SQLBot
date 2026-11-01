@@ -75,14 +75,3 @@ def test_redis_is_checked_only_when_the_cache_uses_it(monkeypatch, cache_type, e
 
 def test_probe_paths_skip_the_token_middleware():
     assert whiteUtils.is_whitelisted("/healthz") and whiteUtils.is_whitelisted("/readyz")
-
-
-def test_quiet_filter_drops_only_successful_probe_hits():
-    def record(path, status):
-        return logging.LogRecord("uvicorn.access", logging.INFO, "", 0, '%s - "%s %s HTTP/%s" %d',
-                                 ("1.2.3.4:5", "GET", path, "1.1", status), None)
-
-    quiet = health.QuietProbeAccessLog()
-    assert not quiet.filter(record("/healthz", 200))
-    assert quiet.filter(record("/readyz", 503))
-    assert quiet.filter(record("/api/v1/user", 200))

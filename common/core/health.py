@@ -20,17 +20,6 @@ logger = logging.getLogger("sqlbot.health")
 READINESS_BUDGET_SECONDS = 2.0
 
 
-class QuietProbeAccessLog(logging.Filter):
-    """Bỏ dòng access log của probe thành công để log không bị ngập mỗi 10 giây."""
-
-    def filter(self, record: logging.LogRecord) -> bool:
-        args = record.args
-        if isinstance(args, tuple) and len(args) == 5 and isinstance(args[4], int):
-            paths = (f"{settings.CONTEXT_PATH}/healthz", f"{settings.CONTEXT_PATH}/readyz")
-            return not (args[4] < 400 and str(args[2]).split("?")[0] in paths)
-        return True
-
-
 @dataclass
 class CheckResult:
     """Kết quả một check; detail chỉ là tên loại lỗi, không bao giờ chứa thông báo lỗi gốc.
@@ -99,7 +88,7 @@ async def readyz() -> JSONResponse:
     healthy = all(result.ok for result in results.values())
     if not healthy:
         failed = ", ".join(f"{name}={result.detail}" for name, result in results.items() if not result.ok)
-        logger.warning("readyz unavailable: %s", failed)
+        logger.warning(f"readyz unavailable: {failed}", extra={"failed": failed})
     body = {
         "status": "ok" if healthy else "unavailable",
         "checks": {name: {"ok": result.ok, "detail": result.detail} for name, result in results.items()},

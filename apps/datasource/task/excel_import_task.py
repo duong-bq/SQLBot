@@ -24,6 +24,7 @@ from sqlmodel import Session
 from common.core.config import settings
 from common.core.db import engine
 from common.utils.utils import SQLBotLogUtil
+from common.metrics import excel_import_jobs
 
 from ..crud.datasource import sync_table
 from ..crud.excel_job import (
@@ -96,7 +97,9 @@ class _Heartbeat:
             try:
                 touch_heartbeat(self._job_id)
             except Exception as e:
-                SQLBotLogUtil.warning(f"heartbeat failed for excel job {self._job_id}: {e}")
+                SQLBotLogUtil.warning(
+                    f"Heartbeat of Excel job {self._job_id} failed: {e}", extra={'job_id': self._job_id}
+                )
 
     def __enter__(self):
         self._thread.start()
@@ -128,7 +131,7 @@ def shutdown_import_executor() -> None:
     try:
         excel_import_executor.shutdown(wait=False, cancel_futures=True)
     except Exception as e:
-        SQLBotLogUtil.warning(f"cannot shutdown excel import executor: {e}")
+        SQLBotLogUtil.warning(f"Could not shut down the Excel import executor: {e}")
 
 
 def _run_import_job_safe(job_id: int) -> None:
@@ -145,11 +148,14 @@ def _run_import_job_safe(job_id: int) -> None:
         # ``run_import_job`` đã log và ghi thất bại (kèm callback) trước khi ném lại.
         pass
     except Exception as e:
-        SQLBotLogUtil.exception(f"excel import job {job_id} crashed: {e}")
+        SQLBotLogUtil.exception(
+            f"Excel import job {job_id} crashed ({type(e).__name__})",
+            extra={'job_id': job_id, 'error': type(e).__name__},
+        )
         try:
             finish_job(job_id, success=False, error_code=ERR_INTERNAL, error_message=str(e))
         except Exception:
-            SQLBotLogUtil.exception(f"cannot mark excel job {job_id} failed")
+            SQLBotLogUtil.exception(f"Could not mark Excel job {job_id} as failed", extra={'job_id': job_id})
 
 
 def _fetch_source_file(file_url: str, save_path: str) -> None:
@@ -164,10 +170,10 @@ def _fetch_source_file(file_url: str, save_path: str) -> None:
     Nó cũng chặn luôn trường hợp allowlist bị siết lại sau khi job đã vào hàng đợi.
     """
     if os.path.exists(save_path):
-        SQLBotLogUtil.info(f"source file already on disk, skip download: {save_path}")
+        SQLBotLogUtil.info(f"The source file is already on disk, skipping the download: {save_path}")
         return
     src = validate_source_url(file_url)
-    SQLBotLogUtil.info(f"downloading source file from {src.safe_label}")
+    SQLBotLogUtil.info(f"Downloading the source file from {src.safe_label}")
     download_to(src, save_path)
 
 
@@ -223,7 +229,7 @@ def run_import_job(job_id: int, workbook: InMemoryWorkbook | None = None) -> lis
     with Session(engine) as session:
         job = session.get(ExcelImportJob, job_id)
         if job is None:
-            SQLBotLogUtil.error(f"excel import job {job_id} not found")
+            SQLBotLogUtil.error(f"Excel import job {job_id} was not found", extra={'job_id': job_id})
             raise ExcelImportError(ERR_JOB_MISSING, f"Excel import job {job_id} not found")
         ds_id = job.ds_id
         save_path = job.file_path
@@ -271,7 +277,11 @@ def run_import_job(job_id: int, workbook: InMemoryWorkbook | None = None) -> lis
             _finalize_datasource(ds_id, filename, results)
 
         finish_job(job_id, success=True, callback_payload=_payload(ds_id, True, "Import succeeded"))
-        SQLBotLogUtil.info(f"excel import job {job_id} finished, ds={ds_id}, tables={len(results)}")
+        excel_import_jobs.add(1, {"outcome": "succeeded", "error_code": ""})
+        SQLBotLogUtil.info(
+            f"Excel import job {job_id} finished: datasource {ds_id} with {len(results)} tables",
+            extra={'job_id': job_id, 'ds_id': ds_id, 'tables': len(results)},
+        )
         return results
 
     except ExcelImportError as e:
@@ -291,7 +301,7 @@ def run_import_job(job_id: int, workbook: InMemoryWorkbook | None = None) -> lis
                 if os.path.exists(leftover):
                     os.remove(leftover)
             except Exception as e:
-                SQLBotLogUtil.warning(f"cannot remove temp file {leftover}: {e}")
+                SQLBotLogUtil.warning(f"Could not remove the temp file {leftover}: {e}")
 
 
 def fail_import_job(job_id: int, ds_id: int, created: list[str], error_code: str, message: str) -> None:
@@ -301,11 +311,15 @@ def fail_import_job(job_id: int, ds_id: int, created: list[str], error_code: str
     job mà worker của nó đã chết. Cả hai đều cần đúng ba việc này theo đúng thứ tự này, và việc
     cuối — ``finish_job`` — mới là thứ đẩy lá thư báo hỏng vào outbox.
     """
-    SQLBotLogUtil.error(f"excel import job {job_id} failed [{error_code}]: {message}")
+    excel_import_jobs.add(1, {"outcome": "failed", "error_code": str(error_code)})
+    SQLBotLogUtil.error(
+        f"Excel import job {job_id} failed ({error_code}): {message}",
+        extra={'job_id': job_id, 'ds_id': ds_id, 'error_code': error_code},
+    )
     try:
         drop_tables(created)
     except Exception as e:
-        SQLBotLogUtil.warning(f"cannot drop tables of failed job {job_id}: {e}")
+        SQLBotLogUtil.warning(f"Could not drop the tables of failed job {job_id}: {e}", extra={'job_id': job_id})
     try:
         with Session(engine) as session:
             session.execute(
@@ -315,7 +329,10 @@ def fail_import_job(job_id: int, ds_id: int, created: list[str], error_code: str
             )
             session.commit()
     except Exception as e:
-        SQLBotLogUtil.exception(f"cannot mark datasource {ds_id} failed: {e}")
+        SQLBotLogUtil.exception(
+            f"Could not mark datasource {ds_id} as failed ({type(e).__name__})",
+            extra={'ds_id': ds_id, 'error': type(e).__name__},
+        )
     finish_job(job_id, success=False, error_code=error_code, error_message=message,
                callback_payload=_payload(ds_id, False, message))
 

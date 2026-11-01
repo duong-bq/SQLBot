@@ -57,9 +57,12 @@ def pick_gateway_prompts(prompts: list[GatewayPrompt]) -> tuple[str, str]:
     received = ', '.join(f'{p.name}@{p.version_ref}' for p in prompts)
     missing = [n for n in names if n not in found]
     if missing:
-        SQLBotLogUtil.warning(f'gateway prompts missing {missing}; received: {received}')
+        SQLBotLogUtil.warning(
+            f'Gateway prompts are missing {missing}; received {received}',
+            extra={'missing': missing, 'received': received},
+        )
     else:
-        SQLBotLogUtil.info(f'gateway prompts received: {received}')
+        SQLBotLogUtil.info(f'Received the gateway prompts {received}', extra={'received': received})
     playbook = found.get(SQL_PLAYBOOK_PROMPT)
     persona = found.get(ANSWER_PERSONA_PROMPT)
     return (playbook.content if playbook else '', persona.content if persona else '')

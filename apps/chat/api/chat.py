@@ -34,6 +34,7 @@ from common.core.config import settings
 from common.core.deps import CurrentAssistant, SessionDep, CurrentUser, Trans
 from common.utils.command_utils import parse_quick_command
 from common.utils.data_format import DataFormat
+from common.utils.utils import SQLBotLogUtil
 
 router = APIRouter(tags=["Data Q&A"], prefix="/chat")
 
@@ -393,7 +394,7 @@ async def ask_recommend_questions(
         llm_service.set_articles_number(articles_number)
         llm_service.run_recommend_questions_task_async()
     except Exception as e:
-        traceback.print_exc()
+        SQLBotLogUtil.exception("Unexpected error in ask recommend questions", extra={"function": "ask_recommend_questions"})
 
         def _err(_e: Exception):
             yield (
@@ -912,7 +913,7 @@ async def question_answer_inner(
                 return_img,
             )
     except Exception as e:
-        traceback.print_exc()
+        SQLBotLogUtil.exception("Unexpected error in question answer inner", extra={"function": "question_answer_inner"})
 
         if stream:
 
@@ -1037,7 +1038,7 @@ async def stream_sql(
             return_img=return_img,
         )
     except Exception as e:
-        traceback.print_exc()
+        SQLBotLogUtil.exception("Unexpected error in stream sql", extra={"function": "stream_sql"})
 
         if stream:
 
@@ -1161,7 +1162,7 @@ async def analysis_or_predict(
             session, action_type, record, in_chat, stream
         )
     except Exception as e:
-        traceback.print_exc()
+        SQLBotLogUtil.exception("Unexpected error in analysis or predict", extra={"function": "analysis_or_predict"})
         if stream:
 
             def _err(_e: Exception):

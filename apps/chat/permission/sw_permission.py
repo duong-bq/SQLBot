@@ -111,9 +111,9 @@ def _warn_case_mismatches(session: Session, ds: CoreDatasource, allowed_tables: 
     for name in allowed_tables:
         if name not in core_names and name.lower() in lower_map:
             SQLBotLogUtil.warning(
-                f"[sw_permission] Bảng '{name}' trong ai_user_permissions không khớp exact với "
-                f"core_table nhưng khớp khi bỏ hoa-thường ('{lower_map[name.lower()]}') — "
-                f"quyền KHÔNG được cấp, kiểm tra lại tên bảng phía SW."
+                f"Permission table '{name}' of ai_user_permissions matches core_table only when the case is ignored "
+                f"('{lower_map[name.lower()]}'); the permission is NOT granted, check the table name on the SW side",
+                extra={'table_name': name},
             )
 
 
@@ -200,8 +200,9 @@ def resolve_sw_permission(
         if table_name in seen:
             if scope_queries.get(table_name, "") != scope:
                 SQLBotLogUtil.warning(
-                    f"[sw_permission] Bảng '{table_name}' có nhiều scope query khác nhau cho user "
-                    f"'{account}' — giữ scope của form đầu tiên, bỏ qua scope sau."
+                    f"Table '{table_name}' has several different query scopes for user '{account}'; "
+                    f"keeping the scope of the first form and ignoring the others",
+                    extra={'table_name': table_name, 'account': account},
                 )
             continue
         seen.add(table_name)
@@ -216,8 +217,9 @@ def resolve_sw_permission(
             parsed = sqlglot.parse_one(scope, dialect=dialect)
         except Exception as parse_error:
             SQLBotLogUtil.warning(
-                f"[sw_permission] Scope query của bảng '{table_name}' (user '{account}') không "
-                f"parse được, bảng bị loại khỏi phạm vi được phép: {parse_error}"
+                f"The query scope of table '{table_name}' (user '{account}') cannot be parsed, so the table is left out "
+                f"of the allowed range: {parse_error}",
+                extra={'table_name': table_name, 'account': account},
             )
             continue
         allowed_tables.append(table_name)

@@ -288,7 +288,7 @@ cũ, kể cả phần đọc câu hỏi của user khác (§7.2).
 
 ### 2.12. Khác
 
-`CACHE_TYPE` (`memory`/`redis`/`None`), `REDIS_CONNECTION_STRING`, `REDIS_MODE` và các biến `REDIS_*` (§3.4), `LOG_LEVEL`, `LOG_DIR`, `SQL_DEBUG`,
+`CACHE_TYPE` (`memory`/`redis`/`None`), `REDIS_CONNECTION_STRING`, `REDIS_MODE` và các biến `REDIS_*` (§3.4), `LOG_LEVEL`, `SQL_DEBUG`,
 `PG_POOL_SIZE`/`PG_MAX_OVERFLOW`/`PG_POOL_RECYCLE`/`PG_POOL_PRE_PING` (pool của **DB metadata**),
 `ORACLE_CLIENT_PATH`, `CONTEXT_PATH` (prefix URL, mặc định rỗng).
 
@@ -441,14 +441,18 @@ Các báo cáo cũ hơn cho bộ DataLaoCai: `BaoCao_DanhGia_Text2SQL_SQLBot.md`
 
 ## 5. Log
 
-File log ở `logs/`: `debug.log` (có xoay vòng `.1`…`.4`), `info.log`, `warn.log`,
-`error.log`. Cấu hình bằng `LOG_LEVEL`, `LOG_DIR`, `LOG_FORMAT`.
+Không còn file log trong container. Mỗi sự kiện là một dòng JSON ra stdout (thời gian +07:00, `service.name`,
+`trace_id`, các field như `ds_id`, `job_id`, `record_id`); agent của cluster đọc và gửi lên SigNoz. Mức log đặt bằng `LOG_LEVEL`
+(chỉ áp cho logger của ứng dụng; thư viện bên thứ ba ở WARNING). Mỗi request một dòng, câu dạng
+`Fetched the datasource (HTTP 200, id 7, 12 ms)`, request bị từ chối có `error_code` và `error_message` ngay trên dòng đó.
+Không còn ghi nội dung model (reasoning, câu trả lời, SQL, schema bảng): INFO chỉ ghi số ký tự; nội dung SQL và output của model chỉ
+có ở mức DEBUG. Các dòng `grep` dưới đây nay là lọc theo message/field trong SigNoz.
 
 Những gì `run_task` ghi ra log và **không** phát thành event SSE:
 
-- Toàn văn SQL model sinh ra, trước và sau khi qua kiểm duyệt.
-- `SQL phase failed (attempt N/M), retrying: <lý do>` — dấu vết **duy nhất** của lần retry.
-- `SQL phase failed after N retry, falling back to answer-only: <lý do>` — dấu vết duy nhất của
+- Số ký tự SQL model sinh ra (`Generated N chars of SQL for record R`); toàn văn ở mức DEBUG.
+- `The SQL step failed (attempt N of M), retrying: <lý do>` — dấu vết **duy nhất** của lần retry.
+- `The SQL step failed after N retries, falling back to an answer without SQL: <lý do>` — dấu vết duy nhất của
   lượt hạ cấp (cố ý không ghi vào `chat_record.error`).
 
 `SQL_DEBUG=True` bật echo SQL của SQLAlchemy cho DB metadata.
@@ -524,7 +528,7 @@ FROM ai_sync_hook_logs WHERE action_type = 4 ORDER BY received_at DESC LIMIT 20;
 ```
 
 Dòng log chỉ nói request đã chạy xong hay hỏng ở tầng cấu trúc; kết cục của **từng nguồn** nằm trong
-body trả về chứ không lưu lại, nên nguồn nào đồng bộ trượt thì phải tra tiếp `warn.log`/`error.log`
+body trả về chứ không lưu lại, nên nguồn nào đồng bộ trượt thì phải tra tiếp log mức WARN/ERROR
 theo chuỗi `[ai-sync] DATASOURCE_SYNC`.
 
 ### Vì sao người dùng này không thấy bảng đó
@@ -546,8 +550,8 @@ SELECT table_name FROM core_table WHERE ds_id = <datasource_id>;
 ```
 
 Bước 3 là chỗ hay hỏng nhất. Lệch hoa-thường thì bảng **không** được cấp quyền, nhưng log có dòng
-`[sw_permission] Bảng '<tên SW gửi>' … khớp khi bỏ hoa-thường ('<tên thật>')` nêu đúng cặp tên gần
-nhau. `grep sw_permission logs/warn.log` là ra ngay mọi thứ đã bị bỏ qua âm thầm: tên lệch
+`Permission table '<tên SW gửi>' of ai_user_permissions matches core_table only when the case is ignored ('<tên thật>')` nêu đúng cặp tên gần
+nhau. lọc `sw_permission` ở mức WARN trong SigNoz là ra ngay mọi thứ đã bị bỏ qua âm thầm: tên lệch
 hoa-thường, scope query hỏng cú pháp, bảng có nhiều scope mâu thuẫn.
 
 ---

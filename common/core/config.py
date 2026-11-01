@@ -89,8 +89,6 @@ class Settings(BaseSettings):
     REDIS_DATABASE_ID: int = 0  # standalone và sentinel; cluster luôn dùng db 0
 
     LOG_LEVEL: str = "INFO"  # DEBUG, INFO, WARNING, ERROR
-    LOG_DIR: str = "logs"
-    LOG_FORMAT: str = "%(asctime)s - %(name)s - %(levelname)s:%(lineno)d - %(message)s"
     SQL_DEBUG: bool = False
     BASE_DIR: str = "/tmp/sqlbot"
     SCRIPT_DIR: str = f"{BASE_DIR}/scripts"

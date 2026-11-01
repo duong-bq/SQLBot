@@ -14,6 +14,7 @@ from apps.terminology.models.terminology_model import Terminology, TerminologyIn
 from common.core.config import settings
 from common.core.deps import SessionDep, Trans
 from common.utils.dict_to_xml import dict_to_xml
+from common.utils.utils import SQLBotLogUtil
 from common.utils.embedding_threads import run_save_terminology_embeddings
 
 
@@ -564,7 +565,9 @@ def batch_create_terminology(session: SessionDep, info_list: List[TerminologyInf
                 run_save_terminology_embeddings(inserted_ids)
             except Exception as e:
                 # 如果embedding处理失败，记录错误但不回滚数据
-                print(f"Terminology embedding processing failed: {str(e)}")
+                SQLBotLogUtil.error(
+                    f"Embedding of the terminology failed ({type(e).__name__})", extra={"error": type(e).__name__}
+                )
                 # 可以选择将embedding失败的信息记录到日志或返回给调用方
 
     return {
@@ -759,7 +762,7 @@ def run_fill_empty_embeddings(session_maker):
         results = session.execute(combined_stmt).scalars().all()
         save_embeddings(session_maker, results)
     except Exception:
-        traceback.print_exc()
+        SQLBotLogUtil.exception("Unexpected error in run fill empty embeddings", extra={"function": "run_fill_empty_embeddings"})
     finally:
         session_maker.remove()
 
@@ -787,7 +790,7 @@ def save_embeddings(session_maker, ids: List[int]):
             session.commit()
 
     except Exception:
-        traceback.print_exc()
+        SQLBotLogUtil.exception("Unexpected error in save embeddings", extra={"function": "save_embeddings"})
     finally:
         session_maker.remove()
 
@@ -903,7 +906,7 @@ def select_terminology_by_word(session: SessionDep, word: str, oid: int, datasou
                     _list.append(Terminology(id=row.id, word=row.word, pid=row.pid))
 
             except Exception:
-                traceback.print_exc()
+                SQLBotLogUtil.exception("Unexpected error in select terminology by word", extra={"function": "select_terminology_by_word"})
                 session.rollback()
 
     _map: dict = {}

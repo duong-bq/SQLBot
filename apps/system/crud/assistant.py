@@ -169,7 +169,9 @@ class AssistantOutDs:
             else:
                 raise Exception(f"Failed to get datasource list from {endpoint}, error: {result_json.get('message')}")
         else:
-            SQLBotLogUtil.error(f"Failed to get datasource list from {endpoint}, response: {res}")
+            SQLBotLogUtil.error(
+                f"Could not get the datasource list from {endpoint}", extra={'endpoint': endpoint}
+            )
             raise Exception(f"Failed to get datasource list from {endpoint}, response: {res}")
 
     def get_first_element(self, text: str):

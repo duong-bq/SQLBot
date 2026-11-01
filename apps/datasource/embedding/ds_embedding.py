@@ -49,14 +49,14 @@ def get_ds_embedding(session: SessionDep, _ds_list, out_ds: AssistantOutDs,
                 _list.sort(key=lambda x: x['cosine_similarity'], reverse=True)
                 # print(len(_list))
                 _list = _list[:settings.DS_EMBEDDING_COUNT]
-                SQLBotLogUtil.info(json.dumps(
-                    [{"id": ele.get("id"), "name": ele.get("ds").name,
-                      "cosine_similarity": ele.get("cosine_similarity")}
-                     for ele in _list]))
+                SQLBotLogUtil.info(
+                    f'Ranked {len(_list)} datasources by embedding similarity, best {[ele.get("id") for ele in _list[:5]]}',
+                    extra={'datasources': len(_list), 'best_ds_ids': [ele.get('id') for ele in _list[:5]]},
+                )
                 return [{"id": obj.get('ds').id, "name": obj.get('ds').name, "description": obj.get('ds').description}
                         for obj in _list]
             except Exception:
-                traceback.print_exc()
+                SQLBotLogUtil.exception("Unexpected error in get ds embedding", extra={"function": "get_ds_embedding"})
     else:
         for _ds in _ds_list:
             if _ds.get('id'):
@@ -75,14 +75,17 @@ def get_ds_embedding(session: SessionDep, _ds_list, out_ds: AssistantOutDs,
                 _list = rank_ds_by_embedding(_list, question)
                 # print(len(_list))
                 end_time = time.time()
-                SQLBotLogUtil.info(str(end_time - start_time))
+                SQLBotLogUtil.info(
+                    f'Ranked the datasources by embedding in {end_time - start_time:.2f} seconds',
+                    extra={'duration_s': round(end_time - start_time, 2)},
+                )
                 _list = _list[:settings.DS_EMBEDDING_COUNT]
-                SQLBotLogUtil.info(json.dumps(
-                    [{"id": ele.get("id"), "name": ele.get("ds").name,
-                      "cosine_similarity": ele.get("cosine_similarity")}
-                     for ele in _list]))
+                SQLBotLogUtil.info(
+                    f'Kept {len(_list)} datasources after ranking, best {[ele.get("id") for ele in _list[:5]]}',
+                    extra={'datasources': len(_list), 'best_ds_ids': [ele.get('id') for ele in _list[:5]]},
+                )
                 return [{"id": obj.get('ds').id, "name": obj.get('ds').name, "description": obj.get('ds').description}
                         for obj in _list]
             except Exception:
-                traceback.print_exc()
+                SQLBotLogUtil.exception("Unexpected error in get ds embedding", extra={"function": "get_ds_embedding"})
     return _list
