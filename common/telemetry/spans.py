@@ -1,10 +1,11 @@
-# Copy of the shared telemetry module (version 0.2.0), kept in the otel-integration skill (templates/python).
+# Copy of the shared telemetry module (version 0.2.1), kept in the otel-integration skill (templates/python).
 # Do not edit here: change the shared files and run templates/python/sync.py for every service.
-"""Keep chosen spans out of the SigNoz exporter."""
+"""Keep chosen spans out of the SigNoz exporter, and strip the content of LLM spans."""
 
 from collections.abc import Callable, Sequence
 
 from opentelemetry.sdk.trace import ReadableSpan
+from opentelemetry.trace import Status
 from opentelemetry.sdk.trace.export import SpanExporter, SpanExportResult
 
 
@@ -27,20 +28,39 @@ def is_idle_db_span(span: ReadableSpan) -> bool:
     return span.name == "connect" or span.parent is None
 
 
+def scrub_llm_span(span: ReadableSpan) -> ReadableSpan:
+    """The same span with no attributes, no events and no status text: only its name, ids, kind, status code and timing stay.
+    An LLM span still has to reach SigNoz so the spans below it keep a parent; its content (prompt, answer, error text) must not."""
+    return ReadableSpan(
+        name=span.name,
+        context=span.context,
+        parent=span.parent,
+        resource=span.resource,
+        attributes={},
+        events=(),
+        links=span.links,
+        kind=span.kind,
+        status=Status(span.status.status_code),
+        start_time=span.start_time,
+        end_time=span.end_time,
+        instrumentation_scope=span.instrumentation_scope,
+    )
+
+
 def is_noise_span(span: ReadableSpan) -> bool:
-    """What a service should normally keep out of SigNoz: LLM spans and idle database spans."""
-    return is_llm_span(span) or is_idle_db_span(span)
+    """What a service should normally keep out of SigNoz: idle database spans. LLM spans are not dropped, `ExcludeSpans` scrubs them."""
+    return is_idle_db_span(span)
 
 
 class ExcludeSpans(SpanExporter):
-    """Wraps an exporter and drops the spans for which `predicate` is true."""
+    """Wraps an exporter, drops the spans for which `predicate` is true and scrubs the content of the LLM spans that stay."""
 
     def __init__(self, inner: SpanExporter, predicate: Callable[[ReadableSpan], bool]) -> None:
         self._inner = inner
         self._predicate = predicate
 
     def export(self, spans: Sequence[ReadableSpan]) -> SpanExportResult:
-        kept = [span for span in spans if not self._predicate(span)]
+        kept = [scrub_llm_span(span) if is_llm_span(span) else span for span in spans if not self._predicate(span)]
         return self._inner.export(kept) if kept else SpanExportResult.SUCCESS
 
     def shutdown(self) -> None:

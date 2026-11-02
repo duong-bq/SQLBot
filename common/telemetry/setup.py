@@ -1,4 +1,4 @@
-# Copy of the shared telemetry module (version 0.2.0), kept in the otel-integration skill (templates/python).
+# Copy of the shared telemetry module (version 0.2.1), kept in the otel-integration skill (templates/python).
 # Do not edit here: change the shared files and run templates/python/sync.py for every service.
 """Metrics and traces over OTLP straight to the collector; logs stay on stdout for the node agent.
 

@@ -1,4 +1,4 @@
-# Copy of the shared telemetry module (version 0.2.0), kept in the otel-integration skill (templates/python).
+# Copy of the shared telemetry module (version 0.2.1), kept in the otel-integration skill (templates/python).
 # Do not edit here: change the shared files and run templates/python/sync.py for every service.
 from .config import service_name
 from .logs import (
@@ -15,7 +15,7 @@ from .setup import (
     instrument_engine,
     tracing_enabled,
 )
-from .spans import ExcludeSpans, is_idle_db_span, is_llm_span, is_noise_span
+from .spans import ExcludeSpans, is_idle_db_span, is_llm_span, is_noise_span, scrub_llm_span
 
 __all__ = [
     "ContractFormatter",
@@ -32,6 +32,7 @@ __all__ = [
     "is_idle_db_span",
     "is_llm_span",
     "is_noise_span",
+    "scrub_llm_span",
     "log_request",
     "note_error",
     "service_name",

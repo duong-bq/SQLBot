@@ -1,4 +1,4 @@
-# Copy of the shared telemetry module (version 0.2.0), kept in the otel-integration skill (templates/python).
+# Copy of the shared telemetry module (version 0.2.1), kept in the otel-integration skill (templates/python).
 # Do not edit here: change the shared files and run templates/python/sync.py for every service.
 """One JSON object per line on stdout, in the shape the node log agent parses (otel-integration log contract).
 
