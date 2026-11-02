@@ -5,8 +5,8 @@
 from collections.abc import Callable, Sequence
 
 from opentelemetry.sdk.trace import ReadableSpan
-from opentelemetry.trace import Status
 from opentelemetry.sdk.trace.export import SpanExporter, SpanExportResult
+from opentelemetry.trace import Status
 
 
 def is_llm_span(span: ReadableSpan) -> bool:

@@ -32,9 +32,9 @@ __all__ = [
     "is_idle_db_span",
     "is_llm_span",
     "is_noise_span",
-    "scrub_llm_span",
     "log_request",
     "note_error",
+    "scrub_llm_span",
     "service_name",
     "tracing_enabled",
 ]
