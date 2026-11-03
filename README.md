@@ -25,7 +25,7 @@ Các thành phần của upstream không dùng trong H04 đã bị xóa: `fronte
 docker build -t sqlbot-backend:test .
 ```
 
-Build cần ra mạng tới `mirrors.aliyun.com`, `test.pypi.org` và `download.pytorch.org` vì `uv.lock` ghim URL tuyệt đối của các host này. `torch` được ghim về bản CPU trong `pyproject.toml`, nên `uv sync` không cần thêm cờ nào.
+Build cần ra mạng tới `mirrors.aliyun.com` và `test.pypi.org` vì `uv.lock` ghim URL tuyệt đối của các host này.
 
 ## Chạy local
 

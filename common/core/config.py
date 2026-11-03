@@ -124,7 +124,10 @@ class Settings(BaseSettings):
     EMBEDDING_API_BASE_URL: str = ''   # e.g. http://192.168.51.250:1999/v1
     EMBEDDING_API_KEY: str = 'not-needed'
     EMBEDDING_API_MODEL: str = ''      # e.g. BAAI/bge-m3
-    EMBEDDING_ENABLED: bool = True
+    # Chỉ bật/tắt tra thuật ngữ và SQL mẫu bằng model embedding chung ở trên (không theo
+    # datasource). H04 không dùng hai tính năng này nên mặc định tắt; embedding bảng và
+    # datasource dùng model Gateway cấp, bật/tắt bằng TABLE_EMBEDDING_ENABLED.
+    EMBEDDING_ENABLED: bool = False
     EMBEDDING_DEFAULT_SIMILARITY: float = 0.4
     EMBEDDING_TERMINOLOGY_SIMILARITY: float = EMBEDDING_DEFAULT_SIMILARITY
     EMBEDDING_DATA_TRAINING_SIMILARITY: float = EMBEDDING_DEFAULT_SIMILARITY

@@ -21,12 +21,11 @@
 tương đối so với thư mục làm việc, nên phải chạy backend từ gốc repo. Chạy từ thư mục khác thì `.env`
 bị bỏ qua im lặng. File này nằm trong `.gitignore`.
 
-Ba nhóm giá trị **bắt buộc sửa khi chạy local**:
+Hai nhóm giá trị **bắt buộc sửa khi chạy local**:
 
 | Nhóm | Vì sao |
 |---|---|
 | `BASE_DIR`, `UPLOAD_DIR`, `EXCEL_PATH`, `MCP_IMAGE_PATH`, `LOCAL_MODEL_PATH` | `BASE_DIR`, `UPLOAD_DIR`, `EXCEL_PATH`, `MCP_IMAGE_PATH` mặc định nằm dưới `/tmp/sqlbot/...` (file tạm của một request, ghi xuống `/tmp`); `LOCAL_MODEL_PATH` vẫn là `/opt/sqlbot/models`. User thường không ghi được, và `sqlbot_xpack` gọi `mkdir(UPLOAD_DIR)` **ngay lúc import** → `PermissionError` trước cả khi app chạy |
-| `EMBEDDING_PROVIDER=api` + `EMBEDDING_API_*` | Mặc định `local` nạp `shibing624/text2vec-base-chinese` từ `LOCAL_MODEL_PATH`; model đó chỉ có trong image Docker. Chạy local mà để `local` thì mỗi lần lưu/sync datasource ném `FileNotFoundError` |
 | `DB_PASSWORD` | Ghi mật khẩu **thô, không URL-encode sẵn**: `config.py` đã bọc `urllib.parse.quote()`. Điền sẵn `%40` là mã hóa hai lần và Postgres từ chối đăng nhập |
 
 ### Lệnh
@@ -40,17 +39,15 @@ uv sync
 uv run uvicorn main:app --host 0.0.0.0 --port 8000 --reload
 ```
 
-### `torch` luôn là bản CPU
+### Không còn `torch`
 
-`torch` nằm trong `dependencies` chính ([pyproject.toml:28](../pyproject.toml#L28)) và được ghim về
-index `pytorch-cpu` ở `[tool.uv.sources]` ([pyproject.toml:81](../pyproject.toml#L81)), nên `uv sync`
-trần đã cài bản CPU. Không còn extra `cpu`/`cu128`: truyền `--extra cpu` bây giờ là lỗi
-`Extra cpu is not defined`. Torch là bắt buộc vì `apps/ai_model/embedding.py` import
-`langchain_huggingface` ngay đầu file và lệnh import đó nạp torch, **bất kể `EMBEDDING_PROVIDER`**.
-Muốn chạy embedding trên GPU thì phải sửa `pyproject.toml` sang index CUDA rồi `uv lock` lại.
+Commit `3c1bf8cd` đã bỏ `torch`, `sentence-transformers` và `langchain-huggingface`: embedding chỉ
+gọi qua API (`EMBEDDING_PROVIDER=api`), lệnh import HuggingFace trong `apps/ai_model/embedding.py`
+đã được comment. Muốn chạy lại embedding local thì phải thêm lại các gói đó và bỏ chặn trong
+`EmbeddingModelCache._new_instance`.
 
-`torch` cũng là lý do `uv sync` lần đầu tải ~1,7GB. `Dockerfile` vì thế tách làm hai lần sync
-để layer dependency chỉ rebuild khi `pyproject.toml`/`uv.lock` đổi.
+`Dockerfile` cài dependency ở một lớp riêng trước khi copy code, để lớp đó chỉ rebuild khi
+`pyproject.toml`/`uv.lock` đổi.
 
 **Không có bước migrate thủ công**: `lifespan` gọi `alembic upgrade head` mỗi lần khởi động
 ([main.py:66](../main.py#L66)).
@@ -139,9 +136,9 @@ nghĩa, `run_task` bỏ qua bất kể biến này.
 
 | Biến | Mặc định | Tác dụng |
 |---|---|---|
-| `EMBEDDING_ENABLED` | `True` | Công tắc tổng |
-| `EMBEDDING_PROVIDER` | `local` | `local` = HuggingFace tại `LOCAL_MODEL_PATH`; `api` = `OpenAIEmbeddings` |
-| `EMBEDDING_API_BASE_URL` / `_KEY` / `_MODEL` | — | Cấu hình cho `provider=api` |
+| `EMBEDDING_ENABLED` | `False` | **Không phải công tắc tổng** (tên kế thừa từ upstream). Chỉ bật/tắt tra thuật ngữ và SQL mẫu bằng vector: embed lúc lưu, lấp lúc khởi động và embed câu hỏi mỗi lượt. Hai tính năng này luôn dùng model chung `EMBEDDING_API_*`, không theo datasource. H04 không dùng nên fork đặt mặc định `False` (upstream là `True`); tắt thì vẫn còn phần khớp chuỗi `ILIKE`. Embedding bảng và datasource không phụ thuộc cờ này mà theo `TABLE_EMBEDDING_ENABLED` |
+| `EMBEDDING_PROVIDER` | `api` | Chỉ hỗ trợ `api` (`OpenAIEmbeddings`); nhánh `local` (HuggingFace) đã bị tắt, đặt `local` thì mỗi lần dựng model chung ném `ValueError` |
+| `EMBEDDING_API_BASE_URL` / `_KEY` / `_MODEL` | — | Model embedding chung. Chỉ dùng cho thuật ngữ / SQL mẫu (khi bật `EMBEDDING_ENABLED`) và làm dự phòng cho datasource không có cấu hình embedding riêng. Gateway chỉ không gửi khối embedding khi kho không có model embedding (kho cũ giữ model pod, hoặc chưa có model mặc định), nên thường không cần khai |
 | `TABLE_EMBEDDING_ENABLED` / `TABLE_EMBEDDING_COUNT` | `True` / `10` | Top-K bảng đưa vào M-Schema |
 | `DS_EMBEDDING_COUNT` | `10` | Top-K datasource khi LLM tự chọn |
 | `EMBEDDING_DEFAULT_SIMILARITY` | `0.4` | Ngưỡng cosine; override bằng `EMBEDDING_TERMINOLOGY_SIMILARITY` / `EMBEDDING_DATA_TRAINING_SIMILARITY` |
@@ -293,7 +290,7 @@ cũ, kể cả phần đọc câu hỏi của user khác (§7.2).
 `ORACLE_CLIENT_PATH`, `CONTEXT_PATH` (prefix URL, mặc định rỗng).
 
 Biến bool nhận cả `"true"`/`"True"`/`"false"` nhờ validator `lowercase_bool`
-([config.py:386](../common/core/config.py#L386)).
+([config.py:409](../common/core/config.py#L409)).
 
 ---
 
@@ -322,8 +319,8 @@ cố ý:
 - Không tải Oracle instant client / thư viện DM: `oracledb` chạy thin mode, wheel `dmpython` đã
   bundle sẵn `libdmdpi`.
 
-Build cần ra được mạng tới ba host mà `uv.lock` ghim URL tuyệt đối: `mirrors.aliyun.com`,
-`test.pypi.org` (sqlbot-xpack), `download.pytorch.org` (torch CPU). Muốn đổi index thì phải sửa
+Build cần ra được mạng tới hai host mà `uv.lock` ghim URL tuyệt đối: `mirrors.aliyun.com` và
+`test.pypi.org` (sqlbot-xpack). Muốn đổi index thì phải sửa
 `[[tool.uv.index]]` trong `pyproject.toml` rồi `uv lock` lại — `--frozen` đọc URL trong lock.
 
 **Migration.** Mặc định (`MIGRATE_ON_STARTUP=true`) mỗi tiến trình tự chạy `alembic upgrade head` lúc khởi động, như upstream; nhiều pod khởi động cùng lúc trên DB chưa migrate thì tranh nhau. Trên Kubernetes migration chạy bằng một Job riêng (Helm hook `pre-install,pre-upgrade`, `migration:` trong `values.yaml` của gitops, lệnh `alembic upgrade head`) và pod đặt `MIGRATE_ON_STARTUP=false` nên không migrate nữa. Job chạy trước khi Deployment đổi, nên schema luôn lên trước code mới. Lỗi migration thì Job lỗi và Deployment cũ giữ nguyên.

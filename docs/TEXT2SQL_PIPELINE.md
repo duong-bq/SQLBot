@@ -419,7 +419,7 @@ Vì answer, chart và gợi ý chạy song song, các lần gọi thêm làm **c
 trễ**: thời điểm event `finish` chỉ lùi lại bằng pha nào chạy lâu nhất, không phải cộng dồn. Đo thực
 tế trên một lượt bình thường: 5.2s cho cả 4 lần gọi.
 
-RAG (terminology, data_training, chọn bảng) **không gọi LLM** — chỉ gọi embedding model.
+RAG (terminology, data_training, chọn bảng) **không gọi LLM** — chỉ gọi embedding model. Mặc định chỉ còn bước chọn bảng/datasource gọi embedding; terminology và data_training chỉ embed câu hỏi khi bật `EMBEDDING_ENABLED` (§11).
 
 Ở chế độ chỉ đo (`LLM_ROUTE_SHADOW`, §5.1) thì cổng chỉ **cộng thêm** chứ chưa tiết kiệm gì: mọi lượt
 vẫn đi pha SQL. Đó là cái giá phải trả để mua số đo, và là lý do chế độ này chỉ nên chạy đủ lâu để
@@ -651,7 +651,7 @@ cột gì.
 Hệ quả đã biết và chấp nhận: lượt đính kèm trôi khỏi cửa sổ thì mô hình mất tài liệu. Đổi lại, tài
 liệu không chiếm chỗ vĩnh viễn trong mọi prompt về sau.
 
-**Ba trần ký tự khác nhau, đừng gộp** ([config.py:358](../common/core/config.py#L358)) —
+**Ba trần ký tự khác nhau, đừng gộp** ([config.py:381](../common/core/config.py#L381)) —
 và chú ý cột cuối, chỉ trần đầu tiên tính theo từng file:
 
 | Trần | Mặc định | Chặn cái gì | Phạm vi |
@@ -766,11 +766,16 @@ kết quả. `ILIKE` bắt được từ khóa chính xác mà embedding hay b�
 Suy ra: mở rộng RAG cho bảng dữ liệu thì phải đổi hẳn cách lưu, không copy được code từ
 `terminology`.
 
+**Model embedding của hai cụm khác nhau.** Bảng / datasource embed bằng model Gateway cấp theo
+từng datasource. Thuật ngữ / ví dụ SQL luôn dùng model chung `EMBEDDING_API_*`, vì vector của chúng
+nằm chung một không gian cho mọi datasource. Phần vector của thuật ngữ / ví dụ SQL chỉ chạy khi bật
+`EMBEDDING_ENABLED` (mặc định tắt); tắt thì chỉ còn nhánh `ILIKE`.
+
 ### Tham số
 
 | Biến | Mặc định | Tác dụng |
 |---|---|---|
-| `EMBEDDING_ENABLED` | `True` | Tắt toàn bộ embedding |
+| `EMBEDDING_ENABLED` | `False` | Chỉ bật/tắt tra thuật ngữ và ví dụ SQL bằng vector (model chung `EMBEDDING_API_*`, không theo datasource); tắt thì còn khớp `ILIKE`. Fork mặc định tắt vì H04 không dùng; không ảnh hưởng embedding bảng/datasource. Xem OPERATIONS.md §2.6 |
 | `TABLE_EMBEDDING_ENABLED` / `TABLE_EMBEDDING_COUNT` | `True` / `10` | Top-K bảng đưa vào M-Schema |
 | `DS_EMBEDDING_COUNT` | `10` | Top-K datasource khi LLM tự chọn |
 | `EMBEDDING_DEFAULT_SIMILARITY` | `0.4` | Ngưỡng cosine chung; override riêng bằng `EMBEDDING_TERMINOLOGY_SIMILARITY` / `EMBEDDING_DATA_TRAINING_SIMILARITY` |

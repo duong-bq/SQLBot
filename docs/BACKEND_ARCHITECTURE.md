@@ -94,7 +94,8 @@ một route trả **JSON thô** thì cách duy nhất là khai path pattern củ
 
 1. `run_migrations()` — **alembic upgrade head tự động**. Không có bước migrate thủ công nào.
 2. `init_sqlbot_cache()`, `init_dynamic_cors(app)`
-3. Lấp embedding còn thiếu cho terminology / data_training / bảng+datasource. Bọc trong
+3. Lấp embedding còn thiếu cho terminology / data_training (chỉ khi bật `EMBEDDING_ENABLED`, mặc
+   định tắt) và bảng+datasource (theo `TABLE_EMBEDDING_ENABLED`). Bọc trong
    `SingleWorkerGuard.once` để nhiều worker uvicorn không cùng chạy.
 4. `start_datasource_background_tasks()` — bật vòng gửi callback và vòng quét phục hồi của luồng nạp
    Excel (§5). **Cố ý không** bọc `SingleWorkerGuard`: hai vòng này giành việc bằng
@@ -277,7 +278,8 @@ do `check_name` thủng với `oid` rỗng, thêm index là migration hỏng gi�
 ### Cụm RAG
 
 `terminology` và `data_training`, mỗi bảng có cột `embedding` kiểu vector của pgvector, truy vấn
-bằng toán tử `<=>`.
+bằng toán tử `<=>`. Vector của hai bảng này dùng model embedding chung trong env, không theo datasource,
+và chỉ được tính/tra khi bật `EMBEDDING_ENABLED` (mặc định tắt; H04 không dùng).
 
 ### Cụm AI Sync Hook — [ai_sync_model.py](../apps/hooks/models/ai_sync_model.py)
 
