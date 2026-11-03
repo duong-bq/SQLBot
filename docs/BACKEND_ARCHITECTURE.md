@@ -146,7 +146,7 @@ sinh khi merge nhánh), `072_add_chat_external_id.py`.
 | Sửa kiểm tra an toàn SQL | [llm.py:114](../apps/chat/task/llm.py#L114) (whitelist bảng) + [db.py:1080](../apps/db/db.py#L1080) (`check_sql_read`) |
 | Sửa quyền dữ liệu theo user (bảng / cột / hàng) | [apps/chat/permission/sw_permission.py](../apps/chat/permission/sw_permission.py) — suy diễn quyền và viết lại SQL; hai điểm cưỡng chế nằm ở `choose_table_schema` và ngay trước `execute_sql` trong `llm.py`. **Rồi cập nhật `TEXT2SQL_PIPELINE.md` §13** |
 | Thêm một loại database | [db/constant.py](../apps/db/constant.py) enum `DB` + [db.py](../apps/db/db.py) + một file `templates/sql_examples/*.yaml` |
-| Sửa endpoint hỏi đáp | [chat.py:485](../apps/chat/api/chat.py#L485) |
+| Sửa endpoint hỏi đáp | [chat.py:628](../apps/chat/api/chat.py#L628) |
 | Sửa xử lý file `.docx` đính kèm | `apps/chat/utils/attachment.py` (tải + trích + render khối prompt) + `apps/chat/curd/attachment.py` (lưu/đọc bảng) — **rồi cập nhật `API_SPEC.md` §6.10** |
 | Sửa quản trị datasource | [apps/datasource/api/datasource.py](../apps/datasource/api/datasource.py) |
 | Thêm/bỏ tham số phụ hợp lệ của một loại DB | [apps/db/extra_params.py](../apps/db/extra_params.py) — sửa `Spec` tương ứng. **Rồi cập nhật `DATASOURCE_API_SPEC.md` §3.1.1** và restart backend ([OPERATIONS.md §7.13](OPERATIONS.md)) |
@@ -205,7 +205,7 @@ từ web (Postgres cho phép nhiều NULL trong ràng buộc UNIQUE).
 
 Việc quy đổi `external_id` → id nội bộ nằm ở `resolve_chat_id`
 ([curd/chat.py:946](../apps/chat/curd/chat.py#L946)), gọi qua dependency
-`resolve_chat_for_question` ([chat.py:441](../apps/chat/api/chat.py#L441)). **Phải là
+`resolve_chat_for_question` ([chat.py:445](../apps/chat/api/chat.py#L445)). **Phải là
 dependency**, không được gọi trong thân route, vì `require_permissions` cần thấy id nội bộ.
 
 ### Cụm datasource — [datasource.py](../apps/datasource/models/datasource.py)

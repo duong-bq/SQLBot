@@ -36,7 +36,7 @@ Hệ quả cụ thể: `ChatFinishStep` đã bị **đánh số lại** để ch
 - Đối tác tích hợp: HĐND TP Hà Nội. Họ gọi API, không dùng web UI.
 - `finish_step` mặc định của `POST /chat/question` là `GENERATE_CHART`, do `GENERATE_CHART_ENABLED`
   quyết định (mặc định bật) qua `default_finish_step`
-  ([chat.py:466](../apps/chat/api/chat.py#L466)); nhánh MCP truyền `QUERY_DATA`
+  ([chat.py:525](../apps/chat/api/chat.py#L525)); nhánh MCP truyền `QUERY_DATA`
   ([mcp.py:258](../apps/mcp/mcp.py#L258)).
 - Số lần gọi LLM cho một lượt hỏi bình thường: **4** (sinh SQL + answer + chart + gợi ý câu hỏi
   tiếp theo; ba lần sau chạy song song). Tắt chart còn 3, tắt cả gợi ý

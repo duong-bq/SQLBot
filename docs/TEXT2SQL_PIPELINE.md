@@ -83,7 +83,7 @@ không thêm lời gọi LLM, không thêm event SSE, không thêm bản ghi `ch
 
 **Nhánh chart mặc định CÓ chạy.** `POST /chat/question` lấy điểm dừng từ `GENERATE_CHART_ENABLED`
 (mặc định `True` → `GENERATE_CHART`), qua hàm `default_finish_step`
-([chat.py:466](../apps/chat/api/chat.py#L466)). Đặt biến đó về `False` thì luồng dừng ở ô
+([chat.py:525](../apps/chat/api/chat.py#L525)). Đặt biến đó về `False` thì luồng dừng ở ô
 `W`. Nhánh MCP không đi qua đây, nó tự truyền `QUERY_DATA`.
 
 Hai chỗ chart **không** chạy bất kể cấu hình: lượt hạ cấp (không có dữ liệu thì biểu đồ vô nghĩa),
@@ -103,10 +103,10 @@ dòng quyền nào đi qua chúng như không có gì xảy ra — xem §13.
 
 | Bước | Vị trí | Việc |
 |---|---|---|
-| Route | [chat.py:485](../apps/chat/api/chat.py#L485) | `POST /chat/question` |
-| Giải nghĩa chat | [chat.py:441](../apps/chat/api/chat.py#L441) `resolve_chat_for_question` | Chuyển `chat_id` (int nội bộ **hoặc** `external_id` dạng UUID) thành id nội bộ. **Bắt buộc là FastAPI dependency**, không được gọi trong thân hàm, vì `require_permissions` cần thấy id nội bộ đã giải nghĩa |
-| Điều phối | [chat.py:577](../apps/chat/api/chat.py#L577) `question_answer_inner` | Tách quick-command (`/regenerate`, `/analysis`, `/predict`) khỏi câu hỏi thường |
-| Dựng stream | [chat.py:774](../apps/chat/api/chat.py#L774) `stream_sql` | Tạo `LLMService`, trả `StreamingResponse`. Docstring ở đây giải thích từng tham số, kể cả "núm vặn" `finish_step` |
+| Route | [chat.py:628](../apps/chat/api/chat.py#L628) | `POST /chat/question` |
+| Giải nghĩa chat | [chat.py:445](../apps/chat/api/chat.py#L445) `resolve_chat_for_question` | Chuyển `chat_id` (int nội bộ **hoặc** `external_id` dạng UUID) thành id nội bộ. **Bắt buộc là FastAPI dependency**, không được gọi trong thân hàm, vì `require_permissions` cần thấy id nội bộ đã giải nghĩa |
+| Điều phối | [chat.py:747](../apps/chat/api/chat.py#L747) `question_answer_inner` | Tách quick-command (`/regenerate`, `/analysis`, `/predict`) khỏi câu hỏi thường |
+| Dựng stream | [chat.py:965](../apps/chat/api/chat.py#L965) `stream_sql` | Tạo `LLMService`, trả `StreamingResponse`. Docstring ở đây giải thích từng tham số, kể cả "núm vặn" `finish_step` |
 | Chạy pipeline | [llm.py:2255](../apps/chat/task/llm.py#L2255) `run_task` | Toàn bộ pipeline, dạng generator yield từng dòng SSE |
 
 `run_task` chạy trong thread riêng (`run_task_async`, [llm.py:1907](../apps/chat/task/llm.py#L1907)),
@@ -133,7 +133,7 @@ không chờ chart xong.
 
 | Ai gọi | Giá trị | Vì sao |
 |---|---|---|
-| `POST /chat/question` (web + đối tác) | `GENERATE_CHART` khi `GENERATE_CHART_ENABLED=True` (mặc định), ngược lại `GENERATE_ANSWER` — `default_finish_step` ([chat.py:466](../apps/chat/api/chat.py#L466)) | Client cần câu trả lời chữ; biểu đồ là phần thêm, bật/tắt được mà không sửa code |
+| `POST /chat/question` (web + đối tác) | `GENERATE_CHART` khi `GENERATE_CHART_ENABLED=True` (mặc định), ngược lại `GENERATE_ANSWER` — `default_finish_step` ([chat.py:525](../apps/chat/api/chat.py#L525)) | Client cần câu trả lời chữ; biểu đồ là phần thêm, bật/tắt được mà không sửa code |
 | MCP | `QUERY_DATA` ([mcp.py:258](../apps/mcp/mcp.py#L258)) | MCP tự trả markdown/JSON tổng hợp, không tiêu thụ answer |
 | `POST /chat/ask` (JSON đồng bộ) | `QUERY_DATA`, kèm hai cờ `include_answer` / `include_chart` trên `ChatQuestion` | `finish_step` không diễn đạt được "chart mà không answer" (chart xếp sau answer) nên hai cờ quyết định pha nào chạy thêm, xem bên dưới |
 
