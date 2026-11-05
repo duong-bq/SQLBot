@@ -314,9 +314,11 @@ class Settings(BaseSettings):
     # Danh sách host được phép tải về, ngăn cách bằng dấu phẩy, có thể kèm cổng. RỖNG LÀ CẤM TẤT
     # CẢ: đây là lớp chống SSRF — server tự đi gọi một URL do client đưa, từ bên trong mạng nội bộ
     # — nên nó phải hỏng theo hướng đóng. Mặc định mở là lớp bảo vệ coi như không tồn tại.
+    # Trên H04 đọc `MINIO_PUBLIC_DOMAIN`, cùng tên và cùng giá trị với Gateway (MinIO của Software).
     FILE_DOWNLOAD_ALLOWED_HOSTS: str = Field(
         default='',
-        validation_alias=AliasChoices('FILE_DOWNLOAD_ALLOWED_HOSTS',
+        validation_alias=AliasChoices('MINIO_PUBLIC_DOMAIN',
+                                      'FILE_DOWNLOAD_ALLOWED_HOSTS',
                                       'EXCEL_DOWNLOAD_ALLOWED_HOSTS'))
     FILE_DOWNLOAD_CONNECT_TIMEOUT: int = Field(
         default=5,
