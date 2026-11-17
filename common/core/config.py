@@ -245,6 +245,37 @@ class Settings(BaseSettings):
     # hơn không tốt hơn mà chỉ tốn token.
     CHAT_INLINE_RECOMMEND_HISTORY: int = 20
 
+    # --- Khám phá (explore) và kiểm chứng (verify) trong pha SQL ---
+    # Plan: docs/superpowers/plans/2026-11-16-explore-verify-sql.md. Hai cờ riêng, mặc định bật.
+    # Tắt thì pha SQL chạy như cũ, chỉ khác whitelist AST lấy theo toàn bộ bảng được phép thay vì
+    # riêng các bảng có trong prompt. Trợ lý ngoài có datasource động luôn tắt, bất kể cờ.
+    #
+    # Explore: một lần gọi LLM trước bước sinh SQL, cho model xin xem thêm bảng ngoài prompt và chạy
+    # truy vấn dò (probe) để biết cách tổ chức dữ liệu, cách viết giá trị.
+    LLM_SQL_EXPLORE_ENABLED: bool = True
+    # Verify: mọi SQL chạy thành công đều qua một lần gọi LLM kiểm nghĩa trước pha answer/chart.
+    # Verify trả `revise` thì sinh lại SQL; hết vòng sửa thì kết quả lần chạy cuối vẫn đi tiếp.
+    LLM_SQL_VERIFY_ENABLED: bool = True
+    # Số vòng verify trả `revise` được phép sinh lại SQL. Độc lập với LLM_SQL_MAX_RETRY (lỗi kỹ
+    # thuật). Mỗi vòng tốn thêm một lần sinh SQL, một lần chạy SQL và một lần verify.
+    LLM_SQL_VERIFY_MAX_REVISE: int = 1
+    # Số probe tối đa mỗi lần explore hoặc verify xin chạy; phần thừa bị bỏ. Probe chạy song song
+    # trên CSDL nguồn nên đây là trần tải, không phải trần chất lượng.
+    LLM_SQL_PROBE_MAX: int = 5
+    # Số dòng tối đa một probe trả về, ép bằng LIMIT trên AST chứ không tin prompt.
+    LLM_SQL_PROBE_MAX_ROWS: int = 20
+    # Số dòng đầu của kết quả SQL đưa nguyên văn vào prompt verify. Phần còn lại verify nhìn qua hồ
+    # sơ cột do code tính trên toàn bộ kết quả.
+    LLM_SQL_VERIFY_SAMPLE_ROWS: int = 20
+
+    # --- Thinking theo bước (reasoning_effort) ---
+    # Mọi lời gọi LLM đều gửi `reasoning_effort`, theo quy ước chung của platform: "none" để tắt,
+    # "low"/"medium"/"high" để bật. LiteLLM tự dịch cho từng nhà cung cấp. Bước mặc định (chọn
+    # datasource, explore, sinh SQL lần đầu, answer, chart, gợi ý, cổng định tuyến) dùng mức đầu;
+    # verify và sinh lại SQL sau `revise` dùng mức sau. Mức cụ thể chốt sau khi đo.
+    LLM_REASONING_EFFORT_DEFAULT: str = 'none'
+    LLM_REASONING_EFFORT_VERIFY: str = 'low'
+
     PG_POOL_SIZE: int = 20
     PG_MAX_OVERFLOW: int = 30
     PG_POOL_RECYCLE: int = 3600
@@ -419,6 +450,8 @@ class Settings(BaseSettings):
                      'GENERATE_CHART_ENABLED',
                      'CHAT_INLINE_RECOMMEND_ENABLED',
                      'EXCEL_DOWNLOAD_PROBE_ENABLED',
+                     'LLM_SQL_EXPLORE_ENABLED',
+                     'LLM_SQL_VERIFY_ENABLED',
                      mode='before')
     @classmethod
     def lowercase_bool(cls, v: Any) -> Any:

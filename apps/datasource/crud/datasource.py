@@ -1324,8 +1324,9 @@ def get_table_m_schema(session: SessionDep, current_user: CurrentUser, ds: CoreD
                        column_filter: dict[str, set] = None) -> tuple[Optional[MSchema], list]:
     """Dựng M-Schema dạng cấu trúc và danh sách tên bảng từ `core_table`/`core_field`.
 
-    Danh sách bảng trả về chính là whitelist mà tầng kiểm tra AST dùng để chặn SQL — nên thu hẹp
-    `table_list` ở đây là thu hẹp đồng thời cả prompt lẫn tầng cưỡng chế. So khớp tên bảng EXACT
+    Danh sách bảng trả về là các bảng in vào prompt. Whitelist của tầng kiểm tra AST là
+    `MSchema.permitted_table_names` (bảng in vào prompt cộng `catalog`), nên thu hẹp `table_list`
+    ở đây là thu hẹp đồng thời cả prompt lẫn tầng cưỡng chế. So khớp tên bảng EXACT
     phân biệt hoa-thường (catalog Postgres bảo toàn hoa-thường của identifier có nháy kép).
 
     `column_filter` (bảng → tập tên cột được phép, từ quyền SW): bảng có mặt trong dict thì chỉ
@@ -1399,7 +1400,11 @@ def get_table_m_schema(session: SessionDep, current_user: CurrentUser, ds: CoreD
         lost_tables, foreign_keys = _resolve_relations(relations, all_tables, [s.get('id') for s in tables])
         m_tables += [replace(s.get('m_table'), pulled=True) for s in lost_tables]
 
-    m_schema = MSchema(db_name=db_name, tables=tuple(m_tables), foreign_keys=tuple(foreign_keys))
+    # Bảng được phép mà không vào prompt thành catalog cho bước explore; whitelist AST lấy cả hai.
+    printed = {t.name for t in m_tables}
+    catalog = tuple(t.get('m_table') for t in all_tables if t.get('table_name') not in printed)
+    m_schema = MSchema(db_name=db_name, tables=tuple(m_tables), foreign_keys=tuple(foreign_keys),
+                       catalog=catalog)
     return m_schema, m_schema.table_names
 
 

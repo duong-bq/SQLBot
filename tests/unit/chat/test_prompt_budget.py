@@ -30,6 +30,7 @@ from apps.chat.task.llm import LLMService
 from apps.chat.task.prompt_budget import (
     SchemaPrompt,
     SchemaReductionExhausted,
+    drop_catalog,
     drop_pulled_comments,
     drop_pulled_tables,
     drop_sample_data,
@@ -178,8 +179,17 @@ class TestCacNac:
     def test_next_reduction_nhay_qua_nac_khong_tac_dung(self):
         no_pulled = SchemaPrompt(MSchema('x', (ORDERS,)), '')
         index, name, reduced = next_reduction(no_pulled, 0)
-        assert (index, name) == (4, 'drop_selected_comments')
+        assert (index, name) == (5, 'drop_selected_comments')
         assert next_reduction(reduced, index) is None
+
+    def test_bo_catalog_la_nac_dau_va_chi_bot_catalog(self):
+        with_catalog = SchemaPrompt(MSchema('x', (ORDERS,), catalog=(ITEMS,)), 'mau')
+        index, name, reduced = next_reduction(with_catalog, 0)
+        assert (index, name) == (1, 'drop_catalog')
+        assert reduced.m_schema.catalog == ()
+        assert reduced.m_schema.tables == (ORDERS,)
+        assert reduced.sample_data == 'mau'
+        assert drop_catalog(SchemaPrompt(MSchema('x', (ORDERS,)))) is None
 
 
 class TestPhanLoaiLoi:

@@ -55,6 +55,10 @@ class OperationEnum(Enum):
     GENERATE_PICTURE = '13'
     ANSWER = '14'
     ROUTE_QUESTION = '15'
+    # Bước explore và verify của pha SQL, cùng mỗi lần chạy probe của hai bước đó.
+    EXPLORE_SQL = '16'
+    VERIFY_SQL = '17'
+    EXECUTE_PROBE = '18'
 
 
 class ChatFinishStep(Enum):
@@ -302,6 +306,9 @@ class AiModelQuestion(BaseModel):
     # từ cùng một hàm: hai nhánh dùng hai template với bộ rule khác nhau, dùng chung một field thì
     # sửa rule bên này sẽ vỡ bên kia mà không có gì báo.
     answer_history: str = ""
+    # Khối cảnh báo cho pha answer khi verify hết vòng sửa mà vẫn chưa chấp nhận kết quả; rỗng
+    # trong mọi trường hợp khác. Đã bọc sẵn thẻ — xem build_answer_prompts.
+    verify_note: str = ""
     lang: str = "简体中文"
     filter: str = []
     sub_query: Optional[list[dict]] = None
@@ -437,6 +444,18 @@ class AiModelQuestion(BaseModel):
         """
         return get_sql_template()['retry_hint'].format(reason=reason)
 
+    def sql_revise_question(self, issues: str, probe_results: str):
+        """Dựng user prompt sinh lại SQL khi verify trả `revise`.
+
+        Đi cùng đường với `sql_retry_question` (nối sau câu trả lời cũ trong cùng lượt), chỉ khác
+        lời dẫn: SQL lần trước chạy được, cái sai là ở nghĩa, kèm bằng chứng từ probe của verify.
+        """
+        return get_sql_template()['revise_hint'].format(issues=issues, probe_results=probe_results)
+
+    def sql_exploration_info(self, exploration: str):
+        """Dựng message đưa khối `<exploration>` vào hội thoại SQL của lượt này."""
+        return get_sql_template()['exploration_info'].format(exploration=exploration)
+
     def chart_sys_question(self):
         templates: dict[str, str] = {
             'system': get_chart_template()['system'].format(lang=self.lang, sqlbot_name=self.sqlbot_name),
@@ -483,6 +502,7 @@ class AiModelQuestion(BaseModel):
         return get_answer_template()['user'].format(history=self.answer_history,
                                                     question=self.question_for_prompt(),
                                                     sql=self.sql,
+                                                    verify_note=self.verify_note,
                                                     fields=self.fields, data=self.data,
                                                     data_scope=self.data_scope)
 

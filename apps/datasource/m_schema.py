@@ -73,11 +73,16 @@ class MSchema:
     """Toàn bộ M-Schema của một lượt hỏi.
 
     Thứ tự ``tables`` là thứ tự in: bảng embedding chọn trước, bảng kéo theo quan hệ sau.
+
+    ``catalog`` là các bảng được phép (đã qua lọc ``checked``, quyền SW, lọc cột) nhưng không có
+    trong ``tables``. ``render()`` không in chúng; bước explore dùng tên và chú thích để model biết
+    còn bảng nào xin xem được, và dùng chính các bảng này để nạp schema khi model xin.
     """
 
     db_name: Any
     tables: tuple[MSchemaTable, ...] = ()
     foreign_keys: tuple[MSchemaForeignKey, ...] = ()
+    catalog: tuple[MSchemaTable, ...] = ()
 
     def render(self) -> str:
         """Render thành chuỗi đặt vào ``<m-schema>`` của prompt."""
@@ -92,3 +97,15 @@ class MSchema:
     def table_names(self) -> list[str]:
         """Tên các bảng theo thứ tự in."""
         return [t.name for t in self.tables]
+
+    @property
+    def permitted_table_names(self) -> list[str]:
+        """Tên mọi bảng được phép: bảng in trong prompt rồi tới bảng trong catalog."""
+        return self.table_names + [t.name for t in self.catalog]
+
+    def render_catalog(self) -> str:
+        """Render catalog thành mỗi bảng một dòng ``ten_bang`` hoặc ``ten_bang: chu thich``."""
+        return ''.join(
+            f"{t.name}: {t.comment}\n" if t.comment else f"{t.name}\n"
+            for t in self.catalog
+        )

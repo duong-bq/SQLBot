@@ -383,6 +383,96 @@ template:
       ## Nếu lần trước bạn trả về success=false vì câu hỏi mơ hồ, hãy chọn cách hiểu hợp lý nhất dựa trên schema và lịch sử hội thoại rồi sinh SQL, thay vì từ chối lần nữa
       ## Giữ nguyên định dạng: vài dòng suy luận văn xuôi ở đầu, không bọc trong thẻ nào, nói rõ lần trước hỏng ở đâu và lần này sửa thế nào, rồi kết thúc bằng đúng một khối JSON theo định dạng đã quy định
 
+    revise_hint: |
+      Câu SQL vừa rồi của bạn chạy được, nhưng bước kiểm chứng thấy kết quả chưa trả lời đúng câu hỏi:
+      <verify-issues>
+      {issues}
+      </verify-issues>
+      {probe_results}
+
+      Hãy sinh lại SQL cho cùng câu hỏi ở trên, lần này bắt buộc:
+      ## Khắc phục từng vấn đề trong <verify-issues>; dùng kết quả các truy vấn dò (nếu có) làm căn cứ
+      ## Nếu bạn cho rằng một vấn đề không đúng, hãy nói rõ lý do trong phần suy luận rồi giữ phần SQL tương ứng
+      ## Chỉ dùng đúng tên bảng, tên trường có trong <m-schema> hoặc <exploration>, khớp từng ký tự
+      ## Giữ nguyên định dạng: vài dòng suy luận văn xuôi ở đầu, không bọc trong thẻ nào, rồi kết thúc bằng đúng một khối JSON theo định dạng đã quy định
+
+    exploration_info: |
+      ## Sau đây là kết quả khám phá dữ liệu cho câu hỏi tiếp theo: cấu trúc các bảng bổ sung đã xin xem (<extra-schema>), dữ liệu mẫu của chúng và kết quả các truy vấn dò (<probe>). Bảng trong <extra-schema> được dùng trong SQL như bảng trong <m-schema>. Kết quả dò cho biết dữ liệu thật được tổ chức và viết như thế nào, hãy dựa vào đó khi chọn bảng, cột và giá trị lọc.
+      {exploration}
+
+  sql_review:
+    explore: |
+      ## Bước này CHƯA sinh SQL trả lời câu hỏi. Trước khi viết SQL, bạn được tìm hiểu thêm về dữ liệu bằng hai cách:
+      ## 1. Xin xem đầy đủ cấu trúc của bảng trong <table-catalog>: đó là các bảng được phép truy vấn nhưng chưa có trong <m-schema>. Chỉ xin bảng có khả năng cần cho câu hỏi.
+      ## 2. Chạy truy vấn dò (probe) để biết điều mà <m-schema> và dữ liệu mẫu chưa cho thấy: giá trị thật của một cột (cách viết, viết hoa, mã hay tên), một thực thể có bao nhiêu dòng trong một bảng, khoảng thời gian có dữ liệu.
+      ## Quy tắc cho probe:
+      ## - Mỗi probe là đúng một câu SELECT chỉ đọc, viết đúng cú pháp của <db-engine>, chỉ dùng bảng và cột có trong <m-schema>; không dùng SELECT *.
+      ## - Hệ thống tự giới hạn số dòng trả về của probe; ưu tiên truy vấn gom nhóm như SELECT DISTINCT hoặc GROUP BY kèm COUNT.
+      ## - Tối đa {max_probes} probe, mỗi probe có mục đích rõ ràng gắn với câu hỏi.
+      ## Câu hỏi đã đủ rõ với <m-schema> và dữ liệu mẫu hiện có thì trả về hai danh sách rỗng.
+      ## Chỉ trả về đúng một khối JSON, không giải thích thêm, không bọc trong khối mã:
+      {{"tables": ["<tên bảng trong table-catalog>"], "probes": [{{"id": "p1", "purpose": "<muốn biết điều gì>", "sql": "SELECT ..."}}]}}
+      <table-catalog>
+      {catalog}
+      </table-catalog>
+      <user-question>
+      {question}
+      </user-question>
+    verify_system: |
+      <Instruction>
+        Bạn là bước kiểm chứng của một trợ lý hỏi dữ liệu. Một câu SQL vừa chạy thành công trên cơ sở dữ liệu. Nhiệm vụ của bạn là đánh giá kết quả đó có trả lời ĐÚNG câu hỏi của người dùng hay không, trước khi nó được đưa cho người dùng.
+        Bạn KHÔNG trả lời câu hỏi và KHÔNG viết lại SQL. Bạn chỉ chấp nhận kết quả hoặc chỉ ra vấn đề.
+        Người dùng sẽ cung cấp: câu hỏi (<user-question>), loại CSDL (<db-engine>), cấu trúc các bảng SQL dùng (<m-schema>), thuật ngữ nghiệp vụ (<terminologies>, nếu có), kết quả khám phá dữ liệu trước đó (<exploration>, nếu có), câu SQL (<sql>), và kết quả (<result>) gồm tổng số dòng, danh sách cột, các dòng đầu và hồ sơ từng cột tính trên toàn bộ kết quả (số NULL, số giá trị khác nhau, min, max). <hints> là các dấu hiệu do hệ thống tự phát hiện.
+      </Instruction>
+
+      <Checklist>
+        <item>SQL có trả lời đúng điều được hỏi không: đúng mức tổng hợp (đếm gì, cộng gì, theo đơn vị nào), đúng khoảng thời gian, đúng đối tượng.</item>
+        <item>Giá trị dùng để lọc có khớp với cách dữ liệu thật sự được viết không (đối chiếu dữ liệu mẫu, hồ sơ cột và kết quả dò).</item>
+        <item>JOIN có làm nhân bản dòng, khiến phép đếm hoặc phép cộng bị thổi phồng không.</item>
+        <item>Đơn vị tính và cách làm tròn có đúng không.</item>
+        <item>Kết quả có hợp lý so với câu hỏi không.</item>
+      </Checklist>
+
+      <Rules>
+        <rule>Chỉ trả "revise" khi bạn chỉ ra được một vấn đề cụ thể, có căn cứ trong dữ liệu được cung cấp, và sửa SQL sẽ cho kết quả khác. Nghi ngờ chung chung thì trả "accept".</rule>
+        <rule>Các dấu hiệu trong <hints> chỉ là gợi ý. 0 dòng hoặc giá trị 0 có thể là câu trả lời đúng.</rule>
+        <rule>Cần thêm bằng chứng để bước sinh lại SQL sửa đúng thì thêm probe: đúng một câu SELECT chỉ đọc, đúng cú pháp của <db-engine>, chỉ dùng bảng và cột có trong <m-schema> hoặc <exploration>, không dùng SELECT *. Tối đa {max_probes} probe. Trả "accept" thì để danh sách probe rỗng.</rule>
+        <rule>Mỗi phần tử của issues là một câu ngắn, cụ thể, nói cái gì sai và nên sửa thế nào, viết bằng ngôn ngữ của câu hỏi.</rule>
+      </Rules>
+
+      <Output>
+        Chỉ trả về ĐÚNG MỘT khối JSON, không giải thích thêm, không bọc trong khối mã:
+        {{"verdict": "accept hoặc revise", "issues": ["<vấn đề>"], "probes": [{{"id": "v1", "purpose": "<muốn biết điều gì>", "sql": "SELECT ..."}}]}}
+      </Output>
+    verify_user: |
+      <user-question>
+      {question}
+      </user-question>
+      <db-engine> {engine} </db-engine>
+      <m-schema>
+      {schema}
+      </m-schema>
+      <terminologies>
+      {terminologies}
+      </terminologies>
+      {exploration}
+      <sql>
+      {sql}
+      </sql>
+      <result>
+      <row-count>{row_count}</row-count>
+      <columns>{columns}</columns>
+      <first-rows>
+      {rows}
+      </first-rows>
+      <column-profile>
+      {profile}
+      </column-profile>
+      </result>
+      <hints>
+      {hints}
+      </hints>
+
   chart:
     system: |
       <Instruction>
@@ -694,7 +784,7 @@ template:
       <sql>
       {sql}
       </sql>
-
+      {verify_note}
       <fields>
       {fields}
       </fields>

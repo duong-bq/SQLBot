@@ -6,7 +6,7 @@ import traceback
 import urllib.parse
 import warnings
 from concurrent.futures import ThreadPoolExecutor, Future
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime
 from typing import Any, Generator, List, Optional, Union, Dict, Iterator
 
@@ -28,6 +28,7 @@ from sqlglot import exp
 from sqlmodel import Session
 
 from apps.ai_model.model_factory import LLMConfig, LLMFactory, get_default_config
+from apps.ai_model.model_factory import bind_reasoning_effort
 from apps.ai_model_config.errors import attach_model_error_code, sanitize_secret
 from apps.ai_model_config.resolver import resolve_llm_config
 from apps.chat.curd.chat import save_question, save_sql_answer, save_sql, \
@@ -47,6 +48,7 @@ from apps.chat.task.prompt_budget import SchemaPrompt
 from apps.chat.task.prompt_budget import SchemaReductionExhausted
 from apps.chat.task.prompt_budget import is_prompt_rejection
 from apps.chat.task.prompt_budget import next_reduction
+from apps.chat.task import sql_review
 from apps.chat.task.question_gate import decide_route, fail_open
 from apps.data_training.curd.data_training import get_training_template
 from apps.datasource.crud.datasource import get_table_schema, get_tables_sample_data, usable_ds_condition
@@ -72,6 +74,10 @@ from common.utils.utils import SQLBotLogUtil, extract_nested_json, extract_json_
 warnings.filterwarnings("ignore")
 
 executor = ThreadPoolExecutor(max_workers=200)
+# Pool riêng cho probe: lượt hỏi đang chạy trong `executor` chờ probe xong, dùng chung pool thì
+# lúc tải cao các lượt hỏi chiếm hết worker và chờ lẫn nhau. Mỗi lượt có tối đa LLM_SQL_PROBE_MAX
+# probe cùng lúc; đây chỉ là trần tải chung lên các CSDL nguồn.
+probe_executor = ThreadPoolExecutor(max_workers=20, thread_name_prefix='sql-probe')
 
 dynamic_ds_types = [1, 3]
 dynamic_subsql_prefix = 'select * from sqlbot_dynamic_temp_table_'
@@ -239,6 +245,24 @@ class SqlPhaseResult:
     data: Any = None
     degraded_reason: Optional[str] = None
     stopped: bool = False
+    # Vấn đề của lần verify cuối khi hết vòng sửa mà verify vẫn `revise`; rỗng khi verify chấp
+    # nhận hoặc không chạy. Chỉ đi vào prompt answer, không ra API.
+    verify_issues: tuple[str, ...] = ()
+
+
+@dataclass
+class _VerifiedRun:
+    """Một lần chạy SQL thành công mà verify vừa bác, giữ lại để dùng nếu lần sửa hỏng hẳn.
+
+    ``answer`` là câu trả lời của model ở bước sinh SQL đó, để khôi phục lịch sử hội thoại SQL.
+    """
+
+    sql: str
+    result: Dict[str, Any]
+    tables: Optional[List[str]]
+    chart_type: Optional[str]
+    issues: tuple[str, ...]
+    answer: Optional[BaseMessage]
 
 
 class LLMService:
@@ -251,6 +275,12 @@ class LLMService:
     # Model của cổng định tuyến. Trỏ về chính `config`/`llm` khi LLM_ROUTE_MODEL_ID = 0.
     route_config: LLMConfig
     route_llm: BaseChatModel
+    # Cùng model với `llm` nhưng bật thinking, cho verify và lần sinh lại SQL sau `revise`.
+    thinking_llm: Any
+    # Mọi bảng được phép của lượt (bảng trong prompt cộng catalog) và cột được phép của từng bảng.
+    # None khi chưa dựng schema hoặc datasource ngoài không có M-Schema dạng cấu trúc.
+    permitted_tables: Optional[List[str]] = None
+    permitted_columns: Optional[Dict[str, set]] = None
     sql_message: List[Union[BaseMessage, dict[str, Any]]]
     chart_message: List[Union[BaseMessage, dict[str, Any]]]
 
@@ -365,13 +395,20 @@ class LLMService:
 
         # Create LLM instance through factory
         llm_instance = LLMFactory.create_llm(self.config)
-        self.llm = llm_instance.llm
+        # Mọi bước gửi mức thinking mặc định; verify và lần sinh lại SQL sau `revise` dùng
+        # `thinking_llm`. Bind ở đây để không chỗ gọi nào phải nhớ tự gắn.
+        self.llm = bind_reasoning_effort(
+            llm_instance.llm, self.config, settings.LLM_REASONING_EFFORT_DEFAULT)
+        self.thinking_llm = bind_reasoning_effort(
+            llm_instance.llm, self.config, settings.LLM_REASONING_EFFORT_VERIFY)
 
         # Cổng định tuyến chỉ phân loại một câu hỏi ngắn nên chạy được trên model nhỏ. Không tách
         # thành LLMService riêng: cổng dùng chung câu hỏi, danh sách bảng và record của lượt này,
         # chỉ khác đúng cái model.
         self.route_config = route_config or self.config
-        self.route_llm = LLMFactory.create_llm(route_config).llm if route_config else self.llm
+        self.route_llm = bind_reasoning_effort(
+            LLMFactory.create_llm(route_config).llm, route_config,
+            settings.LLM_REASONING_EFFORT_DEFAULT) if route_config else self.llm
 
         # get last_execute_sql_error
         last_execute_sql_error = get_last_execute_sql_error(session, self.chat_question.chat_id)
@@ -644,7 +681,7 @@ class LLMService:
         """Dựng M-Schema + sample data cho prompt, đồng thời là chỗ ÁP quyền SW lên lượt hỏi.
 
         Thu hẹp danh sách bảng ngay tại đây là thu hẹp cả ba tầng cùng lúc: schema trong prompt,
-        whitelist AST (dùng chính danh sách trả về của hàm này), và sample data. Phễu bảng rỗng
+        whitelist AST (`permitted_tables`: bảng trong prompt cộng catalog), và sample data. Phễu bảng rỗng
         thì chặn sớm bằng SingleMessageError — trước mọi lời gọi LLM — kèm danh sách lĩnh vực
         user thực có để client sửa `domainCode`.
 
@@ -701,6 +738,17 @@ class LLMService:
                 ds=self.ds,
                 table_list=tables,
                 scope_queries=sw_permission.scope_queries if restricted else None)
+        # Whitelist AST lấy theo mọi bảng được phép chứ không riêng bảng trong prompt: model biết tên
+        # bảng ngoài prompt (qua explore hoặc lịch sử) thì vẫn dùng được, mà không nới quyền nào.
+        # Datasource ngoài không có catalog nên whitelist giữ nguyên là danh sách bảng của prompt.
+        self.permitted_tables = m_schema.permitted_table_names if m_schema else list(tables)
+        self.permitted_columns = {
+            t.name: {f.name for f in t.fields} for t in m_schema.tables + m_schema.catalog
+        } if m_schema else None
+        # Catalog chỉ đi vào prompt explore. Không có explore thì bỏ ngay, nếu không nấc rút gọn
+        # "bỏ catalog" sẽ tốn một lần gọi lại pha SQL mà prompt không đổi.
+        if m_schema and not self.explore_enabled():
+            m_schema = replace(m_schema, catalog=())
         self.schema_prompt = SchemaPrompt(m_schema, self.chat_question.sample_data) if m_schema else None
         self.schema_reduction_index = 0
         self.schema_reductions = ()
@@ -766,8 +814,12 @@ class LLMService:
                                            answer=orjson.dumps({'content': full_analysis_text}).decode())
 
     def build_answer_prompts(self, _session: Session, fields: Any,
-                             data: Optional[List[Dict[str, Any]]]) -> tuple[str, str]:
+                             data: Optional[List[Dict[str, Any]]],
+                             verify_issues: tuple[str, ...] = ()) -> tuple[str, str]:
         """Dựng sẵn cặp (system, user) prompt cho pha answer, chạy TRONG luồng chính.
+
+        `verify_issues` khác rỗng khi verify hết vòng sửa mà vẫn chưa chấp nhận kết quả: khi đó
+        prompt có thêm khối nêu các vấn đề để câu trả lời nói rõ phần chưa chắc chắn.
 
         Phải dựng trước khi spawn thread: pha answer chạy song song với pha sinh chart mà cả hai
         cùng đọc self.chat_question. Dựng trên một bản model_copy() rồi chỉ đưa hai chuỗi đã render
@@ -798,6 +850,14 @@ class LLMService:
         answer_question.fields = orjson.dumps(fields if fields else []).decode()
         answer_question.data = orjson.dumps(prepare_for_orjson(rows)).decode()
         answer_question.data_scope = build_data_scope_note(total_rows, len(rows))
+        answer_question.verify_note = ''
+        if verify_issues:
+            answer_question.verify_note = (
+                '<verification-issues>\n'
+                'Bước kiểm chứng tự động chưa chấp nhận kết quả truy vấn này. Khi trả lời, hãy nói '
+                'rõ cho người dùng những điểm chưa chắc chắn dưới đây:\n'
+                f'{sql_review.render_verify_issues(verify_issues)}\n'
+                '</verification-issues>\n')
         answer_question.answer_history = ''
         if settings.LLM_ANSWER_HISTORY_ENABLED:
             _history = get_recent_qa_history(
@@ -1357,8 +1417,12 @@ class LLMService:
         if _error:
             raise _error
 
-    def generate_sql(self, _session: Session, retry_reason: Optional[str] = None):
+    def generate_sql(self, _session: Session, retry_reason: Optional[str] = None,
+                     revise_prompt: Optional[str] = None):
         """Sinh SQL, yield từng chunk. `retry_reason` khác None nghĩa là đang sinh lại trong cùng lượt.
+
+        `revise_prompt` là lời dẫn sinh lại khi verify trả `revise`: đi đúng đường retry, chỉ khác
+        lời dẫn và dùng model bật thinking.
 
         Lần retry chỉ thêm một message ngắn nêu lý do hỏng chứ không dựng lại prompt đầy đủ: câu hỏi
         gốc vẫn nằm trong `self.sql_message`, nên model có đủ ngữ cảnh để tự sửa. Dựng lại từ đầu vừa
@@ -1377,7 +1441,7 @@ class LLMService:
         (xem `_pick_sql_answer`); `save_sql_answer` vẫn lưu nguyên content như model trả về.
         """
         # append current question
-        if retry_reason:
+        if retry_reason or revise_prompt:
             # Chỉ nhấc ra khi phần tử cuối đúng là câu trả lời của model: nếu lần trước chết giữa
             # stream thì cuối danh sách là câu hỏi, nhấc đi là mất luôn đề bài.
             failed_answer = self.sql_message.pop() if self.sql_message and isinstance(
@@ -1385,7 +1449,8 @@ class LLMService:
             messages = list(self.sql_message)
             if failed_answer is not None:
                 messages.append(failed_answer)
-            messages.append(HumanMessage(self.chat_question.sql_retry_question(retry_reason)))
+            messages.append(HumanMessage(
+                revise_prompt or self.chat_question.sql_retry_question(retry_reason)))
         else:
             self.sql_message.append(HumanMessage(
                 self.chat_question.sql_user_question(current_time=datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
@@ -1406,7 +1471,8 @@ class LLMService:
         full_thinking_text = ''
         full_sql_text = ''
         token_usage = {}
-        res = self._stream_sql_with_schema_reduction(messages, token_usage)
+        res = self._stream_sql_with_schema_reduction(
+            messages, token_usage, self.thinking_llm if revise_prompt else self.llm)
         for chunk in res:
             if chunk.get('content'):
                 full_sql_text += chunk.get('content')
@@ -1438,8 +1504,11 @@ class LLMService:
         self.record = save_sql_answer(session=_session, record_id=self.record.id,
                                       answer=orjson.dumps({'content': full_sql_text}).decode())
 
-    def _stream_sql_with_schema_reduction(self, messages: list, token_usage: Dict[str, Any]):
+    def _stream_sql_with_schema_reduction(self, messages: list, token_usage: Dict[str, Any],
+                                          llm: Any = None):
         """Stream câu trả lời sinh SQL; model từ chối prompt (400) thì rút gọn schema rồi gọi lại.
+
+        `llm` mặc định là `self.llm`; lần sinh lại sau `revise` truyền `thinking_llm`.
 
         Chỉ rút gọn khi chưa nhận được chunk nào: đã stream ra rồi thì lỗi không phải do độ dài
         prompt, và phần đã gửi đi không thu hồi được. `token_usage` chỉ phản ánh lần gọi cuối.
@@ -1447,7 +1516,7 @@ class LLMService:
         while True:
             started = False
             try:
-                for chunk in process_stream(self.llm.stream(messages), token_usage):
+                for chunk in process_stream((llm or self.llm).stream(messages), token_usage):
                     started = True
                     yield chunk
                 return
@@ -1932,6 +2001,198 @@ class LLMService:
         for chunk in self.run_task(in_chat, stream, finish_step, return_img):
             self.chunk_list.append(chunk)
 
+    def _uses_dynamic_ds(self) -> bool:
+        """Lượt chạy qua trợ lý ngoài có datasource động (bảng ảo ghép bằng subquery)."""
+        return bool(self.current_assistant and self.current_assistant.type in dynamic_ds_types)
+
+    def explore_enabled(self) -> bool:
+        """Có chạy explore cho lượt này không. Trợ lý ngoài có datasource động luôn tắt."""
+        return settings.LLM_SQL_EXPLORE_ENABLED and not self._uses_dynamic_ds()
+
+    def verify_enabled(self) -> bool:
+        """Có chạy verify cho lượt này không. Trợ lý ngoài có datasource động luôn tắt."""
+        return settings.LLM_SQL_VERIFY_ENABLED and not self._uses_dynamic_ds()
+
+    def load_sample_data(self, _session: Session, tables: List[str]) -> str:
+        """Dữ liệu mẫu của ``tables``, lấy qua scope SW giống bước dựng ngữ cảnh."""
+        restricted = self.sw_permission is not None and self.sw_permission.restricted
+        return get_tables_sample_data(
+            session=_session, current_user=self.current_user, ds=self.ds, table_list=tables,
+            scope_queries=self.sw_permission.scope_queries if restricted else None)
+
+    def used_tables_schema(self, _session: Session, tables: Optional[List[str]]) -> str:
+        """M-Schema của các bảng một câu SQL dùng, đã lọc cột theo quyền SW (pha chart, verify)."""
+        if self.out_ds_instance:
+            schema, _ = self.out_ds_instance.get_db_schema(
+                self.ds.id, self.chat_question.question, embedding=False, table_list=tables)
+            return schema
+        restricted = self.sw_permission is not None and self.sw_permission.restricted
+        schema, _ = get_table_schema(
+            session=_session, current_user=self.current_user, ds=self.ds,
+            question=self.chat_question.question, embedding=False, table_list=tables,
+            column_filter=self.sw_permission.allowed_columns if restricted else None)
+        return schema
+
+    def _check_permitted_tables(self, sql: str) -> set:
+        """Kiểm bảng của ``sql`` trên AST so với mọi bảng được phép; trả về tập bảng thật.
+
+        Dùng chung cho SQL chính và probe. Parse được nhưng không tham chiếu bảng nào thì cho
+        chạy: loại SQL này (đếm trên hằng số, subquery toàn literal…) không đọc được dữ liệu nào
+        nên không có gì để rò rỉ. Đây là cách duy nhất trả lời được các câu hỏi về chính
+        schema, vd "datasource có bao nhiêu bảng".
+        """
+        # 表名安全检查：用 sqlglot 解析真实 SQL，不信任 AI 返回的 tables
+        try:
+            actual_tables = extract_tables_from_sql(sql, ds_type=self.ds.type)
+        except Exception as parse_error:
+            raise SingleMessageError(
+                f"SQL parsing failed: {parse_error}. "
+                f"This may indicate an unsupported SQL syntax or a security issue."
+            )
+        allowed_tables = set(self.permitted_tables or self.table_name_list)
+        unauthorized_tables = actual_tables - allowed_tables
+        if unauthorized_tables:
+            raise SingleMessageError(
+                f"SQL contains unauthorized tables: {', '.join(unauthorized_tables)}. "
+                f"Allowed tables: {', '.join(allowed_tables)}"
+            )
+        return actual_tables
+
+    def _apply_sw_scope(self, sql: str) -> str:
+        """Cưỡng chế scope của quyền SW lên bản THỰC THI của ``sql``.
+
+        Bọc mọi tham chiếu tới bảng có scope thành derived table `(scope) AS <bảng>`, tất định
+        bằng sqlglot, không qua LLM. Rewrite hỏng thì từ chối thực thi, tuyệt đối không
+        fallback về SQL chưa bọc.
+        """
+        if (
+            self.sw_permission
+            and self.sw_permission.restricted
+            and self.sw_permission.scope_queries
+        ):
+            try:
+                return apply_scope_to_sql(
+                    sql, self.sw_permission.scope_queries, self.ds.type
+                )
+            except Exception as rewrite_error:
+                raise SingleMessageError(
+                    f"Không áp được giới hạn phạm vi dữ liệu lên SQL, "
+                    f"từ chối thực thi: {rewrite_error}"
+                )
+        return sql
+
+    @staticmethod
+    def _normalize_result(result: Dict[str, Any]) -> Dict[str, Any]:
+        """Chuẩn hoá dữ liệu kết quả SQL (số lớn, tên cột có tiền tố bảng) tại chỗ."""
+        _data = DataFormat.convert_large_numbers_in_object_array(result.get("data"))
+        _data = DataFormat.normalize_qualified_sql_column_keys_in_object_array(_data)
+        result["data"] = _data
+        return result
+
+    def _builtin_row_permission_applies(self) -> bool:
+        """Luật dòng built-in có áp cho lượt này không (không tính trợ lý datasource động)."""
+        is_page_embedded = bool(self.current_assistant and self.current_assistant.type == 4)
+        return (not self.current_assistant or is_page_embedded) and is_normal_user(self.current_user)
+
+    def _prepare_probe(self, _session: Session, probe: 'sql_review.Probe') -> str:
+        """Đưa một probe qua đường kiểm và áp quyền của SQL chính; trả về bản thực thi.
+
+        Thứ tự giống SQL chính: kiểm bảng trên AST, luật dòng built-in, scope SW. Kiểm chỉ đọc
+        nằm trong lớp thực thi. Thêm hai ràng buộc riêng của probe: LIMIT ép trên AST và chặn
+        cột ngoài quyền. Luật dòng là một lần viết lại bằng LLM, có thể làm mất LIMIT hoặc đổi
+        bảng, nên ép và kiểm lại sau bước đó. Datasource động không bao giờ tới đây (D8).
+        """
+        max_rows = max(1, settings.LLM_SQL_PROBE_MAX_ROWS)
+        sql = sql_review.limit_probe_sql(probe.sql, self.ds.type, max_rows, self.permitted_columns)
+        tables = self._check_permitted_tables(sql)
+        if self._builtin_row_permission_applies():
+            filtered = self.generate_filter(_session, sql, sorted(tables))
+            if filtered:
+                sql, _ = self.check_sql(session=_session, res=filtered,
+                                        operate=OperationEnum.GENERATE_SQL_WITH_PERMISSIONS)
+                sql = sql_review.limit_probe_sql(sql, self.ds.type, max_rows, self.permitted_columns)
+                self._check_permitted_tables(sql)
+        return self._apply_sw_scope(sql)
+
+    def run_probes(self, _session: Session,
+                   probes: List['sql_review.Probe']) -> List['sql_review.ProbeResult']:
+        """Chạy các probe của explore hoặc verify, trả về kết quả theo đúng thứ tự.
+
+        Probe đi chung đường kiểm, áp quyền và thực thi với SQL chính nhưng không phát event SSE
+        và không ghi vào record của lượt; mỗi lần chạy có một dòng ``chat_log`` riêng. Một probe
+        hỏng không làm hỏng lượt: lỗi được trả về cho model đọc.
+
+        Bước chuẩn bị chạy tuần tự vì cần ``_session`` (không dùng chung được giữa các thread);
+        chỉ phần chạy trên CSDL nguồn là song song.
+        """
+        prepared = []
+        for probe in probes:
+            try:
+                prepared.append((probe, self._prepare_probe(_session, probe), ''))
+            except Exception as e:
+                prepared.append((probe, None, _humanize_error(str(e))[:500]))
+
+        logs = {}
+        futures = {}
+        for index, (probe, real_sql, _) in enumerate(prepared):
+            if real_sql:
+                logs[index] = start_log(session=_session, operate=OperationEnum.EXECUTE_PROBE,
+                                        record_id=self.record.id, local_operation=True,
+                                        full_message={'id': probe.id, 'purpose': probe.purpose,
+                                                      'sql': real_sql})
+                futures[index] = probe_executor.submit(self.execute_sql, real_sql)
+
+        results = []
+        for index, (probe, real_sql, error) in enumerate(prepared):
+            if index not in futures:
+                results.append(sql_review.ProbeResult(probe=probe, error=error))
+                continue
+            message = {'id': probe.id, 'purpose': probe.purpose, 'sql': real_sql}
+            try:
+                result = self._normalize_result(futures[index].result())
+                rows = list(result.get('data') or [])
+                results.append(sql_review.ProbeResult(
+                    probe=probe, fields=tuple(result.get('fields') or ()), rows=tuple(rows)))
+                end_log(session=_session, log=logs[index], full_message={**message, 'count': len(rows)})
+            except Exception as e:
+                error = _humanize_error(str(e))[:500]
+                results.append(sql_review.ProbeResult(probe=probe, error=error))
+                end_log(session=_session, log=logs[index], full_message={**message, 'error': error})
+                trigger_log_error(session=_session, log=logs[index])
+        return results
+
+    def _restore_verified_run(self, _session: Session, run: _VerifiedRun,
+                              json_result: Dict[str, Any], in_chat: bool, stream: bool):
+        """Quay về lần chạy verify đã bác khi các lần sửa sau đó hỏng hẳn; yield lại event SQL.
+
+        Hết vòng sửa thì kết quả lần chạy thành công cuối vẫn đi tiếp (plan D4), kể cả khi lần
+        sửa sau nó không chạy được. Record, ``chat_question.sql`` và lịch sử hội thoại SQL đều đã
+        bị lần sửa ghi đè, nên phải ghi lại. Client đã thấy event ``sql`` của lần sửa, nên phát
+        lại câu SQL được giữ trước ``sql-data``, như vòng retry vẫn phát nhiều event ``sql``.
+        """
+        save_sql(session=_session, sql=run.sql, record_id=self.record.id)
+        self.chat_question.sql = run.sql
+        if run.answer is not None:
+            if self.sql_message and isinstance(self.sql_message[-1], AIMessage):
+                self.sql_message[-1] = run.answer
+            else:
+                self.sql_message.append(run.answer)
+            log = self.current_logs.get(OperationEnum.GENERATE_SQL)
+            if log is not None:
+                self.current_logs[OperationEnum.GENERATE_SQL] = end_log(
+                    session=_session, log=log,
+                    full_message=[{'type': msg.type,
+                                   'sqlbot_system': getattr(msg, 'sqlbot_system', False) is True,
+                                   'content': msg.content} for msg in self.sql_message],
+                    reasoning_content=log.reasoning_content, token_usage=log.token_usage)
+        if not stream:
+            json_result["sql"] = run.sql
+        format_sql = sqlparse.format(run.sql, reindent=True)
+        if in_chat:
+            yield "data:" + orjson.dumps({"content": format_sql, "type": "sql"}).decode() + "\n\n"
+        elif stream:
+            yield f"```sql\n{format_sql}\n```\n\n"
+
     def _sql_phase(
         self,
         _session: Session,
@@ -1940,9 +2201,10 @@ class LLMService:
         stream: bool,
         finish_step: ChatFinishStep,
     ) -> Generator[Any, None, "SqlPhaseResult"]:
-        """Chạy trọn pha SQL: sinh, kiểm quyền, thực thi rồi lưu dữ liệu.
+        """Chạy trọn pha SQL: explore, sinh, kiểm quyền, thực thi, verify rồi lưu dữ liệu.
 
-        Bao gồm cả vòng thử lại và nhánh hạ cấp khi hết lượt thử.
+        Bao gồm cả vòng thử lại, vòng sửa theo verify và nhánh hạ cấp khi hết lượt thử. Explore
+        và verify chỉ chạy khi bật cờ (xem ``sql_review``); tắt thì pha chạy đúng như trước.
 
         Bóc khỏi ``run_task`` để pha này gọi được từ nơi khác, cụ thể là từ
         một tool handler khi pipeline chuyển sang mô hình agent — lúc đó
@@ -1990,10 +2252,34 @@ class LLMService:
         chart_type = None
         _data = None
 
+        # Verify là chốt chặn cuối của pha (plan D4): `revise` thì sinh lại SQL qua đường retry,
+        # với số vòng riêng, độc lập với số lần thử lại vì lỗi kỹ thuật.
+        verify_on = self.verify_enabled()
+        max_revise = max(0, settings.LLM_SQL_VERIFY_MAX_REVISE)
+        revise_round = 0
+        revise_prompt: Optional[str] = None
+        verify_issues: tuple[str, ...] = ()
+        verified_run: Optional[_VerifiedRun] = None
+
+        # Explore chạy một lần trước bước sinh SQL. Khối kết quả vào hội thoại SQL dưới dạng
+        # message hệ thống: mọi lần sinh (kể cả retry, revise) đều thấy, lượt sau thì lọc bỏ.
+        exploration = ''
+        if self.explore_enabled():
+            exploration = sql_review.explore(self, _session)
+            if exploration:
+                self.sql_message.append(HumanPromptMessage(
+                    content=self.chat_question.sql_exploration_info(exploration)))
+                self.sql_message.append(AIPromptMessage(
+                    content='Tôi đã nắm kết quả khám phá dữ liệu và sẽ dựa vào đó khi sinh SQL.'))
+
         while True:
             try:
                 # generate sql
-                sql_res = self.generate_sql(_session, retry_reason=retry_reason)
+                if revise_prompt:
+                    sql_res = self.generate_sql(_session, retry_reason=retry_reason,
+                                                revise_prompt=revise_prompt)
+                else:
+                    sql_res = self.generate_sql(_session, retry_reason=retry_reason)
                 full_sql_text = ""
                 full_reasoning_text = ""
                 for chunk in sql_res:
@@ -2023,9 +2309,9 @@ class LLMService:
                 chart_type = self.get_chart_type_from_sql_answer(full_sql_text)
 
                 # return title
-                # Chỉ đặt tiêu đề ở lần thử đầu: lần retry đặt lại chỉ sinh thêm một event
+                # Chỉ đặt tiêu đề ở lần thử đầu: lần retry hay lần sửa theo verify đặt lại chỉ sinh thêm một event
                 # `brief` thứ hai cho cùng một hội thoại, client không có cách nào hiểu đúng.
-                if self.change_title and sql_attempt == 0:
+                if self.change_title and sql_attempt == 0 and revise_round == 0:
                     llm_brief = self.get_brief_from_sql_answer(full_sql_text)
                     llm_brief_generated = bool(llm_brief)
                     if llm_brief_generated or (
@@ -2069,25 +2355,7 @@ class LLMService:
                     session=_session, res=full_sql_text, operate=sql_operate
                 )
 
-                # 表名安全检查：用 sqlglot 解析真实 SQL，不信任 AI 返回的 tables
-                try:
-                    actual_tables = extract_tables_from_sql(sql, ds_type=self.ds.type)
-                except Exception as parse_error:
-                    raise SingleMessageError(
-                        f"SQL parsing failed: {parse_error}. "
-                        f"This may indicate an unsupported SQL syntax or a security issue."
-                    )
-                # Parse được nhưng không tham chiếu bảng nào thì cho chạy: loại SQL này (đếm
-                # trên hằng số, subquery toàn literal…) không đọc được dữ liệu nào nên không có
-                # gì để rò rỉ. Đây là cách duy nhất trả lời được các câu hỏi về chính schema,
-                # vd "datasource có bao nhiêu bảng".
-                allowed_tables = set(self.table_name_list)
-                unauthorized_tables = actual_tables - allowed_tables
-                if unauthorized_tables:
-                    raise SingleMessageError(
-                        f"SQL contains unauthorized tables: {', '.join(unauthorized_tables)}. "
-                        f"Allowed tables: {', '.join(allowed_tables)}"
-                    )
+                actual_tables = self._check_permitted_tables(sql)
 
                 if (
                     (not self.current_assistant or is_page_embedded)
@@ -2171,25 +2439,9 @@ class LLMService:
                         tables=tables, chart_type=chart_type, stopped=True
                     )
 
-                # Cưỡng chế scope của quyền SW: bọc mọi tham chiếu tới bảng có scope thành
-                # derived table `(scope) AS <bảng>` — tất định bằng sqlglot, không qua LLM.
-                # Chỉ đổi bản THỰC THI (real_execute_sql, cùng khuôn với nhánh assistant động);
-                # bản `sql` đã phát cho client giữ nguyên để không rò điều kiện lọc quyền.
-                # Rewrite hỏng thì từ chối thực thi — tuyệt đối không fallback về SQL chưa bọc.
-                if (
-                    self.sw_permission
-                    and self.sw_permission.restricted
-                    and self.sw_permission.scope_queries
-                ):
-                    try:
-                        real_execute_sql = apply_scope_to_sql(
-                            real_execute_sql, self.sw_permission.scope_queries, self.ds.type
-                        )
-                    except Exception as rewrite_error:
-                        raise SingleMessageError(
-                            f"Không áp được giới hạn phạm vi dữ liệu lên SQL, "
-                            f"từ chối thực thi: {rewrite_error}"
-                        )
+                # Scope SW chỉ đổi bản THỰC THI (real_execute_sql, cùng khuôn với nhánh assistant
+                # động); bản `sql` đã phát cho client giữ nguyên để không rò điều kiện lọc quyền.
+                real_execute_sql = self._apply_sw_scope(real_execute_sql)
 
                 self.current_logs[OperationEnum.EXECUTE_SQL] = start_log(
                     session=_session,
@@ -2207,31 +2459,35 @@ class LLMService:
                     },
                 )
 
-                _data = DataFormat.convert_large_numbers_in_object_array(result.get("data"))
-                _data = DataFormat.normalize_qualified_sql_column_keys_in_object_array(
-                    _data
-                )
-                result["data"] = _data
+                result = self._normalize_result(result)
+                _data = result["data"]
 
-                self.save_sql_data(session=_session, data_obj=result)
-                if in_chat:
-                    # Chở luôn kết quả SQL trong `data` thay vì bắt client gọi thêm
-                    # `GET /chat/record/{id}/data`. Giữ nguyên `content` là chuỗi
-                    # 'execute-success' như hợp đồng cũ: client cũ chỉ đọc `type` nên không
-                    # vỡ, client mới thấy có `data` thì dùng thẳng.
-                    #
-                    # Phát ở đây là chỗ sớm nhất có thể, và cũng là lúc rẻ nhất: pha sinh
-                    # câu trả lời chưa khởi động nên đường truyền đang rỗng, khối dữ liệu
-                    # đi qua mà không chen ngang token nào.
-                    yield "data:" + orjson.dumps(
-                        {
-                            "content": "execute-success",
-                            "type": "sql-data",
-                            "data": self.build_sql_data_payload(result),
-                        }
-                    ).decode() + "\n\n"
-                if not stream:
-                    json_result["data"] = get_chat_chart_data(_session, self.record.id)
+                if verify_on:
+                    decision = sql_review.verify(
+                        self, _session, sql, result, sorted(actual_tables), exploration)
+                    if decision.revise and revise_round < max_revise:
+                        revise_round += 1
+                        verified_run = _VerifiedRun(
+                            sql=sql, result=result, tables=tables, chart_type=chart_type,
+                            issues=decision.issues,
+                            answer=self.sql_message[-1] if self.sql_message and isinstance(
+                                self.sql_message[-1], AIMessage) else None)
+                        probe_results = self.run_probes(_session, list(decision.probes))
+                        revise_prompt = self.chat_question.sql_revise_question(
+                            sql_review.render_verify_issues(decision.issues),
+                            sql_review.render_probe_results(probe_results))
+                        retry_reason = None
+                        result = None
+                        _data = None
+                        # Không phát event nào: client chỉ thấy thêm một event `sql` của lần
+                        # sinh lại, như vòng retry hiện nay.
+                        SQLBotLogUtil.warning(
+                            f"Verify asked to revise the SQL (round {revise_round} of {max_revise})",
+                            extra={'record_id': self.record.id, 'round': revise_round},
+                        )
+                        continue
+                    # Hết vòng sửa mà vẫn `revise` thì kết quả đi tiếp, kèm vấn đề cho pha answer.
+                    verify_issues = decision.issues if decision.revise else ()
             except (
                 SingleMessageError,
                 SQLBotDBError,
@@ -2244,6 +2500,7 @@ class LLMService:
                 if can_retry and sql_attempt < max_sql_retry:
                     sql_attempt += 1
                     retry_reason = reason
+                    revise_prompt = None
                     # Cố ý không phát event SSE nào cho lần sinh lại: hợp đồng stream giữ nguyên
                     # như trước, client không phải biết tới khái niệm retry. Dấu vết nằm ở log.
                     SQLBotLogUtil.warning(
@@ -2251,6 +2508,19 @@ class LLMService:
                         extra={'attempt': sql_attempt, 'max_attempts': max_sql_retry},
                     )
                     continue
+                if verified_run is not None:
+                    # Lần sửa sau `revise` hỏng hẳn mà đã có một kết quả chạy được: dùng nó.
+                    SQLBotLogUtil.warning(
+                        f"The revised SQL failed, keeping the result verify rejected: {reason}",
+                        extra={'record_id': self.record.id},
+                    )
+                    yield from self._restore_verified_run(
+                        _session, verified_run, json_result, in_chat, stream)
+                    result, tables, chart_type = (verified_run.result, verified_run.tables,
+                                                  verified_run.chart_type)
+                    _data = result["data"]
+                    verify_issues = verified_run.issues
+                    break
                 # Hết lượt thử. Chỉ hạ cấp khi client thực sự chờ pha answer: nhánh MCP và các
                 # finish_step dừng sớm vẫn cần nhận lỗi thật để giữ nguyên hợp đồng cũ.
                 if not (
@@ -2268,7 +2538,46 @@ class LLMService:
                     extra={'attempt': sql_attempt},
                 )
                 break
+            except Exception as e:
+                # Lỗi ngoài vòng retry (LLM lỗi, rút gọn schema hết nấc…) giữa lúc sửa theo
+                # `revise`: đã có kết quả chạy được thì dùng nó, như khi lần sửa chạy hỏng.
+                if verified_run is None:
+                    raise
+                SQLBotLogUtil.warning(
+                    f"Revising the SQL failed ({type(e).__name__}), keeping the result verify rejected",
+                    extra={'record_id': self.record.id, 'error': type(e).__name__},
+                )
+                yield from self._restore_verified_run(
+                    _session, verified_run, json_result, in_chat, stream)
+                result, tables, chart_type = (verified_run.result, verified_run.tables,
+                                              verified_run.chart_type)
+                _data = result["data"]
+                verify_issues = verified_run.issues
+                break
             break
+
+        if result is not None and degraded_reason is None:
+            # Lưu và phát số liệu chỉ sau khi verify kết thúc (plan I6). Không bật verify thì
+            # vẫn đúng thời điểm cũ: ngay sau khi thực thi, trước mọi pha sau.
+            self.save_sql_data(session=_session, data_obj=result)
+            if in_chat:
+                # Chở luôn kết quả SQL trong `data` thay vì bắt client gọi thêm
+                # `GET /chat/record/{id}/data`. Giữ nguyên `content` là chuỗi
+                # 'execute-success' như hợp đồng cũ: client cũ chỉ đọc `type` nên không
+                # vỡ, client mới thấy có `data` thì dùng thẳng.
+                #
+                # Phát ở đây là chỗ sớm nhất có thể, và cũng là lúc rẻ nhất: pha sinh
+                # câu trả lời chưa khởi động nên đường truyền đang rỗng, khối dữ liệu
+                # đi qua mà không chen ngang token nào.
+                yield "data:" + orjson.dumps(
+                    {
+                        "content": "execute-success",
+                        "type": "sql-data",
+                        "data": self.build_sql_data_payload(result),
+                    }
+                ).decode() + "\n\n"
+            if not stream:
+                json_result["data"] = get_chat_chart_data(_session, self.record.id)
 
         return SqlPhaseResult(
             result=result,
@@ -2276,6 +2585,7 @@ class LLMService:
             chart_type=chart_type,
             data=_data,
             degraded_reason=degraded_reason,
+            verify_issues=verify_issues,
         )
 
 
@@ -2381,6 +2691,7 @@ class LLMService:
                 tables = None
                 chart_type = None
                 _data = None
+                verify_issues = ()
                 degraded_reason = route.reason or 'Câu hỏi này không cần truy vấn dữ liệu mới.'
             else:
                 # Pha SQL bóc riêng: `yield from` chở event SSE lên thẳng
@@ -2397,6 +2708,7 @@ class LLMService:
                 chart_type = sql_phase.chart_type
                 _data = sql_phase.data
                 degraded_reason = sql_phase.degraded_reason
+                verify_issues = sql_phase.verify_issues
 
             if finish_step.value <= ChatFinishStep.QUERY_DATA.value and not (want_answer or want_chart):
                 if stream:
@@ -2445,7 +2757,8 @@ class LLMService:
                 else:
                     answer_sys_prompt, answer_user_prompt = self.build_answer_prompts(_session,
                                                                                       result.get('fields'),
-                                                                                      result.get('data'))
+                                                                                      result.get('data'),
+                                                                                      verify_issues)
                 answer_queue = queue.Queue()
                 executor.submit(self.run_answer_worker, answer_sys_prompt, answer_user_prompt, answer_queue)
 
@@ -2482,16 +2795,7 @@ class LLMService:
             chart: Optional[Dict[str, Any]] = None
             chart_failed = False
             try:
-                used_tables_schema, used_tables = self.out_ds_instance.get_db_schema(
-                    self.ds.id, self.chat_question.question, embedding=False,
-                    table_list=tables) if self.out_ds_instance else get_table_schema(
-                    session=_session,
-                    current_user=self.current_user,
-                    ds=self.ds,
-                    question=self.chat_question.question,
-                    embedding=False, table_list=tables,
-                    column_filter=self.sw_permission.allowed_columns
-                    if self.sw_permission and self.sw_permission.restricted else None)
+                used_tables_schema = self.used_tables_schema(_session, tables)
                 SQLBotLogUtil.info(
                     f'Generating the chart from {len(used_tables_schema)} chars of table schema',
                     extra={'chars': len(used_tables_schema)},

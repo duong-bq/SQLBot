@@ -5,10 +5,11 @@ context của model phía sau LiteLLM — mà gửi bản đầy đủ, bị t�
 
 Các nấc áp dụng dồn, theo thứ tự trong ``SCHEMA_REDUCTION_STEPS``:
 
-1. bỏ sample data;
-2. bỏ chú thích cột của bảng kéo theo quan hệ;
-3. bỏ hẳn bảng kéo theo quan hệ, cùng các dòng FK chạm tới chúng;
-4. bỏ chú thích cột của các bảng được chọn (top embedding, hoặc mọi bảng khi embedding tắt/lỗi).
+1. bỏ catalog (danh sách bảng ngoài prompt, chỉ có trong prompt explore);
+2. bỏ sample data;
+3. bỏ chú thích cột của bảng kéo theo quan hệ;
+4. bỏ hẳn bảng kéo theo quan hệ, cùng các dòng FK chạm tới chúng;
+5. bỏ chú thích cột của các bảng được chọn (top embedding, hoặc mọi bảng khi embedding tắt/lỗi).
 
 Mỗi nấc là hàm thuần nhận ``SchemaPrompt`` và trả bản mới, hoặc ``None`` khi không có gì để bỏ —
 nấc đó bị nhảy qua mà không tốn một lần gọi LLM. Chú thích bảng được giữ ở mọi nấc.
@@ -48,6 +49,18 @@ class SchemaReductionExhausted(Exception):
             + ', '.join(_STEP_LABELS.get(name, name) for name in self.applied_steps)
             + '). Hãy thu hẹp phạm vi bảng của nguồn dữ liệu hoặc dùng model có context lớn hơn.'
         )
+
+
+def drop_catalog(prompt: SchemaPrompt) -> SchemaPrompt | None:
+    """Bỏ catalog.
+
+    Đứng đầu thang vì catalog chỉ giúp model biết tên bảng để xin xem thêm, còn mọi nấc sau đều
+    bớt thông tin về chính các bảng model đang dùng. Prompt sinh SQL không chứa catalog nên với
+    nó nấc này luôn bị nhảy qua.
+    """
+    if not prompt.m_schema.catalog:
+        return None
+    return replace(prompt, m_schema=replace(prompt.m_schema, catalog=()))
 
 
 def drop_sample_data(prompt: SchemaPrompt) -> SchemaPrompt | None:
@@ -91,6 +104,7 @@ def drop_selected_comments(prompt: SchemaPrompt) -> SchemaPrompt | None:
 
 
 SCHEMA_REDUCTION_STEPS: tuple[tuple[str, Callable[[SchemaPrompt], SchemaPrompt | None]], ...] = (
+    ('drop_catalog', drop_catalog),
     ('drop_sample_data', drop_sample_data),
     ('drop_pulled_comments', drop_pulled_comments),
     ('drop_pulled_tables', drop_pulled_tables),
@@ -98,6 +112,7 @@ SCHEMA_REDUCTION_STEPS: tuple[tuple[str, Callable[[SchemaPrompt], SchemaPrompt |
 )
 
 _STEP_LABELS = {
+    'drop_catalog': 'bỏ danh sách bảng ngoài prompt',
     'drop_sample_data': 'bỏ sample data',
     'drop_pulled_comments': 'bỏ chú thích cột của bảng kéo theo quan hệ',
     'drop_pulled_tables': 'bỏ bảng kéo theo quan hệ',

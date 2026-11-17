@@ -95,6 +95,9 @@ def service(monkeypatch):
     monkeypatch.setattr(llm_mod, 'end_log', lambda **kw: None)
     monkeypatch.setattr(llm_mod.settings, 'LLM_SQL_MAX_RETRY', 1)
     monkeypatch.setattr(llm_mod.settings, 'LLM_ANSWER_ON_FAILURE', True)
+    # File này kiểm luồng SQL khi không có explore/verify; hai bước đó có test ở test_sql_review.py.
+    monkeypatch.setattr(llm_mod.settings, 'LLM_SQL_EXPLORE_ENABLED', False)
+    monkeypatch.setattr(llm_mod.settings, 'LLM_SQL_VERIFY_ENABLED', False)
     return s
 
 

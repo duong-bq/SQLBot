@@ -178,6 +178,29 @@ def apply_disable_thinking(additional_params: Dict[str, Any]) -> Dict[str, Any]:
     return merged
 
 
+def bind_reasoning_effort(llm: Any, config: LLMConfig, effort: str) -> Any:
+    """Gắn ``reasoning_effort`` vào mọi lần gọi của ``llm``, trả về một runnable mới.
+
+    Đặt vào ``extra_body`` thay vì tham số riêng: ``VLLMOpenAI`` (giao thức completion) không có
+    tham số ``reasoning_effort``, còn ``extra_body`` thì cả hai lớp đều chuyển nguyên vào body.
+    ``extra_body`` truyền lúc gọi thay thế hẳn bản của instance, nên phải gộp lại từ cấu hình
+    gốc, kẻo mất cấu hình admin đặt cho việc khác.
+
+    Cấu hình đã có ``chat_template_kwargs.enable_thinking`` (đường cấu hình mặc định, xem
+    ``apply_disable_thinking``) thì đặt nó cùng chiều với ``effort``. Model tự host không đi
+    qua LiteLLM chỉ hiểu cờ này; để nó ở ``false`` thì bước cần thinking vẫn bị tắt.
+    """
+    extra_body = dict(config.additional_params.get('extra_body') or {})
+    extra_body['reasoning_effort'] = effort
+    template_kwargs = extra_body.get('chat_template_kwargs')
+    if isinstance(template_kwargs, dict) and 'enable_thinking' in template_kwargs:
+        extra_body['chat_template_kwargs'] = {
+            **template_kwargs,
+            'enable_thinking': effort != 'none',
+        }
+    return llm.bind(extra_body=extra_body)
+
+
 async def get_default_config(custom_model_id: Optional[int] = None) -> LLMConfig:
     with Session(engine) as session:
         db_model: AiModelDetail | None = None
